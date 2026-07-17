@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -p packages/core/tsconfig.json && tsc -p packages/daemon/tsconfig.json && tsc -p packages/cli/tsconfig.json && tsc -p packages/demo/tsconfig.json && tsc -p packages/player/tsconfig.json && cd packages/player && ./node_modules/.bin/vite build",
     "check": "tsc -p packages/core/tsconfig.json --noEmit && tsc -p packages/daemon/tsconfig.json --noEmit && tsc -p packages/cli/tsconfig.json --noEmit && tsc -p packages/demo/tsconfig.json --noEmit && tsc -p packages/player/tsconfig.json --noEmit",
-    "test": "node --test packages/core/dist/storage.test.js",
+    "test": "node --test packages/core/dist/storage.test.js packages/demo/dist/player.e2e.test.js",
     "rec": "node packages/cli/dist/main.js",
     "demo:record": "node packages/demo/dist/record-demo.js"
   },
