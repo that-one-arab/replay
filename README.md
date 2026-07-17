@@ -13,9 +13,8 @@ auth; recordings stay on the machine that created them.
 ```sh
 pnpm install
 pnpm build
+# For CLI/script use, start the managed browser and point Playwright at its endpoint.
 pnpm rec browser start
-# Point Playwright MCP (or a Playwright script) at http://127.0.0.1:9333.
-# The CDP endpoint is for Playwright, not a page to open in a browser.
 pnpm rec start --title "Checkout repro"
 pnpm rec marker "Submitting checkout"
 pnpm rec stop --outcome reproduced
@@ -55,6 +54,10 @@ rec stop [--outcome reproduced|verified|other] [--notes <text>]
 rec status | list | open <id> | doctor
 ```
 
+For Codex, the installed Rec plugin launches stock Playwright MCP through Rec's
+bridge automatically. The coding agent can use Playwright first and begin a
+recording later; developers do not need to start Chrome or provide a CDP port.
+
 ## Replay behavior
 
 - A recording is a browser session: multi-tab runs expose a tab strip and one
@@ -66,8 +69,9 @@ rec status | list | open <id> | doctor
 
 The recording format is documented in `docs/format.md`; the spike checklist is in
 `docs/spike-checklist.md`. The path from this completed local implementation to
-agent-native capture and shared replay is in `docs/roadmap.md`. The local stdio
-MCP server is documented in `docs/mcp.md`.
+agent-native capture and shared replay is in `docs/roadmap.md`; the current Phase 2
+contract is in `docs/phase-2-agent-native-capture-plan.md`. The local stdio MCP
+server is documented in `docs/mcp.md`.
 
 ## Deterministic demo replay
 

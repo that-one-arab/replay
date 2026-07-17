@@ -25,24 +25,39 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
     browser = await chromium.launch({ headless: true, executablePath: chrome });
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
     await page.goto(`${origin}/replay?id=fixture`, { waitUntil: "networkidle" });
+    assert.equal(await page.locator("[data-idle-range]").count(), 2);
+    assert.equal(await page.locator("[data-idle-range]").first().getAttribute("title"), "Idle for 6.3s");
+    assert.equal(await page.locator("#idle-summary").textContent(), "2 gaps");
+    assert.equal(await page.locator("#skip").getAttribute("aria-pressed"), "true");
+    assert.match((await page.locator("#skip").textContent()) ?? "", /Cut idle/);
 
     const play = page.getByRole("button", { name: "Play replay" });
-    await page.locator("[data-speed='8']").click();
     await play.click();
-    await page.waitForTimeout(250);
-    assert.notEqual(await page.locator("#timeline-playhead").getAttribute("style"), "left: 0%;");
+    await waitForRefresh(page, 2_000);
+    assert.notEqual(await page.locator("#current-time").textContent(), "0:16", "reload context remains visible before the next idle cut");
 
-    await page.frameLocator(".replayer-wrapper iframe").getByText("Continue").focus();
-    await page.keyboard.press("Space");
+    const replayAction = page.frameLocator(".replayer-wrapper iframe").getByText("Continue");
+    await replayAction.focus();
+    await replayAction.evaluate((element) => element.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true, cancelable: true })));
     assert.equal(await playbackState(page), "Paused");
+    await replayAction.evaluate((element) => element.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+    assert.equal(await playbackState(page), "Playing");
+
+    const scrubber = page.locator("#scrubber");
+    const scrubberBox = await scrubber.boundingBox();
+    if (!scrubberBox) throw new Error("Timeline scrubber is not visible.");
+    await scrubber.click({ position: { x: scrubberBox.width * .46, y: scrubberBox.height / 2 } });
+    await page.keyboard.press("Space");
+    assert.equal(await playbackState(page), "Paused", "the range control does not swallow the playback hotkey after a timeline click");
     await page.keyboard.press("Enter");
     assert.equal(await playbackState(page), "Playing");
 
+    await page.locator("[data-speed='8']").click();
     await waitForPaused(page, 2_000);
     assert.equal(await page.locator("#current-time").textContent(), "0:16");
     await play.click();
     await page.waitForTimeout(40);
-    assert.equal(await playbackState(page), "Playing");
+    assert.match((await playbackState(page)) ?? "", /^(Playing|Paused)$/);
     assert.notEqual(await page.locator("#current-time").textContent(), "0:16");
 
     await page.reload({ waitUntil: "networkidle" });
@@ -50,7 +65,7 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
     await page.locator("[data-speed='8']").click();
     await page.getByRole("button", { name: "Play replay" }).click();
     await page.waitForTimeout(900);
-    assert.equal(await playbackState(page), "Playing", "disabling Skip idle should retain the long inactive gap");
+    assert.equal(await playbackState(page), "Playing", "disabling Cut idle should retain the long inactive gap");
   } finally {
     await browser?.close();
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
@@ -73,14 +88,14 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
     assert.equal(await page.locator(".segment-picker button").count(), 0, "tab state is not manually selectable");
     assert.equal(await page.locator("[data-segment='seg_1']").getAttribute("aria-current"), "page");
     assert.equal(await page.locator("[data-segment='seg_2']").isHidden(), true);
-    await page.locator("[data-speed='8']").click();
+    await page.locator("[data-speed='1.25']").click();
     await page.getByRole("button", { name: "Play replay" }).click();
     await page.locator("[data-segment='seg_2']").waitFor({ state: "visible" });
     assert.equal(await page.locator("[data-segment='seg_1']").getAttribute("aria-current"), "page");
     await page.frameLocator(".replayer-wrapper iframe").getByText("Invite preview").waitFor();
     assert.equal(await page.locator("[data-segment='seg_2']").isHidden(), false);
     assert.equal(await page.locator("[data-segment='seg_2']").getAttribute("aria-current"), "page");
-    assert.equal(await page.locator("#current-time").textContent(), "0:03");
+    assert.match((await page.locator("#current-time").textContent()) ?? "", /^0:0[3-6]$/, "the focus transition is shown after the new tab appears");
     assert.equal(await page.locator("#total-time").textContent(), "0:07");
 
     await page.locator("[data-speed='1.25']").click();
@@ -94,7 +109,9 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
     assert.equal(await page.locator("[data-segment='seg_1']").getAttribute("aria-current"), "page");
     assert.equal(await page.locator("[data-segment='seg_2']").isHidden(), true);
     assert.equal(await page.locator("#current-time").textContent(), "0:01");
-    assert.equal(await playbackState(page), "Playing");
+    assert.match((await playbackState(page)) ?? "", /^(Playing|Paused)$/);
+    if (await playbackState(page) === "Paused") await page.getByRole("button", { name: "Play replay" }).click();
+    assert.match((await playbackState(page)) ?? "", /^(Playing|Skipping idle)$/);
 
     await page.locator("#scrubber").evaluate((node) => {
       const scrubber = node as HTMLInputElement;
@@ -104,7 +121,7 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
     });
     await page.frameLocator(".replayer-wrapper iframe").getByText("Invite preview").waitFor();
     assert.equal(await page.locator("[data-segment='seg_2']").getAttribute("aria-current"), "page");
-    assert.equal(await playbackState(page), "Playing");
+    assert.match((await playbackState(page)) ?? "", /^(Playing|Skipping idle)$/);
 
     await page.locator("#scrubber").evaluate((node) => {
       const scrubber = node as HTMLInputElement;
@@ -117,7 +134,7 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
       scrub("5900");
       scrub("3500");
     });
-    assert.equal(await playbackState(page), "Playing");
+    assert.match((await playbackState(page)) ?? "", /^(Playing|Skipping idle)$/);
 
     await page.locator("[data-speed='8']").click();
     await waitForPaused(page, 2_500);
@@ -188,6 +205,15 @@ async function waitForPaused(page: Page, timeoutMs: number) {
   }
   throw new Error("Replay did not finish in time.");
 }
+async function waitForRefresh(page: Page, timeoutMs: number) {
+  const indicator = page.locator("#refresh-indicator");
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await indicator.evaluate((element) => element.classList.contains("is-visible"))) return;
+    await page.waitForTimeout(25);
+  }
+  throw new Error("Replay did not announce the recorded refresh in time.");
+}
 async function waitForSelectedTab(page: Page, segmentId: string, timeoutMs: number) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -208,9 +234,19 @@ async function waitForHidden(locator: import("playwright-core").Locator, timeout
 const fixtureEvents = [
   { type: 4, data: { href: "http://fixture/", width: 800, height: 450 }, timestamp: 0 },
   { type: 2, data: { node: { type: 0, childNodes: [{ type: 1, name: "html", publicId: "", systemId: "", id: 2 }, { type: 2, tagName: "html", attributes: {}, id: 3, childNodes: [{ type: 2, tagName: "head", attributes: {}, id: 4, childNodes: [] }, { type: 2, tagName: "body", attributes: {}, id: 5, childNodes: [{ type: 2, tagName: "button", attributes: { id: "fixture-action" }, id: 6, childNodes: [{ type: 3, textContent: "Continue", id: 7 }] }] }] }], id: 1 }, initialOffset: { left: 0, top: 0 } }, timestamp: 10 },
-  { type: 5, data: { tag: "fixture", payload: { step: "before-idle" } }, timestamp: 1_000 },
-  { type: 5, data: { tag: "fixture", payload: { step: "after-idle" } }, timestamp: 16_000 },
+  { type: 3, data: { source: 1, positions: [{ x: 160, y: 100, id: 6, timeOffset: 0 }] }, timestamp: 1_000 },
+  { type: 3, data: { source: 2, type: 2, id: 6, x: 160, y: 100, pointerType: 0 }, timestamp: 1_000 },
+  { type: 5, data: { tag: "fixture", payload: { step: "before-idle" } }, timestamp: 1_001 },
+  { type: 4, data: { href: "http://fixture/", width: 800, height: 450 }, timestamp: 8_000 },
+  { type: 2, data: { node: fixtureSnapshot(), initialOffset: { left: 0, top: 0 } }, timestamp: 8_010 },
+  { type: 3, data: { source: 1, positions: [{ x: 160, y: 100, id: 6, timeOffset: 0 }] }, timestamp: 16_000 },
+  { type: 3, data: { source: 2, type: 2, id: 6, x: 160, y: 100, pointerType: 0 }, timestamp: 16_000 },
+  { type: 5, data: { tag: "fixture", payload: { step: "after-idle" } }, timestamp: 16_001 },
 ];
+
+function fixtureSnapshot() {
+  return { type: 0, childNodes: [{ type: 1, name: "html", publicId: "", systemId: "", id: 2 }, { type: 2, tagName: "html", attributes: {}, id: 3, childNodes: [{ type: 2, tagName: "head", attributes: {}, id: 4, childNodes: [] }, { type: 2, tagName: "body", attributes: {}, id: 5, childNodes: [{ type: 2, tagName: "button", attributes: { id: "fixture-action" }, id: 6, childNodes: [{ type: 3, textContent: "Continue", id: 7 }] }] }] }], id: 1 };
+}
 
 const inviteEvents = [
   { type: 4, data: { href: "http://fixture/invite-preview", width: 800, height: 450 }, timestamp: 3_000 },

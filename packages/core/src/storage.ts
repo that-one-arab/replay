@@ -5,7 +5,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { Marker, RecordedAsset, RecordingManifest, Segment, TabEvent } from "./types.js";
+import type { CaptureSummary, Marker, RecordedAsset, RecordingManifest, Segment, TabEvent } from "./types.js";
 
 export const recHome = () => process.env.REC_HOME ?? join(process.env.HOME ?? process.cwd(), ".rec");
 export const sessionsDir = () => join(recHome(), "sessions");
@@ -21,6 +21,7 @@ export class SessionStore {
   private readonly assets = new Map<string, RecordedAsset>();
   private sequence = new Map<string, number>();
   private eventTimes: number[] = [];
+  private eventCount = 0;
   private manifestWrite: Promise<void> = Promise.resolve();
 
   private constructor(root: string, manifest: RecordingManifest) {
@@ -70,6 +71,7 @@ export class SessionStore {
     await pipeline(Readable.from([content]), createGzip(), createWriteStream(target, { flags: "wx" }));
     segment.chunks.push(relative);
     this.sequence.set(segmentId, seq + 1);
+    this.eventCount += events.length;
     for (const event of events) {
       const timestamp = typeof event === "object" && event !== null && "timestamp" in event
         ? Number((event as { timestamp: unknown }).timestamp)
@@ -108,6 +110,14 @@ export class SessionStore {
 
   addMarker(marker: Marker) {
     this.manifest.markers.push(marker);
+  }
+
+  captureSummary(): CaptureSummary {
+    return {
+      segmentCount: this.manifest.segments.length,
+      chunkCount: this.manifest.segments.reduce((count, segment) => count + segment.chunks.length, 0),
+      eventCount: this.eventCount,
+    };
   }
 
   addTabEvent(event: TabEvent) {

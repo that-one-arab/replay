@@ -14,15 +14,37 @@ const daemonEntry = process.env.REC_DAEMON_ENTRY ?? resolve(moduleDirectory, "..
 
 const tools: JsonObject[] = [
   {
+    name: "recording_browser_ensure",
+    description: "Ensure Rec's dedicated local Chrome is running and return the CDP endpoint that Playwright MCP must use.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        browserExecutable: { type: "string", description: "Optional Chrome executable for Rec to launch." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "recording_attach_browser",
+    description: "Attach Rec to an explicitly supplied loopback Chrome CDP endpoint. Do not call while recording.",
+    inputSchema: {
+      type: "object",
+      required: ["cdpEndpoint"],
+      properties: {
+        cdpEndpoint: { type: "string", description: "Loopback CDP endpoint, for example http://127.0.0.1:9222." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "recording_start",
-    description: "Start a local browser-session recording. Reuses an attached browser or launches Chrome when needed.",
+    description: "Start capture on an attached browser after Playwright MCP has navigated to an in-scope page.",
     inputSchema: {
       type: "object",
       properties: {
         title: { type: "string", description: "Human-readable recording title." },
         origins: { type: "array", items: { type: "string" }, description: "Optional allowed page origins. Defaults to the active page origin." },
         recordCanvas: { type: "boolean", description: "Capture canvas mutations. Disabled by default." },
-        browserExecutable: { type: "string", description: "Optional Chrome executable to launch if no browser is attached." },
       },
       additionalProperties: false,
     },
@@ -36,6 +58,7 @@ const tools: JsonObject[] = [
       properties: {
         label: { type: "string", description: "Short checkpoint label." },
         note: { type: "string", description: "Optional context for the checkpoint." },
+        placement: { type: "string", enum: ["after_previous", "before_next"], description: "Narrative placement relative to ordered Playwright actions. Defaults to after_previous." },
       },
       additionalProperties: false,
     },
@@ -109,6 +132,8 @@ async function dispatch(method: string, params: unknown): Promise<JsonObject> {
 async function callTool(name: string, argumentsValue: JsonObject): Promise<JsonObject> {
   try {
     switch (name) {
+      case "recording_browser_ensure": return toolResult(await ensureBrowser(argumentsValue));
+      case "recording_attach_browser": return toolResult(await attachBrowser(argumentsValue));
       case "recording_start": return toolResult(await startRecording(argumentsValue));
       case "recording_marker": return toolResult(await addMarker(argumentsValue));
       case "recording_status": return toolResult(await recordingStatus());
@@ -123,7 +148,7 @@ async function callTool(name: string, argumentsValue: JsonObject): Promise<JsonO
 async function startRecording(argumentsValue: JsonObject) {
   const health = await ensureDaemon();
   if (!health.cdp_endpoint) {
-    await api("POST", "/api/browser/start", { executable: optionalString(argumentsValue.browserExecutable) });
+    throw new Error("No browser is attached. Call recording_browser_ensure, configure Playwright MCP with its cdpEndpoint, navigate to the target page, then call recording_start.");
   }
   const result = object(await api("POST", "/api/sessions/start", {
     title: optionalString(argumentsValue.title),
@@ -131,22 +156,57 @@ async function startRecording(argumentsValue: JsonObject) {
     recordCanvas: optionalBoolean(argumentsValue.recordCanvas),
   }));
   const sessionId = requiredString(result.sessionId, "Recorder session ID");
-  return { ...result, replayUrl: replayUrl(sessionId) };
+  const status = await recordingStatus();
+  return { ...result, cdpEndpoint: status.cdpEndpoint, state: status.state, replayUrl: replayUrl(sessionId) };
+}
+
+async function ensureBrowser(argumentsValue: JsonObject) {
+  await ensureDaemon();
+  const result = object(await api("POST", "/api/browser/ensure", { executable: optionalString(argumentsValue.browserExecutable) }));
+  return {
+    managed: result.managed === true,
+    launched: result.launched === true,
+    cdpEndpoint: result.cdp_endpoint,
+    browserState: result.browser_state,
+  };
+}
+
+async function attachBrowser(argumentsValue: JsonObject) {
+  const cdpEndpoint = requiredString(argumentsValue.cdpEndpoint, "CDP endpoint");
+  await ensureDaemon();
+  const result = object(await api("POST", "/api/browser/attach", { cdp_endpoint: cdpEndpoint }));
+  return {
+    managed: result.managed === true,
+    cdpEndpoint: result.cdp_endpoint,
+    browserState: result.browser_state,
+  };
 }
 
 async function addMarker(argumentsValue: JsonObject) {
   const label = requiredString(argumentsValue.label, "Marker label");
-  await api("POST", "/api/sessions/marker", { label, note: optionalString(argumentsValue.note) });
-  return { ok: true, label };
+  const placement = optionalPlacement(argumentsValue.placement) ?? "after_previous";
+  await api("POST", "/api/sessions/marker", { label, note: optionalString(argumentsValue.note), placement });
+  return { ok: true, label, placement };
 }
 
 async function recordingStatus() {
   const health = object(await api("GET", "/health"));
+  const recording = health.state === "recording";
+  const hasBrowser = typeof health.cdp_endpoint === "string";
+  const navigatedPageCount = numberOrZero(health.navigated_page_count);
   return {
-    state: health.state,
-    sessionId: health.sessionId,
-    elapsedMs: health.elapsedMs,
+    state: recording ? "recording" : hasBrowser ? navigatedPageCount > 0 ? "page_ready" : "browser_ready" : "browser_unavailable",
     cdpEndpoint: health.cdp_endpoint,
+    managedBrowser: health.managed_browser === true,
+    pageCount: numberOrZero(health.page_count),
+    navigatedPageCount,
+    recording: recording ? {
+      sessionId: health.sessionId,
+      elapsedMs: health.elapsedMs,
+      segmentCount: numberOrZero(health.segmentCount),
+      chunkCount: numberOrZero(health.chunkCount),
+      eventCount: numberOrZero(health.eventCount),
+    } : null,
   };
 }
 
@@ -205,5 +265,7 @@ function optionalString(value: Json | undefined) { return typeof value === "stri
 function optionalBoolean(value: Json | undefined) { if (value !== undefined && typeof value !== "boolean") throw new Error("Expected a boolean value."); return value; }
 function optionalStringArray(value: Json | undefined) { if (value === undefined) return undefined; if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error("Origins must be an array of strings."); return value; }
 function optionalOutcome(value: Json | undefined) { if (value === undefined) return undefined; if (value === "reproduced" || value === "verified" || value === "other") return value; throw new Error("Outcome must be reproduced, verified, or other."); }
+function optionalPlacement(value: Json | undefined) { if (value === undefined || value === "after_previous" || value === "before_next") return value; throw new Error("Marker placement must be after_previous or before_next."); }
+function numberOrZero(value: Json | undefined) { return typeof value === "number" ? value : 0; }
 function messageOf(error: unknown) { return error instanceof Error ? error.message : String(error); }
 function delay(ms: number) { return new Promise((resolveDelay) => setTimeout(resolveDelay, ms)); }

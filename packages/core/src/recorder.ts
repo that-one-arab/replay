@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import type { Browser, BrowserContext, Frame, Page, Response as PlaywrightResponse } from "playwright-core";
 import { chromium } from "playwright-core";
 import { SessionStore } from "./storage.js";
-import type { Marker, RecordingManifest, StartOptions, StopResult } from "./types.js";
+import type { BrowserStatus, Marker, RecordingManifest, StartOptions, StopResult } from "./types.js";
 
 const require = createRequire(import.meta.url);
 const FLUSH_MS = 500;
@@ -37,14 +37,22 @@ export class Recorder {
   private initialized = false;
 
   async attach(cdpEndpoint: string) {
+    if (this.store) throw new Error("Cannot change browser attachment while a recording is active");
+    // Connect before releasing the current CDP facade. A failed external attach
+    // must not strand a healthy existing attachment.
+    const browser = await chromium.connectOverCDP(cdpEndpoint);
+    const context = browser.contexts()[0];
+    if (!context) {
+      await browser.close();
+      throw new Error("No browser context found at CDP endpoint");
+    }
     if (this.browser) await this.browser.close();
     this.knownPages.clear();
     // Bindings belong to a single Playwright BrowserContext. Reattaching over
     // CDP creates a new context facade, so it must receive its own bridge.
     this.initialized = false;
-    this.browser = await chromium.connectOverCDP(cdpEndpoint);
-    this.context = this.browser.contexts()[0];
-    if (!this.context) throw new Error("No browser context found at CDP endpoint");
+    this.browser = browser;
+    this.context = context;
     this.context.on("page", (page) => this.registerPage(page));
     for (const page of this.context.pages()) this.registerPage(page);
     return this;
@@ -54,10 +62,13 @@ export class Recorder {
     if (!this.browser || !this.context) throw new Error("Recorder is not attached. Run rec attach first.");
     if (this.store) throw new Error("A recording is already active");
     const pages = [...new Set([...this.context.pages(), ...this.knownPages])];
-    const active = pages.find((page) => page.url() !== "about:blank") ?? pages[0];
+    const active = pages.find((page) => isNavigatedPage(page.url()));
     const defaultOrigin = active ? originOf(active.url()) : undefined;
     const origins = options.origins?.length ? options.origins : defaultOrigin ? [defaultOrigin] : [];
-    if (origins.length === 0) throw new Error("No page origin found. Navigate the browser or supply --origin.");
+    const readyPage = pages.find((page) => isNavigatedPage(page.url()) && inScope(page.url(), new Set(origins)));
+    if (origins.length === 0 || !readyPage) {
+      throw new Error("No navigated page is available to record. Use Playwright MCP to open the target page, then call recording_start.");
+    }
     this.origins = new Set(origins);
     this.recordCanvas = Boolean(options.recordCanvas);
     this.startedAt = Date.now();
@@ -92,15 +103,15 @@ export class Recorder {
     return { sessionId: id };
   }
 
-  async marker(label: string, note?: string) {
+  async marker(label: string, note?: string, placement: Marker["placement"] = "after_previous") {
     if (!this.store) throw new Error("No recording is active");
-    const marker: Marker = { t_ms: Date.now() - this.startedAt, label, note };
+    const marker: Marker = { t_ms: Date.now() - this.startedAt, label, note, placement };
     this.store.addMarker(marker);
     await Promise.all([...this.pages.values()].map(async ({ page }) => {
-      await page.evaluate(({ label, note }) => {
-        const api = window as typeof window & { __recAddMarker?: (label: string, note?: string) => void };
-        api.__recAddMarker?.(label, note);
-      }, { label, note }).catch(() => undefined);
+      await page.evaluate(({ label, note, placement }) => {
+        const api = window as typeof window & { __recAddMarker?: (label: string, note?: string, placement?: Marker["placement"]) => void };
+        api.__recAddMarker?.(label, note, placement);
+      }, { label, note, placement }).catch(() => undefined);
     }));
   }
 
@@ -118,27 +129,46 @@ export class Recorder {
       }).catch(() => undefined);
     }
     await store.finalize(outcome, notes);
+    const capture = store.captureSummary();
     const result: StopResult = {
       sessionId: store.manifest.id,
       path: store.root,
       rawDurationMs: store.manifest.raw_duration_ms ?? 0,
       activeDurationMs: store.manifest.active_duration_ms ?? 0,
       markers: store.manifest.markers,
+      capture,
     };
     this.pages.clear();
     this.store = undefined;
+    if (capture.segmentCount === 0 || capture.chunkCount === 0 || capture.eventCount === 0) {
+      throw new Error("Recording captured no replay events. Confirm Playwright MCP is connected to Rec's CDP endpoint, then retry the recording.");
+    }
     return result;
   }
 
   status() {
-    return this.store ? { state: "recording" as const, sessionId: this.store.manifest.id, elapsedMs: Date.now() - this.startedAt } : { state: "idle" as const };
+    if (!this.store) return { state: "idle" as const };
+    return { state: "recording" as const, sessionId: this.store.manifest.id, elapsedMs: Date.now() - this.startedAt, ...this.store.captureSummary() };
+  }
+
+  browserStatus(): BrowserStatus {
+    const pages = this.context?.pages() ?? [];
+    return {
+      attached: Boolean(this.browser && this.context),
+      pageCount: pages.length,
+      navigatedPageCount: pages.filter((page) => isNavigatedPage(page.url())).length,
+    };
   }
 
   async close() {
-    if (this.store) await this.stop();
+    let stopError: unknown;
+    if (this.store) {
+      try { await this.stop(); } catch (error) { stopError = error; }
+    }
     await this.browser?.close();
     this.browser = undefined;
     this.context = undefined;
+    if (stopError) throw stopError;
   }
 
   private async installBindings() {
@@ -307,6 +337,10 @@ function originOf(url: string) {
   try { return new URL(url).origin; } catch { return undefined; }
 }
 
+function isNavigatedPage(url: string) {
+  try { return ["http:", "https:"].includes(new URL(url).protocol); } catch { return false; }
+}
+
 function eventTimestamp(event: unknown) {
   if (!event || typeof event !== "object" || !("timestamp" in event)) return undefined;
   const value = Number((event as { timestamp: unknown }).timestamp);
@@ -390,11 +424,11 @@ async function recorderScript() {
   return `${rrweb}\n;(() => {
     let stop; let stopTabFocus; let buffer = []; let timer;
     const rrwebRecord = window.rrweb || window.rrwebRecord;
-    const flush = () => { if (buffer.length) window.__rec_emit(buffer.splice(0)); if (timer) { clearTimeout(timer); timer = undefined; } };
+    const flush = async () => { if (buffer.length) await window.__rec_emit(buffer.splice(0)); if (timer) { clearTimeout(timer); timer = undefined; } };
     window.__recStart = ({ maskAllInputs, recordCanvas, recordCrossOriginIframes }) => {
       if (stop || !rrwebRecord) return;
       stop = rrwebRecord.record({
-        emit(event) { buffer.push(event); if (buffer.length >= 200) flush(); else if (!timer) timer = setTimeout(flush, ${FLUSH_MS}); },
+        emit(event) { buffer.push(event); if (buffer.length >= 200) void flush(); else if (!timer) timer = setTimeout(() => void flush(), ${FLUSH_MS}); },
         checkoutEveryNms: 60000,
         inlineStylesheet: true,
         collectFonts: true,
@@ -416,7 +450,7 @@ async function recorderScript() {
         reportFocus();
       }
     };
-    window.__recAddMarker = (label, note) => rrwebRecord?.record?.addCustomEvent?.("rec-marker", { label, note });
-    window.__recStop = () => { flush(); stopTabFocus?.(); stopTabFocus = undefined; stop?.(); stop = undefined; };
+    window.__recAddMarker = (label, note, placement) => rrwebRecord?.record?.addCustomEvent?.("rec-marker", { label, note, placement });
+    window.__recStop = async () => { await flush(); stopTabFocus?.(); stopTabFocus = undefined; stop?.(); stop = undefined; };
   })();`;
 }

@@ -24,4 +24,7 @@ endpoint. `manifest.json` is written on start and atomically replaced on stop wi
 final durations, chunks, tab metadata, and assets.
 
 The format is local only in this spike. Future server uploads should send the
-manifest and chunks unchanged.
+manifest and chunks unchanged. Markers have a timestamp, label, optional note, and
+optional `placement`: `after_previous` (the default) describes a confirmed result
+after the previous agent action, while `before_next` describes a precondition or
+chapter boundary. Placement is narrative ordered metadata, not a browser-action ID.

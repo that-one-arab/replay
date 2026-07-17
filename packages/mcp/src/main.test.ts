@@ -7,7 +7,7 @@ import test from "node:test";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-test("MCP lifecycle tools launch a browser only when the daemon has no attachment", async () => {
+test("MCP tools make browser setup explicit and preserve ordered marker metadata", async () => {
   const calls: { method: string; path: string; body?: Record<string, unknown> }[] = [];
   let attached = false;
   const daemon = createServer(async (request, response) => {
@@ -16,8 +16,17 @@ test("MCP lifecycle tools launch a browser only when the daemon has no attachmen
     for await (const chunk of request) raw += chunk;
     const body = raw ? JSON.parse(raw) as Record<string, unknown> : undefined;
     calls.push({ method: request.method ?? "", path, body });
-    if (request.method === "GET" && path === "/health") return json(response, { ok: true, state: "idle", cdp_endpoint: attached ? "http://127.0.0.1:9333" : undefined });
-    if (request.method === "POST" && path === "/api/browser/start") { attached = true; return json(response, { started: true, cdp_endpoint: "http://127.0.0.1:9333" }); }
+    if (request.method === "GET" && path === "/health") return json(response, {
+      ok: true,
+      state: "idle",
+      cdp_endpoint: attached ? "http://127.0.0.1:9333" : undefined,
+      managed_browser: attached,
+      browser_state: attached ? "ready" : "unavailable",
+      page_count: attached ? 1 : 0,
+      navigated_page_count: attached ? 1 : 0,
+    });
+    if (request.method === "POST" && path === "/api/browser/ensure") { attached = true; return json(response, { managed: true, launched: true, cdp_endpoint: "http://127.0.0.1:9333", browser_state: "ready" }); }
+    if (request.method === "POST" && path === "/api/browser/attach") return json(response, { managed: false, cdp_endpoint: body?.cdp_endpoint, browser_state: "ready" });
     if (request.method === "POST" && path === "/api/sessions/start") return json(response, { sessionId: "rec_test" });
     if (request.method === "POST" && path === "/api/sessions/marker") return empty(response);
     if (request.method === "POST" && path === "/api/sessions/stop") return json(response, { sessionId: "rec_test", path: "/tmp/rec_test", rawDurationMs: 1200, activeDurationMs: 900, markers: [] });
@@ -33,15 +42,25 @@ test("MCP lifecycle tools launch a browser only when the daemon has no attachmen
     const initialized = await client.request("initialize", { protocolVersion: "2025-03-26" });
     assert.equal(initialized.result.serverInfo.name, "rec-mcp");
     const listed = await client.request("tools/list", {});
-    assert.deepEqual(listed.result.tools.map((tool: { name: string }) => tool.name), ["recording_start", "recording_marker", "recording_status", "recording_stop"]);
+    assert.deepEqual(listed.result.tools.map((tool: { name: string }) => tool.name), ["recording_browser_ensure", "recording_attach_browser", "recording_start", "recording_marker", "recording_status", "recording_stop"]);
+    const noBrowser = await client.request("tools/call", { name: "recording_start", arguments: { title: "No browser" } });
+    assert.equal(noBrowser.result.isError, true);
+    assert.match(noBrowser.result.content[0].text, /recording_browser_ensure/);
+    assert.equal(calls.filter((call) => call.path === "/api/browser/ensure").length, 0);
+    const ensured = await client.request("tools/call", { name: "recording_browser_ensure", arguments: {} });
+    assert.match(ensured.result.content[0].text, /9333/);
     const started = await client.request("tools/call", { name: "recording_start", arguments: { title: "MCP fixture" } });
     assert.match(started.result.content[0].text, /rec_test/);
-    await client.request("tools/call", { name: "recording_marker", arguments: { label: "Observed issue" } });
+    await client.request("tools/call", { name: "recording_marker", arguments: { label: "Observed issue", placement: "before_next" } });
     const stopped = await client.request("tools/call", { name: "recording_stop", arguments: { outcome: "reproduced" } });
     assert.match(stopped.result.content[0].text, /replayUrl/);
-    await client.request("tools/call", { name: "recording_start", arguments: { title: "Reuse browser" } });
-    assert.equal(calls.filter((call) => call.path === "/api/browser/start").length, 1);
-    assert.equal(calls.filter((call) => call.path === "/api/sessions/start").length, 2);
+    const status = await client.request("tools/call", { name: "recording_status", arguments: {} });
+    assert.match(status.result.content[0].text, /page_ready/);
+    const external = await client.request("tools/call", { name: "recording_attach_browser", arguments: { cdpEndpoint: "http://127.0.0.1:9222" } });
+    assert.match(external.result.content[0].text, /9222/);
+    assert.equal(calls.filter((call) => call.path === "/api/browser/ensure").length, 1);
+    assert.equal(calls.filter((call) => call.path === "/api/sessions/start").length, 1);
+    assert.deepEqual(calls.find((call) => call.path === "/api/sessions/marker")?.body, { label: "Observed issue", placement: "before_next" });
   } finally {
     server.kill();
     daemon.close();

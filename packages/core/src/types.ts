@@ -4,6 +4,11 @@ export interface Marker {
   t_ms: number;
   label: string;
   note?: string;
+  /**
+   * Narrative placement relative to the agent's ordered browser actions.
+   * It is deliberately not a cross-server Playwright action identifier.
+   */
+  placement?: "after_previous" | "before_next";
 }
 
 export interface Segment {
@@ -61,4 +66,17 @@ export interface StopResult {
   rawDurationMs: number;
   activeDurationMs: number;
   markers: Marker[];
+  capture: CaptureSummary;
+}
+
+export interface CaptureSummary {
+  segmentCount: number;
+  chunkCount: number;
+  eventCount: number;
+}
+
+export interface BrowserStatus {
+  attached: boolean;
+  pageCount: number;
+  navigatedPageCount: number;
 }

@@ -54,7 +54,9 @@ async function start(values: string[]) {
 async function marker(values: string[]) {
   const label = values.shift();
   if (!label) return usage("rec marker requires a label");
-  await api("POST", "/api/sessions/marker", { label, note: option(values, "--note") });
+  const placement = option(values, "--placement");
+  if (placement !== undefined && placement !== "after_previous" && placement !== "before_next") return usage("Marker placement must be after_previous or before_next");
+  await api("POST", "/api/sessions/marker", { label, note: option(values, "--note"), placement });
   console.log(`Marker added: ${label}`);
 }
 
@@ -113,4 +115,4 @@ function options(values: string[], name: string) { const found: string[] = []; f
 function flag(values: string[], name: string) { const index = values.indexOf(name); if (index < 0) return false; values.splice(index, 1); return true; }
 function duration(ms?: number) { if (!ms) return "0s"; const seconds = Math.round(ms / 1000); return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`; }
 function print(value: unknown) { console.log(JSON.stringify(value, null, 2)); }
-function usage(message?: string): never { if (message) console.error(message); console.error("Usage: rec browser start|stop | attach --cdp <url> | start [--record-canvas] | marker <label> | stop | status | list | open <id> | doctor"); process.exit(2); }
+function usage(message?: string): never { if (message) console.error(message); console.error("Usage: rec browser start|stop | attach --cdp <url> | start [--record-canvas] | marker <label> [--note <text>] [--placement after_previous|before_next] | stop | status | list | open <id> | doctor"); process.exit(2); }

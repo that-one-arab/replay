@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createReadStream, existsSync } from "node:fs";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
@@ -9,6 +9,7 @@ import { Recorder, recHome, sessionsDir, sessionPath, type Outcome, type Recordi
 const port = Number(process.env.REC_PORT ?? 7717);
 const recorder = new Recorder();
 let cdpEndpoint: string | undefined;
+let managedBrowser = existsSync(join(recHome(), "browser.json"));
 
 const server = createServer((request, response) => void route(request, response).catch((error: unknown) => reply(response, 500, { error: messageOf(error) })));
 server.listen(port, "127.0.0.1", () => console.log(`rec daemon listening on http://127.0.0.1:${port}`));
@@ -16,20 +17,16 @@ server.listen(port, "127.0.0.1", () => console.log(`rec daemon listening on http
 async function route(request: IncomingMessage, response: ServerResponse) {
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
   const body = request.method === "POST" ? await jsonBody(request) : undefined;
-  if (request.method === "GET" && url.pathname === "/health") return reply(response, 200, { ok: true, cdp_endpoint: cdpEndpoint, ...recorder.status() });
-  if (request.method === "POST" && url.pathname === "/api/attach") {
-    cdpEndpoint = String(body?.cdp_endpoint ?? "");
-    await recorder.attach(cdpEndpoint);
-    return reply(response, 200, { cdp_endpoint: cdpEndpoint });
-  }
-  if (request.method === "POST" && url.pathname === "/api/browser/start") return reply(response, 200, await startBrowser(String(body?.executable ?? "")));
+  if (request.method === "GET" && url.pathname === "/health") return reply(response, 200, await health());
+  if (request.method === "POST" && (url.pathname === "/api/attach" || url.pathname === "/api/browser/attach")) return reply(response, 200, await attachBrowser(String(body?.cdp_endpoint ?? "")));
+  if (request.method === "POST" && (url.pathname === "/api/browser/start" || url.pathname === "/api/browser/ensure")) return reply(response, 200, await startBrowser(String(body?.executable ?? "")));
   if (request.method === "POST" && url.pathname === "/api/browser/stop") return reply(response, 200, await stopBrowser());
   if (request.method === "POST" && url.pathname === "/api/sessions/start") {
     if (!cdpEndpoint) throw new Error("No browser attached. Run rec attach --cdp <url> or rec browser start.");
     return reply(response, 201, await recorder.start(body as StartOptions));
   }
   if (request.method === "POST" && url.pathname === "/api/sessions/marker") {
-    await recorder.marker(String(body?.label ?? ""), optionalString(body?.note));
+    await recorder.marker(String(body?.label ?? ""), optionalString(body?.note), markerPlacement(body?.placement));
     return reply(response, 204);
   }
   if (request.method === "POST" && url.pathname === "/api/sessions/stop") return reply(response, 200, await recorder.stop(outcomeOf(body?.outcome), optionalString(body?.notes)));
@@ -45,29 +42,96 @@ async function route(request: IncomingMessage, response: ServerResponse) {
 }
 
 async function startBrowser(executable: string) {
+  await recoverLostBrowserRecording();
+  if (recorder.status().state === "recording") throw new Error("Cannot change browser attachment while a recording is active");
   const statePath = join(recHome(), "browser.json");
   if (existsSync(statePath)) {
-    const saved = JSON.parse(await readFile(statePath, "utf8")) as { pid: number; cdp_endpoint: string };
-    try { process.kill(saved.pid, 0); cdpEndpoint = saved.cdp_endpoint; await recorder.attach(cdpEndpoint); return { started: false, cdp_endpoint: cdpEndpoint }; } catch { /* stale state */ }
+    try {
+      const saved = JSON.parse(await readFile(statePath, "utf8")) as { pid: number; cdp_endpoint: string };
+      process.kill(saved.pid, 0);
+      await waitForBrowser(saved.cdp_endpoint, 5);
+      await recorder.attach(saved.cdp_endpoint);
+      cdpEndpoint = saved.cdp_endpoint;
+      managedBrowser = true;
+      return { managed: true, launched: false, cdp_endpoint: cdpEndpoint, browser_state: "ready" };
+    } catch {
+      await unlink(statePath).catch(() => undefined);
+    }
   }
   const browser = executable || process.env.REC_BROWSER_EXECUTABLE || chromeExecutable();
   if (!browser) throw new Error("Chrome was not found. Set REC_BROWSER_EXECUTABLE or use rec attach --cdp.");
+  const managedEndpoint = "http://127.0.0.1:9333";
+  if (await browserAvailable(managedEndpoint)) {
+    throw new Error(`A browser is already listening at ${managedEndpoint}, but Rec does not own it. Use recording_attach_browser with its endpoint or stop that browser before calling recording_browser_ensure.`);
+  }
   await mkdir(recHome(), { recursive: true });
   const child = spawn(browser, ["--remote-debugging-port=9333", `--user-data-dir=${join(recHome(), "chromium-profile")}`, "--no-first-run", "--no-default-browser-check"], { detached: true, stdio: "ignore" });
   child.unref();
-  cdpEndpoint = "http://127.0.0.1:9333";
-  await waitForBrowser(cdpEndpoint);
-  await recorder.attach(cdpEndpoint);
+  cdpEndpoint = managedEndpoint;
+  try {
+    await waitForBrowser(cdpEndpoint);
+    if (!child.pid) throw new Error("Rec could not determine the launched Chrome process ID");
+    process.kill(child.pid, 0);
+    await recorder.attach(cdpEndpoint);
+  } catch (error) {
+    if (child.pid) { try { process.kill(child.pid, "SIGTERM"); } catch { /* already exited */ } }
+    cdpEndpoint = undefined;
+    throw error;
+  }
   await writeFile(statePath, JSON.stringify({ pid: child.pid, cdp_endpoint: cdpEndpoint }) + "\n");
-  return { started: true, cdp_endpoint: cdpEndpoint };
+  managedBrowser = true;
+  return { managed: true, launched: true, cdp_endpoint: cdpEndpoint, browser_state: "ready" };
 }
 
 async function stopBrowser() {
+  if (recorder.status().state === "recording") throw new Error("Cannot stop the managed browser while a recording is active");
+  if (!managedBrowser) return { stopped: false, managed: false };
   const statePath = join(recHome(), "browser.json");
-  if (!existsSync(statePath)) return { stopped: false };
+  if (!existsSync(statePath)) return { stopped: false, managed: true };
   const saved = JSON.parse(await readFile(statePath, "utf8")) as { pid: number };
   try { process.kill(saved.pid, "SIGTERM"); } catch { /* browser already gone */ }
-  return { stopped: true };
+  await unlink(statePath).catch(() => undefined);
+  await recorder.close();
+  cdpEndpoint = undefined;
+  managedBrowser = false;
+  return { stopped: true, managed: true };
+}
+
+async function attachBrowser(endpoint: string) {
+  await recoverLostBrowserRecording();
+  if (recorder.status().state === "recording") throw new Error("Cannot change browser attachment while a recording is active");
+  if (!isLoopbackEndpoint(endpoint)) throw new Error("Only loopback CDP endpoints are supported. Use http://127.0.0.1:<port>.");
+  await waitForBrowser(endpoint, 5);
+  await recorder.attach(endpoint);
+  cdpEndpoint = endpoint;
+  managedBrowser = false;
+  return { managed: false, cdp_endpoint: cdpEndpoint, browser_state: "ready" };
+}
+
+async function health() {
+  const browser = recorder.browserStatus();
+  return {
+    ok: true,
+    cdp_endpoint: cdpEndpoint,
+    managed_browser: managedBrowser,
+    browser_state: browser.attached ? "ready" : "unavailable",
+    page_count: browser.pageCount,
+    navigated_page_count: browser.navigatedPageCount,
+    ...recorder.status(),
+  };
+}
+
+/**
+ * A browser can disappear while rrweb capture is active (for example, after a
+ * machine sleep or a crashed Chrome). Do not leave the daemon permanently
+ * recording a dead target: finalize what reached disk, release the CDP facade,
+ * and let the next browser ensure/attach create a fresh recording.
+ */
+async function recoverLostBrowserRecording() {
+  if (recorder.status().state !== "recording") return;
+  if (cdpEndpoint && await browserAvailable(cdpEndpoint)) return;
+  try { await recorder.close(); } catch { /* An empty interrupted capture is intentionally not handed off. */ }
+  cdpEndpoint = undefined;
 }
 
 function chromeExecutable() {
@@ -78,13 +142,17 @@ function chromeExecutable() {
   return candidates.find(existsSync);
 }
 
-async function waitForBrowser(endpoint: string) {
+async function waitForBrowser(endpoint: string, attempts = 30) {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try { const response = await fetch(`${endpoint}/json/version`); if (response.ok) return; } catch (error) { lastError = error; }
     await new Promise((resolveWait) => setTimeout(resolveWait, 200));
   }
-  throw new Error(`Browser did not expose CDP: ${messageOf(lastError)}`);
+  throw new Error(`Browser at ${endpoint} did not expose CDP: ${messageOf(lastError)}`);
+}
+
+async function browserAvailable(endpoint: string) {
+  try { return (await fetch(`${endpoint}/json/version`)).ok; } catch { return false; }
 }
 
 async function listSessions() {
@@ -151,4 +219,8 @@ function jsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
 
 function optionalString(value: unknown) { return typeof value === "string" ? value : undefined; }
 function outcomeOf(value: unknown): Outcome | undefined { return value === "reproduced" || value === "verified" || value === "other" ? value : undefined; }
+function markerPlacement(value: unknown) { if (value === undefined || value === "after_previous" || value === "before_next") return value ?? "after_previous"; throw new Error("Marker placement must be after_previous or before_next."); }
+function isLoopbackEndpoint(value: string) {
+  try { const url = new URL(value); return url.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(url.hostname); } catch { return false; }
+}
 function messageOf(error: unknown) { return error instanceof Error ? error.message : String(error); }
