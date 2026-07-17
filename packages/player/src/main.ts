@@ -4,7 +4,8 @@ import "./style.css";
 
 type Marker = { t_ms: number; label: string; note?: string };
 type Segment = { id: string; page_url: string; clock_offset_ms: number };
-type Manifest = { id: string; title: string; markers: Marker[]; segments: Segment[]; raw_duration_ms?: number };
+type TabEvent = { t_ms: number; segment_id: string; type: "opened" | "focused" | "closed" };
+type Manifest = { id: string; title: string; markers: Marker[]; segments: Segment[]; tab_events?: TabEvent[]; raw_duration_ms?: number };
 type ReplayEvent = { timestamp: number; type: number; data?: { source?: number; width?: number; height?: number } };
 
 // Keep the default pace in one place so product teams can tune it without
@@ -67,7 +68,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   let bridgingTabs = false;
   let tabFocusTimer: number | undefined;
   const scrubber = document.querySelector<HTMLInputElement>("#scrubber")!;
-  const nextTab = manifest.segments.filter((item) => item.clock_offset_ms > tabStart).sort((left, right) => left.clock_offset_ms - right.clock_offset_ms)[0];
+  const nextFocus = nextFocusForSegment(manifest, segment.id, requestedSessionTime);
   const updateTimelinePosition = (time: number) => {
     const position = clamp(time / duration * 100, 0, 100);
     currentSessionTime = time;
@@ -113,8 +114,8 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
       const time = clamp(tabStart + replayer.getCurrentTime(), tabStart, tabEnd);
       updateTimelinePosition(time);
       syncNarration(manifest.markers, time);
-      if (playing && nextTab && time >= nextTab.clock_offset_ms) {
-        announceAndFocusNewTab(nextTab, time);
+      if (playing && nextFocus && time >= nextFocus.t_ms) {
+        announceAndFocusNewTab(nextFocus, time);
         return;
       }
     }
@@ -124,7 +125,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   replayer.on("resume", () => { setPlaying(true); requestAnimationFrame(updateProgress); });
   replayer.on("pause", () => setPlaying(false));
   replayer.on("finish", () => {
-    if (nextTab) void bridgeToNewTab(nextTab);
+    if (nextFocus) void bridgeToNewTab(nextFocus);
     else { setPlaying(false); updateTimelinePosition(tabEnd); }
   });
   replayer.on("mouse-interaction", (payload: unknown) => {
@@ -200,28 +201,30 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     if (tabFocusTimer) window.clearTimeout(tabFocusTimer);
     frameWindows.forEach((frameWindow) => frameWindow.removeEventListener("keydown", onPlaybackKey, true));
   }, { once: true });
-  const switchToNewTab = async (tab: Segment, time: number) => {
+  const switchToNewTab = async (focus: TabEvent, time: number) => {
+    const tab = manifest.segments.find((item) => item.id === focus.segment_id);
+    if (!tab) return;
     bridgingTabs = true;
     tabFocusTimer = undefined;
-    updateTimelinePosition(Math.max(tab.clock_offset_ms, time));
-    await replay(manifest, eventSets, duration, tab, Math.max(tab.clock_offset_ms, time), true);
+    updateTimelinePosition(Math.max(focus.t_ms, time));
+    await replay(manifest, eventSets, duration, tab, Math.max(focus.t_ms, time), true);
   };
-  const announceAndFocusNewTab = (tab: Segment, time: number) => {
+  const announceAndFocusNewTab = (focus: TabEvent, time: number) => {
     if (bridgingTabs) return;
     bridgingTabs = true;
-    updateTimelinePosition(Math.max(tab.clock_offset_ms, time));
+    updateTimelinePosition(Math.max(focus.t_ms, time));
     setPlaying(true);
     tabFocusTimer = window.setTimeout(() => {
       if (lifetime.signal.aborted || !bridgingTabs || !playing) return;
-      void switchToNewTab(tab, Math.max(tab.clock_offset_ms, currentSessionTime));
+      void switchToNewTab(focus, Math.max(focus.t_ms, currentSessionTime));
     }, TAB_FOCUS_DELAY_MS);
   };
-  const bridgeToNewTab = async (tab: Segment) => {
+  const bridgeToNewTab = async (focus: TabEvent) => {
     if (bridgingTabs) return;
     bridgingTabs = true;
     if (replayer.config.skipInactive) {
       bridgingTabs = false;
-      announceAndFocusNewTab(tab, tab.clock_offset_ms);
+      announceAndFocusNewTab(focus, focus.t_ms);
       return;
     }
     const bridgeStart = currentSessionTime;
@@ -229,12 +232,12 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     const advance = () => {
       if (lifetime.signal.aborted || !bridgingTabs || !playing) return;
       const elapsed = (performance.now() - wallStart) * Number(replayer.config.speed);
-      const time = Math.min(tab.clock_offset_ms, bridgeStart + elapsed);
+      const time = Math.min(focus.t_ms, bridgeStart + elapsed);
       updateTimelinePosition(time);
       syncNarration(manifest.markers, time);
-      if (time >= tab.clock_offset_ms) {
+      if (time >= focus.t_ms) {
         bridgingTabs = false;
-        announceAndFocusNewTab(tab, time);
+        announceAndFocusNewTab(focus, time);
       }
       else requestAnimationFrame(advance);
     };
@@ -279,17 +282,34 @@ function interactionTimes(manifest: Manifest, eventSets: Map<string, ReplayEvent
   });
 }
 function segmentAtTime(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>, time: number) {
+  const focused = [...tabEvents(manifest)].reverse().find((event) => event.type === "focused" && event.t_ms <= time && !closedAt(manifest, event.segment_id, time));
+  const focusedSegment = manifest.segments.find((segment) => segment.id === focused?.segment_id);
+  if (focusedSegment) return focusedSegment;
   return [...manifest.segments].sort((left, right) => right.clock_offset_ms - left.clock_offset_ms).find((segment) => {
     const events = eventSets.get(segment.id) ?? [];
     const end = segment.clock_offset_ms + Math.max(0, (events.at(-1)?.timestamp ?? 0) - (events[0]?.timestamp ?? 0));
-    return time >= segment.clock_offset_ms && time <= end;
+    return time >= segment.clock_offset_ms && time <= end && !closedAt(manifest, segment.id, time);
   });
 }
 function revealTabs(manifest: Manifest, time: number) {
   document.querySelectorAll<HTMLElement>("[data-segment]").forEach((button) => {
     const segment = manifest.segments.find((item) => item.id === button.dataset.segment);
-    button.hidden = Boolean(segment && segment.clock_offset_ms > time);
+    const openedAt = tabEvents(manifest).find((event) => event.type === "opened" && event.segment_id === segment?.id)?.t_ms ?? segment?.clock_offset_ms ?? 0;
+    button.hidden = Boolean(segment && (openedAt > time || closedAt(manifest, segment.id, time)));
   });
+}
+function tabEvents(manifest: Manifest) {
+  if (manifest.tab_events?.length) return [...manifest.tab_events].sort((left, right) => left.t_ms - right.t_ms);
+  return manifest.segments.flatMap((segment) => [
+    { type: "opened" as const, segment_id: segment.id, t_ms: segment.clock_offset_ms },
+    { type: "focused" as const, segment_id: segment.id, t_ms: segment.clock_offset_ms },
+  ]);
+}
+function nextFocusForSegment(manifest: Manifest, segmentId: string, after: number) {
+  return tabEvents(manifest).find((event) => event.type === "focused" && event.segment_id !== segmentId && event.t_ms > after);
+}
+function closedAt(manifest: Manifest, segmentId: string, time: number) {
+  return tabEvents(manifest).some((event) => event.type === "closed" && event.segment_id === segmentId && event.t_ms <= time);
 }
 function segmentLabel(pageUrl: string) {
   try {

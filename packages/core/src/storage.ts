@@ -5,7 +5,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { Marker, RecordedAsset, RecordingManifest, Segment } from "./types.js";
+import type { Marker, RecordedAsset, RecordingManifest, Segment, TabEvent } from "./types.js";
 
 export const recHome = () => process.env.REC_HOME ?? join(process.env.HOME ?? process.cwd(), ".rec");
 export const sessionsDir = () => join(recHome(), "sessions");
@@ -108,6 +108,15 @@ export class SessionStore {
 
   addMarker(marker: Marker) {
     this.manifest.markers.push(marker);
+  }
+
+  addTabEvent(event: TabEvent) {
+    const tabEvents = this.manifest.tab_events ?? (this.manifest.tab_events = []);
+    const previous = tabEvents.at(-1);
+    // visibilitychange can fire twice while a popup is settling. Preserve the
+    // meaningful lifecycle edge, not duplicate focus noise.
+    if (previous?.type === event.type && previous.segment_id === event.segment_id && event.t_ms - previous.t_ms < 100) return;
+    tabEvents.push(event);
   }
 
   async finalize(outcome?: RecordingManifest["outcome"], notes?: string) {

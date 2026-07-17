@@ -22,6 +22,12 @@ export interface RecordedAsset {
   bytes: number;
 }
 
+export interface TabEvent {
+  t_ms: number;
+  segment_id: string;
+  type: "opened" | "focused" | "closed";
+}
+
 export interface RecordingManifest {
   format_version: 1;
   id: string;
@@ -36,6 +42,7 @@ export interface RecordingManifest {
   raw_duration_ms?: number;
   active_duration_ms?: number;
   segments: Segment[];
+  tab_events: TabEvent[];
   markers: Marker[];
   assets: RecordedAsset[];
 }

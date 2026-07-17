@@ -100,13 +100,16 @@ try {
   if (!sessionId) throw new Error(`rec stop did not return a session id:\n${stdout}`);
   const manifest = await fetch(new URL(`/api/sessions/${sessionId}/manifest`, url)).then(async (response) => {
     if (!response.ok) throw new Error(`Manifest responded with ${response.status}`);
-    return response.json() as Promise<{ segments: { page_url: string; chunks: string[] }[]; assets?: { source_urls: string[] }[] }>;
+    return response.json() as Promise<{ segments: { id: string; page_url: string; chunks: string[] }[]; assets?: { source_urls: string[] }[]; tab_events?: { type: string; segment_id: string }[] }>;
   });
   if (manifest.segments.every((segment) => segment.chunks.length === 0)) {
     throw new Error("Recorder captured no rrweb events. The local rec daemon is stale; restart it with `pkill -f 'packages/daemon/dist/main.js'`, then rerun `npm run demo:record`.");
   }
   if (multiTab && (manifest.segments.length !== 2 || manifest.segments[1]?.chunks.length === 0 || !manifest.segments[1]?.page_url.endsWith("/invite-preview"))) {
     throw new Error("Multi-tab recording did not produce a populated invite-preview tab.");
+  }
+  if (multiTab && !manifest.tab_events?.some((event) => event.type === "focused" && event.segment_id === manifest.segments[1]?.id)) {
+    throw new Error("Multi-tab recording did not capture focus for the invite-preview tab.");
   }
   if (!multiTab && manifest.segments.length !== 1) {
     throw new Error("Single-tab recording unexpectedly captured more than one tab.");

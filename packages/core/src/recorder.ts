@@ -17,6 +17,8 @@ interface PageState {
   page: Page;
   queue: unknown[];
   baseUrl: string;
+  clockOffsetMs: number;
+  firstEventTimestamp?: number;
   flushTimer?: NodeJS.Timeout;
 }
 
@@ -71,6 +73,7 @@ export class Recorder {
       origins,
       masking: { mask_all_inputs: Boolean(options.maskAllInputs), passwords: true },
       segments: [],
+      tab_events: [],
       markers: [],
       assets: [],
     };
@@ -145,6 +148,7 @@ export class Recorder {
       // object identity, then resolve the active page by its current URL.
       const state = page ? this.pages.get(page) ?? [...this.pages.values()].find((candidate) => candidate.page.url() === page.url()) : undefined;
       if (!state || !Array.isArray(payload)) return;
+      this.observeTabEvents(state, payload);
       state.queue.push(...payload);
       if (!state.flushTimer) state.flushTimer = setTimeout(() => void this.flush(state), FLUSH_MS);
     });
@@ -186,10 +190,15 @@ export class Recorder {
   private ensurePageState(page: Page) {
     const existing = this.pages.get(page);
     if (existing) return existing;
-    const state: PageState = { id: `seg_${this.pages.size + 1}`, page, queue: [], baseUrl: page.url() };
+    const clockOffsetMs = Date.now() - this.startedAt;
+    const state: PageState = { id: `seg_${this.pages.size + 1}`, page, queue: [], baseUrl: page.url(), clockOffsetMs };
     this.pages.set(page, state);
-    this.store?.segment(state.id, page.url(), Date.now() - this.startedAt);
-    page.on("close", () => void this.flush(state));
+    this.store?.segment(state.id, page.url(), clockOffsetMs);
+    this.store?.addTabEvent({ type: "opened", segment_id: state.id, t_ms: clockOffsetMs });
+    page.on("close", () => {
+      this.store?.addTabEvent({ type: "closed", segment_id: state.id, t_ms: Date.now() - this.startedAt });
+      void this.flush(state);
+    });
     return state;
   }
 
@@ -206,6 +215,16 @@ export class Recorder {
   private requireStore() {
     if (!this.store) throw new Error("No recording is active");
     return this.store;
+  }
+
+  private observeTabEvents(state: PageState, events: unknown[]) {
+    for (const event of events) {
+      const timestamp = eventTimestamp(event);
+      if (timestamp !== undefined && state.firstEventTimestamp === undefined) state.firstEventTimestamp = timestamp;
+      const candidate = event as { type?: number; data?: { tag?: unknown } };
+      if (candidate.type !== 5 || candidate.data?.tag !== "rec-tab-focused" || timestamp === undefined || state.firstEventTimestamp === undefined) continue;
+      this.store?.addTabEvent({ type: "focused", segment_id: state.id, t_ms: state.clockOffsetMs + Math.max(0, timestamp - state.firstEventTimestamp) });
+    }
   }
 
   private async captureResponse(response: PlaywrightResponse) {
@@ -288,6 +307,12 @@ function originOf(url: string) {
   try { return new URL(url).origin; } catch { return undefined; }
 }
 
+function eventTimestamp(event: unknown) {
+  if (!event || typeof event !== "object" || !("timestamp" in event)) return undefined;
+  const value = Number((event as { timestamp: unknown }).timestamp);
+  return Number.isFinite(value) ? value : undefined;
+}
+
 function inScope(url: string, origins: Set<string>) {
   const origin = originOf(url);
   return Boolean(origin && origins.has(origin));
@@ -363,7 +388,7 @@ async function recorderScript() {
   const path = join(dirname(require.resolve("@rrweb/record")), "record.umd.min.cjs");
   const rrweb = await readFile(path, "utf8");
   return `${rrweb}\n;(() => {
-    let stop; let buffer = []; let timer;
+    let stop; let stopTabFocus; let buffer = []; let timer;
     const rrwebRecord = window.rrweb || window.rrwebRecord;
     const flush = () => { if (buffer.length) window.__rec_emit(buffer.splice(0)); if (timer) { clearTimeout(timer); timer = undefined; } };
     window.__recStart = ({ maskAllInputs, recordCanvas, recordCrossOriginIframes }) => {
@@ -384,8 +409,14 @@ async function recorderScript() {
         maskInputOptions: { password: true },
         sampling: { mousemove: 50, scroll: 150 },
       });
+      if (window.top === window) {
+        const reportFocus = () => { if (document.visibilityState === "visible") rrwebRecord.record.addCustomEvent("rec-tab-focused", {}); };
+        document.addEventListener("visibilitychange", reportFocus);
+        stopTabFocus = () => document.removeEventListener("visibilitychange", reportFocus);
+        reportFocus();
+      }
     };
     window.__recAddMarker = (label, note) => rrwebRecord?.record?.addCustomEvent?.("rec-marker", { label, note });
-    window.__recStop = () => { flush(); stop?.(); stop = undefined; };
+    window.__recStop = () => { flush(); stopTabFocus?.(); stopTabFocus = undefined; stop?.(); stop = undefined; };
   })();`;
 }
