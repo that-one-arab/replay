@@ -98,12 +98,13 @@ async function rec(...args: string[]) {
 async function humanClick(page: Page, locator: Locator, dwellMs: number) {
   const box = await locator.boundingBox();
   if (!box) throw new Error("Expected an interactive target with a visible bounding box.");
-  // rrweb samples mouse movement at 50ms. Keep a continuous cursor position
-  // and emit one eased sample per interval so the viewer can follow the path.
+  // rrweb samples mouse movement at 50ms. Deliberately use an unhurried path:
+  // the replay is a walkthrough, so viewers should be able to follow the
+  // cursor's transition before each click.
   const start = cursorPositions.get(page) ?? { x: 84, y: 148 };
   const target = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   const distance = Math.hypot(target.x - start.x, target.y - start.y);
-  const duration = Math.min(1_650, Math.max(720, distance * 2.1));
+  const duration = Math.min(3_000, Math.max(1_600, distance * 5));
   const steps = Math.ceil(duration / 50);
   for (let step = 1; step <= steps; step += 1) {
     const progress = step / steps;
