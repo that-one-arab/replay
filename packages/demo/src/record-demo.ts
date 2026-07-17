@@ -51,6 +51,15 @@ try {
   const { stdout } = await rec("stop", "--outcome", "verified");
   const url = stdout.match(/Replay:\s+(\S+)/)?.[1];
   if (!url) throw new Error(`rec stop did not return a replay URL:\n${stdout}`);
+  const sessionId = stdout.match(/Stopped\s+(rec_[\w-]+)/)?.[1];
+  if (!sessionId) throw new Error(`rec stop did not return a session id:\n${stdout}`);
+  const manifest = await fetch(new URL(`/api/sessions/${sessionId}/manifest`, url)).then(async (response) => {
+    if (!response.ok) throw new Error(`Manifest responded with ${response.status}`);
+    return response.json() as Promise<{ segments: { chunks: string[] }[] }>;
+  });
+  if (manifest.segments.every((segment) => segment.chunks.length === 0)) {
+    throw new Error("Recorder captured no rrweb events. The local rec daemon is stale; restart it with `pkill -f 'packages/daemon/dist/main.js'`, then rerun `npm run demo:record`.");
+  }
   const replay = await fetch(url);
   if (!replay.ok) throw new Error(`Replay URL responded with ${replay.status}`);
   console.log(`\nDeterministic replay ready: ${url}`);
