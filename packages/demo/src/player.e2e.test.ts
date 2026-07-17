@@ -133,13 +133,40 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
   }
 });
 
+test("browser replay follows recorded focus returns and hides closed tabs", { skip: !chrome }, async () => {
+  const server = createFixtureServer();
+  await new Promise<void>((resolveListen, reject) => server.listen(0, "127.0.0.1", () => resolveListen()).on("error", reject));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Fixture server did not expose a TCP port.");
+  let browser: Browser | undefined;
+  try {
+    browser = await chromium.launch({ headless: true, executablePath: chrome });
+    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    await page.goto(`http://127.0.0.1:${address.port}/replay?id=focus-cycle`, { waitUntil: "networkidle" });
+
+    await page.locator("[data-speed='8']").click();
+    await page.getByRole("button", { name: "Play replay" }).click();
+    await waitForSelectedTab(page, "seg_2", 2_500);
+    assert.equal(await page.locator("[data-segment='seg_2']").isHidden(), false);
+
+    await waitForSelectedTab(page, "seg_1", 2_500);
+    await page.frameLocator(".replayer-wrapper iframe").getByText("Continue").waitFor();
+    await waitForHidden(page.locator("[data-segment='seg_2']"), 1_500);
+  } finally {
+    await browser?.close();
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+  }
+});
+
 function createFixtureServer() {
   return createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://fixture");
     if (url.pathname === "/api/sessions/fixture/manifest") return json(response, { id: "fixture", title: "Replay control fixture", raw_duration_ms: 16_000, markers: [], segments: [{ id: "seg_1", page_url: "http://fixture/", clock_offset_ms: 0 }] });
     if (url.pathname === "/api/sessions/multi-page/manifest") return json(response, { id: "multi-page", title: "Multi-page fixture", raw_duration_ms: 6_500, markers: [], tab_events: [{ type: "opened", segment_id: "seg_1", t_ms: 0 }, { type: "focused", segment_id: "seg_1", t_ms: 0 }, { type: "opened", segment_id: "seg_2", t_ms: 3_000 }, { type: "focused", segment_id: "seg_2", t_ms: 3_300 }], segments: [{ id: "seg_1", page_url: "http://fixture/onboarding", clock_offset_ms: 0 }, { id: "seg_2", page_url: "http://fixture/invite-preview", clock_offset_ms: 3_000 }] });
+    if (url.pathname === "/api/sessions/focus-cycle/manifest") return json(response, { id: "focus-cycle", title: "Focus lifecycle fixture", raw_duration_ms: 6_500, markers: [], tab_events: [{ type: "opened", segment_id: "seg_1", t_ms: 0 }, { type: "focused", segment_id: "seg_1", t_ms: 0 }, { type: "opened", segment_id: "seg_2", t_ms: 3_000 }, { type: "focused", segment_id: "seg_2", t_ms: 3_300 }, { type: "focused", segment_id: "seg_1", t_ms: 5_000 }, { type: "closed", segment_id: "seg_2", t_ms: 5_600 }], segments: [{ id: "seg_1", page_url: "http://fixture/onboarding", clock_offset_ms: 0 }, { id: "seg_2", page_url: "http://fixture/invite-preview", clock_offset_ms: 3_000 }] });
     if (url.pathname === "/api/sessions/fixture/events") return json(response, fixtureEvents);
     if (url.pathname === "/api/sessions/multi-page/events") return json(response, url.searchParams.get("segment") === "seg_2" ? inviteEvents : onboardingEvents);
+    if (url.pathname === "/api/sessions/focus-cycle/events") return json(response, url.searchParams.get("segment") === "seg_2" ? focusCycleInviteEvents : focusCycleOnboardingEvents);
     const path = url.pathname === "/replay" ? resolve(playerDist, "index.html") : resolve(playerDist, `.${url.pathname}`);
     if (!path.startsWith(playerDist) || !existsSync(path)) { response.writeHead(404); response.end(); return; }
     response.writeHead(200, { "content-type": path.endsWith(".js") ? "text/javascript" : path.endsWith(".css") ? "text/css" : "text/html" });
@@ -161,6 +188,22 @@ async function waitForPaused(page: Page, timeoutMs: number) {
   }
   throw new Error("Replay did not finish in time.");
 }
+async function waitForSelectedTab(page: Page, segmentId: string, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await page.locator(`[data-segment='${segmentId}']`).getAttribute("aria-current") === "page") return;
+    await page.waitForTimeout(25);
+  }
+  throw new Error(`Tab ${segmentId} was not selected in time.`);
+}
+async function waitForHidden(locator: import("playwright-core").Locator, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await locator.isHidden()) return;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+  }
+  throw new Error("Tab did not close in time.");
+}
 
 const fixtureEvents = [
   { type: 4, data: { href: "http://fixture/", width: 800, height: 450 }, timestamp: 0 },
@@ -179,4 +222,15 @@ const onboardingEvents = [
   fixtureEvents[0],
   fixtureEvents[1],
   { type: 5, data: { tag: "fixture", payload: { step: "onboarding-complete" } }, timestamp: 2_000 },
+];
+
+const focusCycleOnboardingEvents = [
+  fixtureEvents[0],
+  fixtureEvents[1],
+  { type: 5, data: { tag: "fixture", payload: { step: "returned-to-main-tab" } }, timestamp: 6_000 },
+];
+const focusCycleInviteEvents = [
+  inviteEvents[0],
+  inviteEvents[1],
+  { type: 5, data: { tag: "fixture", payload: { step: "background-tab-closed" } }, timestamp: 6_000 },
 ];
