@@ -64,7 +64,8 @@ rec status | list | open <id> | doctor
   play/pause.
 
 The recording format is documented in `docs/format.md`; the spike checklist is in
-`docs/spike-checklist.md`.
+`docs/spike-checklist.md`. The path from this completed local implementation to
+agent-native capture and shared replay is in `docs/roadmap.md`.
 
 ## Deterministic demo replay
 
