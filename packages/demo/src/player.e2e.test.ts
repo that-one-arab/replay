@@ -80,7 +80,7 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
     assert.equal(await page.locator("[data-segment='seg_2']").isHidden(), false);
     assert.equal(await page.locator("[data-segment='seg_2']").getAttribute("aria-current"), "page");
     assert.equal(await page.locator("#current-time").textContent(), "0:03");
-    assert.equal(await page.locator("#total-time").textContent(), "0:06");
+    assert.equal(await page.locator("#total-time").textContent(), "0:07");
 
     await page.locator("[data-speed='1.25']").click();
     await page.locator("#scrubber").evaluate((node) => {
@@ -123,7 +123,7 @@ function createFixtureServer() {
   return createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://fixture");
     if (url.pathname === "/api/sessions/fixture/manifest") return json(response, { id: "fixture", title: "Replay control fixture", raw_duration_ms: 16_000, markers: [], segments: [{ id: "seg_1", page_url: "http://fixture/", clock_offset_ms: 0 }] });
-    if (url.pathname === "/api/sessions/multi-page/manifest") return json(response, { id: "multi-page", title: "Multi-page fixture", raw_duration_ms: 6_000, markers: [], segments: [{ id: "seg_1", page_url: "http://fixture/onboarding", clock_offset_ms: 0 }, { id: "seg_2", page_url: "http://fixture/invite-preview", clock_offset_ms: 3_000 }] });
+    if (url.pathname === "/api/sessions/multi-page/manifest") return json(response, { id: "multi-page", title: "Multi-page fixture", raw_duration_ms: 6_500, markers: [], segments: [{ id: "seg_1", page_url: "http://fixture/onboarding", clock_offset_ms: 0 }, { id: "seg_2", page_url: "http://fixture/invite-preview", clock_offset_ms: 3_000 }] });
     if (url.pathname === "/api/sessions/fixture/events") return json(response, fixtureEvents);
     if (url.pathname === "/api/sessions/multi-page/events") return json(response, url.searchParams.get("segment") === "seg_2" ? inviteEvents : onboardingEvents);
     const path = url.pathname === "/replay" ? resolve(playerDist, "index.html") : resolve(playerDist, `.${url.pathname}`);

@@ -93,7 +93,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   };
   const togglePlayback = () => {
     if (playing) return pausePlayback();
-    if (Number(scrubber.value) >= duration - 10) {
+    if (replayer.getCurrentTime() >= tabDuration - 10) {
       void replay(manifest, eventSets, duration, manifest.segments[0], 0, true).catch(renderError);
       return;
     }
