@@ -10,6 +10,7 @@ type ReplayEvent = { timestamp: number; type: number; data?: { source?: number; 
 // Keep the default pace in one place so product teams can tune it without
 // changing the replay control behavior.
 const DEFAULT_PLAYBACK_SPEED = 1.25;
+const TAB_FOCUS_DELAY_MS = 700;
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 const id = new URLSearchParams(location.search).get("id");
@@ -63,6 +64,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   let playing = false;
   let scrubbing = false;
   let bridgingTabs = false;
+  let tabFocusTimer: number | undefined;
   const scrubber = document.querySelector<HTMLInputElement>("#scrubber")!;
   const nextTab = manifest.segments.filter((item) => item.clock_offset_ms > tabStart).sort((left, right) => left.clock_offset_ms - right.clock_offset_ms)[0];
   const updateTimelinePosition = (time: number) => {
@@ -79,7 +81,17 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     updateTimelinePosition(start);
     replayer.play(start - tabStart);
   };
-  const togglePlayback = () => playing ? replayer.pause() : playFrom(Number(scrubber.value));
+  const pausePlayback = () => {
+    if (bridgingTabs) {
+      bridgingTabs = false;
+      if (tabFocusTimer) window.clearTimeout(tabFocusTimer);
+      tabFocusTimer = undefined;
+      setPlaying(false);
+      return;
+    }
+    replayer.pause();
+  };
+  const togglePlayback = () => playing ? pausePlayback() : playFrom(Number(scrubber.value));
   scrubber.max = String(duration);
   document.querySelector<HTMLElement>("#total-time")!.textContent = format(duration);
   const setPlaying = (value: boolean) => {
@@ -94,7 +106,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
       updateTimelinePosition(time);
       syncNarration(manifest.markers, time);
       if (playing && nextTab && time >= nextTab.clock_offset_ms) {
-        void switchToNewTab(nextTab, time);
+        announceAndFocusNewTab(nextTab, time);
         return;
       }
     }
@@ -154,34 +166,66 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     const time = Number(scrubber.value);
     const target = segmentAtTime(manifest, eventSets, time);
     if (target && target.id !== segment.id) {
-      void replay(manifest, eventSets, duration, target, time).catch(renderError);
+      void replay(manifest, eventSets, duration, target, time, playing).catch(renderError);
       return;
     }
     playing ? playFrom(time) : replayer.pause(clamp(time, tabStart, tabEnd) - tabStart);
   }, { signal: lifetime.signal });
-  document.addEventListener("keydown", (event) => {
-    if ((event.key !== "Enter" && event.key !== " ") || event.repeat || isInteractiveTarget(event.target)) return;
+  const onPlaybackKey = (event: KeyboardEvent) => {
+    if ((event.key !== "Enter" && event.key !== " ") || event.repeat || isTextEntryTarget(event.target)) return;
     event.preventDefault();
     togglePlayback();
-  }, { signal: lifetime.signal });
+  };
+  window.addEventListener("keydown", onPlaybackKey, { capture: true, signal: lifetime.signal });
+  const frameWindows = new Set<Window>();
+  const attachFrameKeyboard = () => {
+    const frameWindow = replayer.iframe.contentWindow;
+    if (!frameWindow || frameWindows.has(frameWindow)) return;
+    frameWindows.add(frameWindow);
+    frameWindow.addEventListener("keydown", onPlaybackKey, true);
+  };
+  replayer.iframe.addEventListener("load", attachFrameKeyboard, { signal: lifetime.signal });
+  replayer.on("fullsnapshot-rebuilded", attachFrameKeyboard);
+  lifetime.signal.addEventListener("abort", () => {
+    if (tabFocusTimer) window.clearTimeout(tabFocusTimer);
+    frameWindows.forEach((frameWindow) => frameWindow.removeEventListener("keydown", onPlaybackKey, true));
+  }, { once: true });
   const switchToNewTab = async (tab: Segment, time: number) => {
     bridgingTabs = true;
+    tabFocusTimer = undefined;
     updateTimelinePosition(Math.max(tab.clock_offset_ms, time));
     await replay(manifest, eventSets, duration, tab, Math.max(tab.clock_offset_ms, time), true);
+  };
+  const announceAndFocusNewTab = (tab: Segment, time: number) => {
+    if (bridgingTabs) return;
+    bridgingTabs = true;
+    updateTimelinePosition(Math.max(tab.clock_offset_ms, time));
+    setPlaying(true);
+    tabFocusTimer = window.setTimeout(() => {
+      if (lifetime.signal.aborted || !bridgingTabs || !playing) return;
+      void switchToNewTab(tab, Math.max(tab.clock_offset_ms, currentSessionTime));
+    }, TAB_FOCUS_DELAY_MS);
   };
   const bridgeToNewTab = async (tab: Segment) => {
     if (bridgingTabs) return;
     bridgingTabs = true;
-    if (replayer.config.skipInactive) return switchToNewTab(tab, tab.clock_offset_ms);
+    if (replayer.config.skipInactive) {
+      bridgingTabs = false;
+      announceAndFocusNewTab(tab, tab.clock_offset_ms);
+      return;
+    }
     const bridgeStart = currentSessionTime;
     const wallStart = performance.now();
     const advance = () => {
-      if (lifetime.signal.aborted) return;
+      if (lifetime.signal.aborted || !bridgingTabs || !playing) return;
       const elapsed = (performance.now() - wallStart) * Number(replayer.config.speed);
       const time = Math.min(tab.clock_offset_ms, bridgeStart + elapsed);
       updateTimelinePosition(time);
       syncNarration(manifest.markers, time);
-      if (time >= tab.clock_offset_ms) void switchToNewTab(tab, time);
+      if (time >= tab.clock_offset_ms) {
+        bridgingTabs = false;
+        announceAndFocusNewTab(tab, time);
+      }
       else requestAnimationFrame(advance);
     };
     setPlaying(true);
@@ -255,8 +299,10 @@ function fitReplay(mount: HTMLElement, replayer: Replayer, viewport: { width: nu
   replayer.wrapper.style.height = `${viewport.height}px`;
   replayer.wrapper.style.transform = `scale(${scale})`;
 }
-function isInteractiveTarget(target: EventTarget | null) {
-  return target instanceof HTMLButtonElement || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
+function isTextEntryTarget(target: EventTarget | null) {
+  if (!target || typeof target !== "object" || !("tagName" in target)) return false;
+  const element = target as { tagName?: string; isContentEditable?: boolean };
+  return element.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName ?? "");
 }
 type ElementLike = { nodeType: number; classList: DOMTokenList; getAttribute(name: string): string | null; textContent: string | null; tagName: string };
 function isElementLike(value: unknown): value is ElementLike { return typeof value === "object" && value !== null && (value as { nodeType?: number }).nodeType === 1 && "classList" in value; }

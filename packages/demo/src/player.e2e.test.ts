@@ -32,6 +32,7 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
     await page.waitForTimeout(250);
     assert.notEqual(await page.locator("#timeline-playhead").getAttribute("style"), "left: 0%;");
 
+    await page.frameLocator(".replayer-wrapper iframe").getByText("Continue").focus();
     await page.keyboard.press("Space");
     assert.equal(await playbackState(page), "Paused");
     await page.keyboard.press("Enter");
@@ -73,12 +74,15 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
     assert.equal(await page.locator("[data-segment='seg_2']").isHidden(), true);
     await page.locator("[data-speed='8']").click();
     await page.getByRole("button", { name: "Play replay" }).click();
+    await page.locator("[data-segment='seg_2']").waitFor({ state: "visible" });
+    assert.equal(await page.locator("[data-segment='seg_1']").getAttribute("aria-current"), "page");
     await page.frameLocator(".replayer-wrapper iframe").getByText("Invite preview").waitFor();
     assert.equal(await page.locator("[data-segment='seg_2']").isHidden(), false);
     assert.equal(await page.locator("[data-segment='seg_2']").getAttribute("aria-current"), "page");
     assert.equal(await page.locator("#current-time").textContent(), "0:03");
     assert.equal(await page.locator("#total-time").textContent(), "0:06");
 
+    await page.locator("[data-speed='1.25']").click();
     await page.locator("#scrubber").evaluate((node) => {
       const scrubber = node as HTMLInputElement;
       scrubber.value = "1000";
@@ -89,6 +93,17 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
     assert.equal(await page.locator("[data-segment='seg_1']").getAttribute("aria-current"), "page");
     assert.equal(await page.locator("[data-segment='seg_2']").isHidden(), true);
     assert.equal(await page.locator("#current-time").textContent(), "0:01");
+    assert.equal(await playbackState(page), "Playing");
+
+    await page.locator("#scrubber").evaluate((node) => {
+      const scrubber = node as HTMLInputElement;
+      scrubber.value = "3500";
+      scrubber.dispatchEvent(new Event("input", { bubbles: true }));
+      scrubber.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await page.frameLocator(".replayer-wrapper iframe").getByText("Invite preview").waitFor();
+    assert.equal(await page.locator("[data-segment='seg_2']").getAttribute("aria-current"), "page");
+    assert.equal(await playbackState(page), "Playing");
   } finally {
     await browser?.close();
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
