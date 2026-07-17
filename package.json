@@ -8,7 +8,8 @@
     "check": "tsc -p packages/core/tsconfig.json --noEmit && tsc -p packages/daemon/tsconfig.json --noEmit && tsc -p packages/cli/tsconfig.json --noEmit && tsc -p packages/demo/tsconfig.json --noEmit && tsc -p packages/player/tsconfig.json --noEmit",
     "test": "node --test packages/core/dist/storage.test.js packages/demo/dist/player.e2e.test.js",
     "rec": "node packages/cli/dist/main.js",
-    "demo:record": "node packages/demo/dist/record-demo.js"
+    "demo:record": "node packages/demo/dist/record-demo.js",
+    "demo:record:multi": "node packages/demo/dist/record-demo.js --multi-tab"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

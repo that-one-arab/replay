@@ -56,7 +56,7 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
   }
 });
 
-test("replay switches between separately captured pages", { skip: !chrome }, async () => {
+test("browser replay switches tabs while preserving the shared session clock", { skip: !chrome }, async () => {
   const server = createFixtureServer();
   await new Promise<void>((resolveListen, reject) => server.listen(0, "127.0.0.1", () => resolveListen()).on("error", reject));
   const address = server.address();
@@ -68,11 +68,13 @@ test("replay switches between separately captured pages", { skip: !chrome }, asy
     await page.goto(`http://127.0.0.1:${address.port}/replay?id=multi-page`, { waitUntil: "networkidle" });
 
     assert.equal(await page.locator("[data-segment]").count(), 2);
+    assert.equal(await page.locator(".segment-picker").getAttribute("aria-label"), "Recorded browser tabs");
     assert.equal(await page.locator("[data-segment='seg_1']").getAttribute("aria-current"), "page");
     await page.locator("[data-segment='seg_2']").click();
     await page.frameLocator(".replayer-wrapper iframe").getByText("Invite preview").waitFor();
     assert.equal(await page.locator("[data-segment='seg_2']").getAttribute("aria-current"), "page");
-    assert.equal(await page.locator("#current-time").textContent(), "0:00");
+    assert.equal(await page.locator("#current-time").textContent(), "0:03");
+    assert.equal(await page.locator("#total-time").textContent(), "0:04");
   } finally {
     await browser?.close();
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
@@ -82,10 +84,10 @@ test("replay switches between separately captured pages", { skip: !chrome }, asy
 function createFixtureServer() {
   return createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://fixture");
-    if (url.pathname === "/api/sessions/fixture/manifest") return json(response, { id: "fixture", title: "Replay control fixture", markers: [], segments: [{ id: "seg_1", page_url: "http://fixture/", clock_offset_ms: 0 }] });
-    if (url.pathname === "/api/sessions/multi-page/manifest") return json(response, { id: "multi-page", title: "Multi-page fixture", markers: [], segments: [{ id: "seg_1", page_url: "http://fixture/onboarding", clock_offset_ms: 0 }, { id: "seg_2", page_url: "http://fixture/invite-preview", clock_offset_ms: 3_000 }] });
+    if (url.pathname === "/api/sessions/fixture/manifest") return json(response, { id: "fixture", title: "Replay control fixture", raw_duration_ms: 16_000, markers: [], segments: [{ id: "seg_1", page_url: "http://fixture/", clock_offset_ms: 0 }] });
+    if (url.pathname === "/api/sessions/multi-page/manifest") return json(response, { id: "multi-page", title: "Multi-page fixture", raw_duration_ms: 4_000, markers: [], segments: [{ id: "seg_1", page_url: "http://fixture/onboarding", clock_offset_ms: 0 }, { id: "seg_2", page_url: "http://fixture/invite-preview", clock_offset_ms: 3_000 }] });
     if (url.pathname === "/api/sessions/fixture/events") return json(response, fixtureEvents);
-    if (url.pathname === "/api/sessions/multi-page/events") return json(response, url.searchParams.get("segment") === "seg_2" ? inviteEvents : fixtureEvents);
+    if (url.pathname === "/api/sessions/multi-page/events") return json(response, url.searchParams.get("segment") === "seg_2" ? inviteEvents : onboardingEvents);
     const path = url.pathname === "/replay" ? resolve(playerDist, "index.html") : resolve(playerDist, `.${url.pathname}`);
     if (!path.startsWith(playerDist) || !existsSync(path)) { response.writeHead(404); response.end(); return; }
     response.writeHead(200, { "content-type": path.endsWith(".js") ? "text/javascript" : path.endsWith(".css") ? "text/css" : "text/html" });
@@ -119,4 +121,10 @@ const inviteEvents = [
   { type: 4, data: { href: "http://fixture/invite-preview", width: 800, height: 450 }, timestamp: 3_000 },
   { type: 2, data: { node: { type: 0, childNodes: [{ type: 1, name: "html", publicId: "", systemId: "", id: 2 }, { type: 2, tagName: "html", attributes: {}, id: 3, childNodes: [{ type: 2, tagName: "head", attributes: {}, id: 4, childNodes: [] }, { type: 2, tagName: "body", attributes: {}, id: 5, childNodes: [{ type: 2, tagName: "h1", attributes: {}, id: 6, childNodes: [{ type: 3, textContent: "Invite preview", id: 7 }] }] }] }], id: 1 }, initialOffset: { left: 0, top: 0 } }, timestamp: 3_010 },
   { type: 5, data: { tag: "fixture", payload: { step: "popup-opened" } }, timestamp: 3_600 },
+];
+
+const onboardingEvents = [
+  fixtureEvents[0],
+  fixtureEvents[1],
+  { type: 5, data: { tag: "fixture", payload: { step: "onboarding-complete" } }, timestamp: 2_000 },
 ];

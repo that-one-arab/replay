@@ -35,7 +35,7 @@ recording.
 
 | Area | Implementation | Boundaries |
 | --- | --- | --- |
-| Segments | The player presents each captured page/popup as a selectable page and keeps its timeline and markers local to that segment. | A segment is still one page target; fast navigation should retain the Phase 0 settle interval. |
+| Browser sessions | The player presents each captured page/popup as a browser tab over one shared recording clock, timeline, markers, and interaction density. | rrweb still requires a separate DOM event stream per tab; fast navigation should retain the Phase 0 settle interval. |
 | Static assets | Stylesheets, images, and fonts already loaded by the page—and those loaded while recording—are stored by SHA-256 in `assets/` and event URLs are rewritten to the local replay endpoint. CSS `url(...)` dependencies are captured recursively. | Scripts, API responses, inaccessible protected resources, and resources over 10 MiB are not copied. |
 | Cross-origin iframes | Supplying both origins starts rrweb’s cross-origin iframe bridge. An iframe whose origin is outside the allowlist is persisted as a visible “External frame unavailable” placeholder, never as a live replay request. | The embedding application must allow the rrweb injection; otherwise the placeholder remains the safe outcome. |
 | Canvas | `rec start --record-canvas` enables rrweb canvas mutation capture and writes the choice into the manifest. It is disabled by default. | Canvas pixels can be sensitive and can materially increase bundle size; use only for a reviewed scope. |

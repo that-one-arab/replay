@@ -4,7 +4,7 @@ import "./style.css";
 
 type Marker = { t_ms: number; label: string; note?: string };
 type Segment = { id: string; page_url: string; clock_offset_ms: number };
-type Manifest = { id: string; title: string; markers: Marker[]; segments: Segment[] };
+type Manifest = { id: string; title: string; markers: Marker[]; segments: Segment[]; raw_duration_ms?: number };
 type ReplayEvent = { timestamp: number; type: number; data?: { source?: number; width?: number; height?: number } };
 
 // Keep the default pace in one place so product teams can tune it without
@@ -14,38 +14,45 @@ const DEFAULT_PLAYBACK_SPEED = 1.25;
 const app = document.querySelector<HTMLDivElement>("#app")!;
 const id = new URLSearchParams(location.search).get("id");
 let activePlayback: AbortController | undefined;
+let currentSessionTime = 0;
 if (!id) renderError("Choose a recording with `rec open <id>`.");
 else void load(id);
 
 async function load(recordingId: string) {
   try {
+    currentSessionTime = 0;
     const manifest = await request<Manifest>(`/api/sessions/${encodeURIComponent(recordingId)}/manifest`);
+    const eventSets = new Map(await Promise.all(manifest.segments.map(async (segment) => [
+      segment.id,
+      await request<ReplayEvent[]>(`/api/sessions/${encodeURIComponent(manifest.id)}/events?segment=${encodeURIComponent(segment.id)}`),
+    ] as const)));
+    const duration = sessionDuration(manifest, eventSets);
     renderShell(manifest);
-    await replay(manifest, manifest.segments[0]);
+    prepareTimeline(manifest.markers, duration, interactionTimes(manifest, eventSets));
+    await replay(manifest, eventSets, duration, manifest.segments[0], 0);
   } catch (error) { renderError(error instanceof Error ? error.message : String(error)); }
 }
 
 function renderShell(manifest: Manifest) {
   const segmentPicker = manifest.segments.length > 1
-    ? `<nav class="segment-picker" aria-label="Recorded pages">${manifest.segments.map((segment, index) => `<button data-segment="${escape(segment.id)}" title="${escape(segment.page_url)}"><span>Page ${index + 1}</span>${escape(segmentLabel(segment.page_url))}</button>`).join("")}</nav>`
+    ? `<nav class="segment-picker" aria-label="Recorded browser tabs">${manifest.segments.map((segment, index) => `<button data-segment="${escape(segment.id)}" title="Opened at ${format(segment.clock_offset_ms)} — ${escape(segment.page_url)}"><span>Tab ${index + 1}</span>${escape(segmentLabel(segment.page_url))}</button>`).join("")}</nav>`
     : "";
-  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div>${segmentPicker}<div class="caption-card" id="caption"><span class="caption-kicker">REPLAY NOTE</span><strong>Press play to begin</strong><p>Key steps and interactions will be highlighted here.</p></div><section class="control-deck" aria-label="Replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed"><button data-speed="${DEFAULT_PLAYBACK_SPEED}" class="selected">${DEFAULT_PLAYBACK_SPEED}×</button><button data-speed="2">2×</button><button data-speed="4">4×</button><button data-speed="8">8×</button></div><button class="skip-button active" id="skip"><span>↯</span> Skip idle</button></div><div class="timeline-wrap"><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Replay timeline" /></div></section></main>`;
+  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div>${segmentPicker}<div class="caption-card" id="caption"><span class="caption-kicker">SESSION REPLAY</span><strong>Press play to begin</strong><p>The timeline follows the full browser recording.</p></div><section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed"><button data-speed="${DEFAULT_PLAYBACK_SPEED}" class="selected">${DEFAULT_PLAYBACK_SPEED}×</button><button data-speed="2">2×</button><button data-speed="4">4×</button><button data-speed="8">8×</button></div><button class="skip-button active" id="skip"><span>↯</span> Skip idle</button></div><div class="timeline-wrap"><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section></main>`;
 }
 
-async function replay(manifest: Manifest, segment: Segment | undefined) {
+async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>, duration: number, segment: Segment | undefined, requestedSessionTime: number) {
   if (!segment) return;
   activePlayback?.abort();
   const lifetime = new AbortController();
   activePlayback = lifetime;
-  const events = await request<ReplayEvent[]>(`/api/sessions/${encodeURIComponent(manifest.id)}/events?segment=${encodeURIComponent(segment.id)}`);
-  if (lifetime.signal.aborted) return;
+  const events = eventSets.get(segment.id) ?? [];
   if (events.length < 2) throw new Error("This segment does not have enough events to replay.");
   const mount = document.querySelector<HTMLDivElement>("#replay")!;
   mount.replaceChildren();
-  const duration = Math.max(1, events.at(-1)!.timestamp - events[0].timestamp);
+  const tabDuration = Math.max(1, events.at(-1)!.timestamp - events[0].timestamp);
+  const tabStart = segment.clock_offset_ms;
+  const tabEnd = tabStart + tabDuration;
   const viewport = recordingViewport(events);
-  const segmentMarkers = markersForSegment(manifest, segment);
-  prepareTimeline(segmentMarkers, duration, events.filter(isInteraction).map((event) => event.timestamp - events[0].timestamp));
   const replayer = new Replayer(events as never[], {
     root: mount, skipInactive: true, showWarning: false, speed: DEFAULT_PLAYBACK_SPEED,
     mouseTail: { duration: 420, lineWidth: 2, strokeStyle: "rgba(106, 87, 255, .45)" },
@@ -58,15 +65,16 @@ async function replay(manifest: Manifest, segment: Segment | undefined) {
   const scrubber = document.querySelector<HTMLInputElement>("#scrubber")!;
   const updateTimelinePosition = (time: number) => {
     const position = clamp(time / duration * 100, 0, 100);
+    currentSessionTime = time;
     scrubber.value = String(time);
     document.querySelector<HTMLElement>("#timeline-progress")!.style.width = `${position}%`;
     document.querySelector<HTMLElement>("#timeline-playhead")!.style.left = `${position}%`;
     document.querySelector<HTMLElement>("#current-time")!.textContent = format(time);
   };
   const playFrom = (time: number) => {
-    const start = time >= duration - 10 ? 0 : time;
+    const start = tabEnd >= duration - 10 && time >= duration - 10 ? tabStart : clamp(time, tabStart, tabEnd);
     updateTimelinePosition(start);
-    replayer.play(start);
+    replayer.play(start - tabStart);
   };
   const togglePlayback = () => playing ? replayer.pause() : playFrom(Number(scrubber.value));
   scrubber.max = String(duration);
@@ -78,16 +86,16 @@ async function replay(manifest: Manifest, segment: Segment | undefined) {
   };
   const updateProgress = () => {
     if (!scrubbing) {
-      const time = clamp(replayer.getCurrentTime(), 0, duration);
+      const time = clamp(tabStart + replayer.getCurrentTime(), tabStart, tabEnd);
       updateTimelinePosition(time);
-      syncNarration(segmentMarkers, time);
+      syncNarration(manifest.markers, time);
     }
     if (playing) requestAnimationFrame(updateProgress);
   };
   replayer.on("start", () => { setPlaying(true); requestAnimationFrame(updateProgress); });
   replayer.on("resume", () => { setPlaying(true); requestAnimationFrame(updateProgress); });
   replayer.on("pause", () => setPlaying(false));
-  replayer.on("finish", () => { setPlaying(false); updateTimelinePosition(duration); });
+  replayer.on("finish", () => { setPlaying(false); updateTimelinePosition(tabEnd); });
   replayer.on("mouse-interaction", (payload: unknown) => {
     const target = (payload as { target?: unknown }).target;
     if (!isElementLike(target)) return;
@@ -106,10 +114,18 @@ async function replay(manifest: Manifest, segment: Segment | undefined) {
     button.classList.add("selected");
     replayer.setConfig({ speed: Number(button.dataset.speed) });
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-marker]").forEach((button) => button.onclick = () => playFrom(Number(button.dataset.marker)));
+  document.querySelectorAll<HTMLButtonElement>("[data-marker]").forEach((button) => button.onclick = () => {
+    const time = Number(button.dataset.marker);
+    const target = segmentAtTime(manifest, eventSets, time);
+    if (target && target.id !== segment.id) void replay(manifest, eventSets, duration, target, time).catch(renderError);
+    else playFrom(time);
+  });
   document.querySelectorAll<HTMLButtonElement>("[data-segment]").forEach((button) => button.onclick = () => {
     const selected = manifest.segments.find((item) => item.id === button.dataset.segment);
-    void replay(manifest, selected).catch(renderError);
+    const selectedEvents = selected ? eventSets.get(selected.id) : undefined;
+    const selectedDuration = selectedEvents && selectedEvents.length > 1 ? selectedEvents.at(-1)!.timestamp - selectedEvents[0].timestamp : 0;
+    const selectedTime = selected ? clamp(currentSessionTime, selected.clock_offset_ms, selected.clock_offset_ms + selectedDuration) : currentSessionTime;
+    void replay(manifest, eventSets, duration, selected, selectedTime).catch(renderError);
   });
   document.querySelectorAll<HTMLButtonElement>("[data-segment]").forEach((button) => {
     const selected = button.dataset.segment === segment.id;
@@ -120,18 +136,23 @@ async function replay(manifest: Manifest, segment: Segment | undefined) {
   scrubber.addEventListener("input", () => {
     const time = Number(scrubber.value);
     updateTimelinePosition(time);
-    syncNarration(segmentMarkers, time);
+    syncNarration(manifest.markers, time);
   }, { signal: lifetime.signal });
-  scrubber.addEventListener("change", () => { scrubbing = false; playing ? playFrom(Number(scrubber.value)) : replayer.pause(Number(scrubber.value)); }, { signal: lifetime.signal });
+  scrubber.addEventListener("change", () => {
+    scrubbing = false;
+    const time = Number(scrubber.value);
+    playing ? playFrom(time) : replayer.pause(clamp(time, tabStart, tabEnd) - tabStart);
+  }, { signal: lifetime.signal });
   document.addEventListener("keydown", (event) => {
     if ((event.key !== "Enter" && event.key !== " ") || event.repeat || isInteractiveTarget(event.target)) return;
     event.preventDefault();
     togglePlayback();
   }, { signal: lifetime.signal });
-  syncNarration(segmentMarkers, 0);
+  syncNarration(manifest.markers, requestedSessionTime);
   const openingFrame = Math.max(0, (events.find((event) => event.type === 2)?.timestamp ?? events[0].timestamp) - events[0].timestamp);
-  replayer.pause(openingFrame);
-  updateTimelinePosition(openingFrame);
+  const localTime = clamp(requestedSessionTime - tabStart, openingFrame, tabDuration);
+  replayer.pause(localTime);
+  updateTimelinePosition(tabStart + localTime);
 }
 
 function prepareTimeline(markers: Marker[], duration: number, interactions: number[]) {
@@ -147,12 +168,26 @@ function syncNarration(markers: Marker[], time: number) {
   const marker = [...markers].reverse().find((item) => item.t_ms <= time + 450);
   if (marker) setActionCaption(marker.label, marker.note ?? "Narrated journey checkpoint");
 }
-function markersForSegment(manifest: Manifest, segment: Segment) {
-  const index = manifest.segments.findIndex((item) => item.id === segment.id);
-  const nextOffset = manifest.segments[index + 1]?.clock_offset_ms ?? Infinity;
-  return manifest.markers
-    .filter((marker) => marker.t_ms >= segment.clock_offset_ms && marker.t_ms < nextOffset)
-    .map((marker) => ({ ...marker, t_ms: marker.t_ms - segment.clock_offset_ms }));
+function sessionDuration(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>) {
+  const eventEnd = Math.max(1, ...manifest.segments.map((segment) => {
+    const events = eventSets.get(segment.id) ?? [];
+    return segment.clock_offset_ms + Math.max(0, (events.at(-1)?.timestamp ?? 0) - (events[0]?.timestamp ?? 0));
+  }));
+  return Math.max(manifest.raw_duration_ms ?? 0, eventEnd);
+}
+function interactionTimes(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>) {
+  return manifest.segments.flatMap((segment) => {
+    const events = eventSets.get(segment.id) ?? [];
+    const started = events[0]?.timestamp ?? 0;
+    return events.filter(isInteraction).map((event) => segment.clock_offset_ms + event.timestamp - started);
+  });
+}
+function segmentAtTime(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>, time: number) {
+  return manifest.segments.find((segment) => {
+    const events = eventSets.get(segment.id) ?? [];
+    const end = segment.clock_offset_ms + Math.max(0, (events.at(-1)?.timestamp ?? 0) - (events[0]?.timestamp ?? 0));
+    return time >= segment.clock_offset_ms && time <= end;
+  });
 }
 function segmentLabel(pageUrl: string) {
   try {

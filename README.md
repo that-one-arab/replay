@@ -56,7 +56,8 @@ rec status | list | open <id> | doctor
 
 ## Replay behavior
 
-- A recording with popup/new-tab segments has a page picker in the player.
+- A recording is a browser session: multi-tab runs expose a tab strip and one
+  shared timeline in the player.
 - Static resources are served from the local session bundle at replay time.
 - Idle time is skipped by default; controls expose seeking, speed, and keyboard
   play/pause.
@@ -73,5 +74,6 @@ and prints the resulting replay URL.
 
 ```sh
 npm run build
-npm run demo:record
+npm run demo:record        # single-tab browser session
+npm run demo:record:multi  # browser session that opens an invite-preview tab
 ```
