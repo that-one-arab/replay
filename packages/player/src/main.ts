@@ -4,7 +4,11 @@ import "./style.css";
 
 type Marker = { t_ms: number; label: string; note?: string };
 type Manifest = { id: string; title: string; markers: Marker[]; segments: { id: string }[] };
-type ReplayEvent = { timestamp: number; type: number; data?: { source?: number } };
+type ReplayEvent = { timestamp: number; type: number; data?: { source?: number; width?: number; height?: number } };
+
+// Keep the default pace in one place so product teams can tune it without
+// changing the replay control behavior.
+const DEFAULT_PLAYBACK_SPEED = 1.25;
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 const id = new URLSearchParams(location.search).get("id");
@@ -20,7 +24,7 @@ async function load(recordingId: string) {
 }
 
 function renderShell(manifest: Manifest) {
-  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div><div class="caption-card" id="caption"><span class="caption-kicker">REPLAY NOTE</span><strong>Press play to begin</strong><p>Key steps and interactions will be highlighted here.</p></div><section class="control-deck" aria-label="Replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed"><button data-speed="1" class="selected">1×</button><button data-speed="2">2×</button><button data-speed="4">4×</button><button data-speed="8">8×</button></div><button class="skip-button active" id="skip"><span>↯</span> Skip idle</button></div><div class="timeline-wrap"><div class="timeline-density" id="density"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Replay timeline" /></div></section></main>`;
+  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div><div class="caption-card" id="caption"><span class="caption-kicker">REPLAY NOTE</span><strong>Press play to begin</strong><p>Key steps and interactions will be highlighted here.</p></div><section class="control-deck" aria-label="Replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed"><button data-speed="${DEFAULT_PLAYBACK_SPEED}" class="selected">${DEFAULT_PLAYBACK_SPEED}×</button><button data-speed="2">2×</button><button data-speed="4">4×</button><button data-speed="8">8×</button></div><button class="skip-button active" id="skip"><span>↯</span> Skip idle</button></div><div class="timeline-wrap"><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Replay timeline" /></div></section></main>`;
 }
 
 async function replay(manifest: Manifest, segmentId: string | undefined) {
@@ -30,15 +34,31 @@ async function replay(manifest: Manifest, segmentId: string | undefined) {
   const mount = document.querySelector<HTMLDivElement>("#replay")!;
   mount.replaceChildren();
   const duration = Math.max(1, events.at(-1)!.timestamp - events[0].timestamp);
+  const viewport = recordingViewport(events);
   prepareTimeline(manifest, duration, events.filter(isInteraction).map((event) => event.timestamp - events[0].timestamp));
   const replayer = new Replayer(events as never[], {
-    root: mount, skipInactive: true, showWarning: false,
+    root: mount, skipInactive: true, showWarning: false, speed: DEFAULT_PLAYBACK_SPEED,
     mouseTail: { duration: 420, lineWidth: 2, strokeStyle: "rgba(106, 87, 255, .45)" },
     insertStyleRules: [".rec-focus-target{outline:3px solid #6956ff!important;outline-offset:3px!important;box-shadow:0 0 0 7px rgba(105,86,255,.18)!important;border-radius:4px!important}"]
   });
+  fitReplay(mount, replayer, viewport);
+  window.addEventListener("resize", () => fitReplay(mount, replayer, viewport));
   let playing = false;
   let scrubbing = false;
   const scrubber = document.querySelector<HTMLInputElement>("#scrubber")!;
+  const updateTimelinePosition = (time: number) => {
+    const position = clamp(time / duration * 100, 0, 100);
+    scrubber.value = String(time);
+    document.querySelector<HTMLElement>("#timeline-progress")!.style.width = `${position}%`;
+    document.querySelector<HTMLElement>("#timeline-playhead")!.style.left = `${position}%`;
+    document.querySelector<HTMLElement>("#current-time")!.textContent = format(time);
+  };
+  const playFrom = (time: number) => {
+    const start = time >= duration - 10 ? 0 : time;
+    updateTimelinePosition(start);
+    replayer.play(start);
+  };
+  const togglePlayback = () => playing ? replayer.pause() : playFrom(Number(scrubber.value));
   scrubber.max = String(duration);
   document.querySelector<HTMLElement>("#total-time")!.textContent = format(duration);
   const setPlaying = (value: boolean) => {
@@ -49,8 +69,7 @@ async function replay(manifest: Manifest, segmentId: string | undefined) {
   const updateProgress = () => {
     if (!scrubbing) {
       const time = clamp(replayer.getCurrentTime(), 0, duration);
-      scrubber.value = String(time);
-      document.querySelector<HTMLElement>("#current-time")!.textContent = format(time);
+      updateTimelinePosition(time);
       syncNarration(manifest, time);
     }
     if (playing) requestAnimationFrame(updateProgress);
@@ -58,7 +77,7 @@ async function replay(manifest: Manifest, segmentId: string | undefined) {
   replayer.on("start", () => { setPlaying(true); requestAnimationFrame(updateProgress); });
   replayer.on("resume", () => { setPlaying(true); requestAnimationFrame(updateProgress); });
   replayer.on("pause", () => setPlaying(false));
-  replayer.on("finish", () => { setPlaying(false); scrubber.value = String(duration); });
+  replayer.on("finish", () => { setPlaying(false); updateTimelinePosition(duration); });
   replayer.on("mouse-interaction", (payload: unknown) => {
     const target = (payload as { target?: unknown }).target;
     if (!isElementLike(target)) return;
@@ -67,7 +86,7 @@ async function replay(manifest: Manifest, segmentId: string | undefined) {
     window.setTimeout(() => target.classList.remove("rec-focus-target"), 900);
     setActionCaption(`Clicked ${readableTarget(target)}`, "The selected control is highlighted in the replay.");
   });
-  document.querySelector<HTMLButtonElement>("#play")!.onclick = () => playing ? replayer.pause() : replayer.play(Number(scrubber.value));
+  document.querySelector<HTMLButtonElement>("#play")!.onclick = togglePlayback;
   document.querySelector<HTMLButtonElement>("#skip")!.onclick = () => {
     replayer.setConfig({ skipInactive: !replayer.config.skipInactive });
     document.querySelector<HTMLButtonElement>("#skip")!.classList.toggle("active", replayer.config.skipInactive);
@@ -77,17 +96,23 @@ async function replay(manifest: Manifest, segmentId: string | undefined) {
     button.classList.add("selected");
     replayer.setConfig({ speed: Number(button.dataset.speed) });
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-marker]").forEach((button) => button.onclick = () => replayer.play(Number(button.dataset.marker)));
+  document.querySelectorAll<HTMLButtonElement>("[data-marker]").forEach((button) => button.onclick = () => playFrom(Number(button.dataset.marker)));
   scrubber.addEventListener("pointerdown", () => { scrubbing = true; });
   scrubber.addEventListener("input", () => {
     const time = Number(scrubber.value);
-    document.querySelector<HTMLElement>("#current-time")!.textContent = format(time);
+    updateTimelinePosition(time);
     syncNarration(manifest, time);
   });
-  scrubber.addEventListener("change", () => { scrubbing = false; playing ? replayer.play(Number(scrubber.value)) : replayer.pause(Number(scrubber.value)); });
+  scrubber.addEventListener("change", () => { scrubbing = false; playing ? playFrom(Number(scrubber.value)) : replayer.pause(Number(scrubber.value)); });
+  document.addEventListener("keydown", (event) => {
+    if ((event.key !== "Enter" && event.key !== " ") || event.repeat || isInteractiveTarget(event.target)) return;
+    event.preventDefault();
+    togglePlayback();
+  });
   syncNarration(manifest, 0);
   const openingFrame = Math.max(0, (events.find((event) => event.type === 2)?.timestamp ?? events[0].timestamp) - events[0].timestamp);
   replayer.pause(openingFrame);
+  updateTimelinePosition(openingFrame);
 }
 
 function prepareTimeline(manifest: Manifest, duration: number, interactions: number[]) {
@@ -105,6 +130,19 @@ function syncNarration(manifest: Manifest, time: number) {
 }
 function setActionCaption(title: string, copy: string) { document.querySelector<HTMLElement>("#caption strong")!.textContent = title; document.querySelector<HTMLElement>("#caption p")!.textContent = copy; }
 function isInteraction(event: ReplayEvent) { return event.type === 3 && event.data?.source === 2; }
+function recordingViewport(events: ReplayEvent[]) {
+  const meta = events.find((event) => event.type === 4 && event.data?.width && event.data?.height);
+  return { width: meta?.data?.width ?? 1280, height: meta?.data?.height ?? 720 };
+}
+function fitReplay(mount: HTMLElement, replayer: Replayer, viewport: { width: number; height: number }) {
+  const scale = Math.min(mount.clientWidth / viewport.width, mount.clientHeight / viewport.height);
+  replayer.wrapper.style.width = `${viewport.width}px`;
+  replayer.wrapper.style.height = `${viewport.height}px`;
+  replayer.wrapper.style.transform = `scale(${scale})`;
+}
+function isInteractiveTarget(target: EventTarget | null) {
+  return target instanceof HTMLButtonElement || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
+}
 type ElementLike = { nodeType: number; classList: DOMTokenList; getAttribute(name: string): string | null; textContent: string | null; tagName: string };
 function isElementLike(value: unknown): value is ElementLike { return typeof value === "object" && value !== null && (value as { nodeType?: number }).nodeType === 1 && "classList" in value; }
 function readableTarget(target: ElementLike) { const text = target.getAttribute("aria-label") || target.textContent?.trim() || target.tagName.toLowerCase(); return `“${text.replace(/\s+/g, " ").slice(0, 64)}”`; }

@@ -108,7 +108,11 @@ async function humanClick(page: Page, locator: Locator, dwellMs: number) {
   const steps = Math.ceil(duration / 50);
   for (let step = 1; step <= steps; step += 1) {
     const progress = step / steps;
-    const eased = 1 - (1 - progress) ** 2;
+    // A symmetric ease-in/ease-out curve: gentle departure, faster travel
+    // through the middle, then a deliberate settle over the target.
+    const eased = progress < 0.5
+      ? 4 * progress ** 3
+      : 1 - (-2 * progress + 2) ** 3 / 2;
     await page.mouse.move(start.x + (target.x - start.x) * eased, start.y + (target.y - start.y) * eased);
     await page.waitForTimeout(50);
   }
