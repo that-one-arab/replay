@@ -57,7 +57,8 @@ rec status | list | open <id> | doctor
 ## Replay behavior
 
 - A recording is a browser session: multi-tab runs expose a tab strip and one
-  shared timeline in the player.
+  shared timeline in the player. Tabs appear and receive focus at their recorded
+  creation time during playback.
 - Static resources are served from the local session bundle at replay time.
 - Idle time is skipped by default; controls expose seeking, speed, and keyboard
   play/pause.

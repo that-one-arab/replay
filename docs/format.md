@@ -11,7 +11,8 @@ markers.json
 
 Each segment is one browser tab’s rrweb event stream. Its `clock_offset_ms` aligns
 that tab with the browser-session timeline, allowing the player to show multiple
-tabs as one recording without trying to merge incompatible DOM trees.
+tabs as one recording without trying to merge incompatible DOM trees. A tab becomes
+visible and receives playback focus when that offset is reached.
 
 Every gzipped JSONL entry contains the source segment, its daemon receipt time, and
 the original rrweb event. Chunks are independently valid gzip streams, so a crash
