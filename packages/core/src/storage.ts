@@ -1,10 +1,11 @@
+import { createHash } from "node:crypto";
 import { createGzip } from "node:zlib";
 import { createWriteStream } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { Marker, RecordingManifest, Segment } from "./types.js";
+import type { Marker, RecordedAsset, RecordingManifest, Segment } from "./types.js";
 
 export const recHome = () => process.env.REC_HOME ?? join(process.env.HOME ?? process.cwd(), ".rec");
 export const sessionsDir = () => join(recHome(), "sessions");
@@ -17,6 +18,7 @@ export class SessionStore {
   readonly root: string;
   readonly manifest: RecordingManifest;
   private readonly segments = new Map<string, Segment>();
+  private readonly assets = new Map<string, RecordedAsset>();
   private sequence = new Map<string, number>();
   private eventTimes: number[] = [];
   private manifestWrite: Promise<void> = Promise.resolve();
@@ -42,6 +44,7 @@ export class SessionStore {
       store.segments.set(segment.id, segment);
       store.sequence.set(segment.id, segment.chunks.length);
     }
+    for (const asset of manifest.assets ?? []) for (const url of asset.source_urls) store.assets.set(url, asset);
     return store;
   }
 
@@ -76,6 +79,33 @@ export class SessionStore {
     await this.writeManifest();
   }
 
+  /** Stores a static resource once and maps every observed source URL to it. */
+  async addAsset(sourceUrl: string, body: Uint8Array, contentType: string) {
+    const existing = this.assets.get(sourceUrl);
+    if (existing) return existing;
+    const id = createHash("sha256").update(body).digest("hex");
+    const matching = this.manifest.assets.find((asset) => asset.id === id);
+    if (matching) {
+      matching.source_urls.push(sourceUrl);
+      this.assets.set(sourceUrl, matching);
+      await this.writeManifest();
+      return matching;
+    }
+    const asset: RecordedAsset = {
+      id,
+      source_urls: [sourceUrl],
+      path: `assets/${id}`,
+      content_type: sanitizeContentType(contentType),
+      bytes: body.byteLength,
+    };
+    await mkdir(join(this.root, "assets"), { recursive: true });
+    await writeFile(join(this.root, asset.path), body, { flag: "wx" });
+    this.manifest.assets.push(asset);
+    this.assets.set(sourceUrl, asset);
+    await this.writeManifest();
+    return asset;
+  }
+
   addMarker(marker: Marker) {
     this.manifest.markers.push(marker);
   }
@@ -104,6 +134,10 @@ export class SessionStore {
     this.manifestWrite = this.manifestWrite.then(write, write);
     return this.manifestWrite;
   }
+}
+
+function sanitizeContentType(value: string) {
+  return value.split(";", 1)[0]?.trim() || "application/octet-stream";
 }
 
 export function calculateActiveDuration(eventTimes: number[], idleGapMs = 3_000) {

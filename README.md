@@ -4,8 +4,8 @@
 sessions. It attaches over CDP, records rrweb events, writes a crash-tolerant gzip
 bundle, and serves a local replay with idle time skipped by default.
 
-This repository is the Phase 0 spike. It intentionally includes no hosted ingest,
-auth, MCP server, or asset proxy yet.
+This repository is a local Phase 1 implementation. It has no hosted ingest, auth,
+or MCP server; recordings stay on the machine that created them.
 
 ## Quick start
 
@@ -27,25 +27,39 @@ with a remote debugging port and attached using `rec attach --cdp <url>`.
 
 Recordings are stored in `~/.rec/sessions` (or `REC_HOME`). Passwords are always
 masked; pass `--mask-all-inputs` for sensitive flows. `--origin` may be repeated to
-strictly scope what pages are captured.
+strictly scope what pages are captured. Static CSS, image, and font resources are
+copied into the recording when available, so replay does not depend on those live
+resources. The recorder intentionally excludes scripts, API responses, and assets
+larger than 10 MiB.
+
+Canvas recording is opt-in because it can include sensitive pixels and substantially
+increase bundle size:
+
+```sh
+pnpm rec start --title "Canvas repro" --origin https://app.example --record-canvas
+```
+
+To capture a cross-origin iframe through rrweb's bridge, explicitly scope both the
+parent and iframe origins. Any iframe outside that allowlist is replaced in replay by
+an explanatory placeholder, rather than loading a live external page.
 
 ## Commands
 
 ```text
 rec browser start|stop
 rec attach --cdp <url>
-rec start [--title <text>] [--origin <origin>] [--mask-all-inputs]
+rec start [--title <text>] [--origin <origin>] [--mask-all-inputs] [--record-canvas]
 rec marker <label> [--note <text>]
 rec stop [--outcome reproduced|verified|other] [--notes <text>]
 rec status | list | open <id> | doctor
 ```
 
-## Phase 0 evidence to collect
+## Replay behavior
 
-- CDP coexistence with the browser driver across navigation and popups.
-- Fidelity and artifact size for the target app.
-- Wall-clock versus active duration compression.
-- Failure modes around iframe, canvas, and cross-origin assets.
+- A recording with popup/new-tab segments has a page picker in the player.
+- Static resources are served from the local session bundle at replay time.
+- Idle time is skipped by default; controls expose seeking, speed, and keyboard
+  play/pause.
 
 The recording format is documented in `docs/format.md`; the spike checklist is in
 `docs/spike-checklist.md`.

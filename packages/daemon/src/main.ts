@@ -37,6 +37,8 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   if (request.method === "GET" && url.pathname === "/api/sessions") return reply(response, 200, await listSessions());
   const replay = /^\/api\/sessions\/([^/]+)\/(manifest|events)$/.exec(url.pathname);
   if (request.method === "GET" && replay) return serveRecording(response, decodeURIComponent(replay[1]), replay[2], url.searchParams.get("segment"));
+  const recordedAsset = /^\/api\/sessions\/([^/]+)\/assets\/([a-f0-9]{64})$/.exec(url.pathname);
+  if (request.method === "GET" && recordedAsset) return serveRecordedAsset(response, decodeURIComponent(recordedAsset[1]), recordedAsset[2]);
   if (request.method === "GET" && url.pathname.startsWith("/assets/")) return serveAsset(response, url.pathname);
   if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/replay")) return servePlayer(response);
   reply(response, 404, { error: "Not found" });
@@ -104,6 +106,17 @@ async function serveRecording(response: ServerResponse, id: string, resource: st
     for (const line of text.trim().split("\n")) if (line) events.push(JSON.parse(line).event);
   }
   reply(response, 200, events);
+}
+
+async function serveRecordedAsset(response: ServerResponse, sessionId: string, assetId: string) {
+  const root = sessionPath(sessionId);
+  const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as RecordingManifest;
+  const asset = (manifest.assets ?? []).find((item) => item.id === assetId);
+  if (!asset) return reply(response, 404, { error: "Recorded asset not found" });
+  const path = resolve(root, asset.path);
+  if (!path.startsWith(`${resolve(root, "assets")}/`) || !existsSync(path)) return reply(response, 404, { error: "Recorded asset file not found" });
+  response.writeHead(200, { "content-type": asset.content_type, "cache-control": "public, max-age=31536000, immutable" });
+  createReadStream(path).pipe(response);
 }
 
 function servePlayer(response: ServerResponse) {

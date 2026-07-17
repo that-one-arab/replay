@@ -29,15 +29,20 @@ Chrome `150.0.7871.124`, local commit `e2e579b`.
 | External CSS/image, cross-origin iframe, canvas | Expected limitation | In poisoned-resource replay probe `rec_5e8c72d0`, replay made fresh requests for `/probe.css` and `/image.svg`; canvas pixels were not serialized; the cross-origin frame mutation was not serialized. |
 
 The full Orbit bundle was 17,223 bytes, or about 22,733 bytes/minute of raw
-recording. The player currently opens the first segment; the popup proves capture
-correctness, while segment switching is a follow-on player feature.
+recording.
 
-### Phase 1 decisions
+## Phase 1 implementation
 
-- Add an asset proxy/bundler before claiming offline or self-contained external
-  asset fidelity.
-- Add a deliberate cross-origin iframe strategy (bridge/plugin or visible fallback)
-  before treating those frames as replayable.
-- Enable and evaluate canvas recording only after weighing bundle size and privacy
-  implications.
-- Preserve a short post-navigation settle interval in agent recording guidance.
+| Area | Implementation | Boundaries |
+| --- | --- | --- |
+| Segments | The player presents each captured page/popup as a selectable page and keeps its timeline and markers local to that segment. | A segment is still one page target; fast navigation should retain the Phase 0 settle interval. |
+| Static assets | Stylesheets, images, and fonts already loaded by the page—and those loaded while recording—are stored by SHA-256 in `assets/` and event URLs are rewritten to the local replay endpoint. CSS `url(...)` dependencies are captured recursively. | Scripts, API responses, inaccessible protected resources, and resources over 10 MiB are not copied. |
+| Cross-origin iframes | Supplying both origins starts rrweb’s cross-origin iframe bridge. An iframe whose origin is outside the allowlist is persisted as a visible “External frame unavailable” placeholder, never as a live replay request. | The embedding application must allow the rrweb injection; otherwise the placeholder remains the safe outcome. |
+| Canvas | `rec start --record-canvas` enables rrweb canvas mutation capture and writes the choice into the manifest. It is disabled by default. | Canvas pixels can be sensitive and can materially increase bundle size; use only for a reviewed scope. |
+
+The Phase 0 post-navigation settle guidance remains in force.
+
+Local Phase 1 smoke evidence: `rec_206e9a34` has two populated segments and
+bundles the Orbit stylesheet (`text/css`, 83 bytes) and logo (`image/svg+xml`,
+183 bytes). The replay event stream references the local session asset endpoint;
+neither original asset URL remains in the persisted event stream.

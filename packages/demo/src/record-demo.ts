@@ -14,9 +14,14 @@ const origin = `http://127.0.0.1:${port}`;
 const IDLE_REVIEW_MS = 12_000;
 const html = await readFile(resolve(root, "packages/demo/public/index.html"));
 const inviteHtml = await readFile(resolve(root, "packages/demo/public/invite-preview.html"));
+const assetCss = await readFile(resolve(root, "packages/demo/public/orbit-assets.css"));
+const assetSvg = await readFile(resolve(root, "packages/demo/public/orbit-mark.svg"));
 const server = createServer((request, response) => {
+  const path = new URL(request.url ?? "/", origin).pathname;
+  if (path === "/orbit-assets.css") { response.writeHead(200, { "content-type": "text/css; charset=utf-8", "cache-control": "no-store" }); response.end(assetCss); return; }
+  if (path === "/orbit-mark.svg") { response.writeHead(200, { "content-type": "image/svg+xml", "cache-control": "no-store" }); response.end(assetSvg); return; }
   response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-  response.end(new URL(request.url ?? "/", origin).pathname === "/invite-preview" ? inviteHtml : html);
+  response.end(path === "/invite-preview" ? inviteHtml : html);
 });
 const sockets = new Set<Socket>();
 server.on("connection", (socket) => { sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
@@ -91,13 +96,16 @@ try {
   if (!sessionId) throw new Error(`rec stop did not return a session id:\n${stdout}`);
   const manifest = await fetch(new URL(`/api/sessions/${sessionId}/manifest`, url)).then(async (response) => {
     if (!response.ok) throw new Error(`Manifest responded with ${response.status}`);
-    return response.json() as Promise<{ segments: { page_url: string; chunks: string[] }[] }>;
+    return response.json() as Promise<{ segments: { page_url: string; chunks: string[] }[]; assets?: { source_urls: string[] }[] }>;
   });
   if (manifest.segments.every((segment) => segment.chunks.length === 0)) {
     throw new Error("Recorder captured no rrweb events. The local rec daemon is stale; restart it with `pkill -f 'packages/daemon/dist/main.js'`, then rerun `npm run demo:record`.");
   }
   if (manifest.segments.length !== 2 || manifest.segments[1]?.chunks.length === 0 || !manifest.segments[1]?.page_url.endsWith("/invite-preview")) {
     throw new Error("Popup recording did not produce a populated second segment for /invite-preview.");
+  }
+  if (!manifest.assets?.some((asset) => asset.source_urls.includes(`${origin}/orbit-assets.css`)) || !manifest.assets.some((asset) => asset.source_urls.includes(`${origin}/orbit-mark.svg`))) {
+    throw new Error("Recorder did not bundle the demo stylesheet and image for self-contained replay.");
   }
   const replay = await fetch(url);
   if (!replay.ok) throw new Error(`Replay URL responded with ${replay.status}`);

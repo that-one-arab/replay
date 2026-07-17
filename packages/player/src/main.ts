@@ -3,7 +3,8 @@ import "rrweb/dist/style.css";
 import "./style.css";
 
 type Marker = { t_ms: number; label: string; note?: string };
-type Manifest = { id: string; title: string; markers: Marker[]; segments: { id: string }[] };
+type Segment = { id: string; page_url: string; clock_offset_ms: number };
+type Manifest = { id: string; title: string; markers: Marker[]; segments: Segment[] };
 type ReplayEvent = { timestamp: number; type: number; data?: { source?: number; width?: number; height?: number } };
 
 // Keep the default pace in one place so product teams can tune it without
@@ -12,6 +13,7 @@ const DEFAULT_PLAYBACK_SPEED = 1.25;
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 const id = new URLSearchParams(location.search).get("id");
+let activePlayback: AbortController | undefined;
 if (!id) renderError("Choose a recording with `rec open <id>`.");
 else void load(id);
 
@@ -19,30 +21,38 @@ async function load(recordingId: string) {
   try {
     const manifest = await request<Manifest>(`/api/sessions/${encodeURIComponent(recordingId)}/manifest`);
     renderShell(manifest);
-    await replay(manifest, manifest.segments[0]?.id);
+    await replay(manifest, manifest.segments[0]);
   } catch (error) { renderError(error instanceof Error ? error.message : String(error)); }
 }
 
 function renderShell(manifest: Manifest) {
-  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div><div class="caption-card" id="caption"><span class="caption-kicker">REPLAY NOTE</span><strong>Press play to begin</strong><p>Key steps and interactions will be highlighted here.</p></div><section class="control-deck" aria-label="Replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed"><button data-speed="${DEFAULT_PLAYBACK_SPEED}" class="selected">${DEFAULT_PLAYBACK_SPEED}×</button><button data-speed="2">2×</button><button data-speed="4">4×</button><button data-speed="8">8×</button></div><button class="skip-button active" id="skip"><span>↯</span> Skip idle</button></div><div class="timeline-wrap"><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Replay timeline" /></div></section></main>`;
+  const segmentPicker = manifest.segments.length > 1
+    ? `<nav class="segment-picker" aria-label="Recorded pages">${manifest.segments.map((segment, index) => `<button data-segment="${escape(segment.id)}" title="${escape(segment.page_url)}"><span>Page ${index + 1}</span>${escape(segmentLabel(segment.page_url))}</button>`).join("")}</nav>`
+    : "";
+  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div>${segmentPicker}<div class="caption-card" id="caption"><span class="caption-kicker">REPLAY NOTE</span><strong>Press play to begin</strong><p>Key steps and interactions will be highlighted here.</p></div><section class="control-deck" aria-label="Replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed"><button data-speed="${DEFAULT_PLAYBACK_SPEED}" class="selected">${DEFAULT_PLAYBACK_SPEED}×</button><button data-speed="2">2×</button><button data-speed="4">4×</button><button data-speed="8">8×</button></div><button class="skip-button active" id="skip"><span>↯</span> Skip idle</button></div><div class="timeline-wrap"><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Replay timeline" /></div></section></main>`;
 }
 
-async function replay(manifest: Manifest, segmentId: string | undefined) {
-  if (!segmentId) return;
-  const events = await request<ReplayEvent[]>(`/api/sessions/${encodeURIComponent(manifest.id)}/events?segment=${encodeURIComponent(segmentId)}`);
+async function replay(manifest: Manifest, segment: Segment | undefined) {
+  if (!segment) return;
+  activePlayback?.abort();
+  const lifetime = new AbortController();
+  activePlayback = lifetime;
+  const events = await request<ReplayEvent[]>(`/api/sessions/${encodeURIComponent(manifest.id)}/events?segment=${encodeURIComponent(segment.id)}`);
+  if (lifetime.signal.aborted) return;
   if (events.length < 2) throw new Error("This segment does not have enough events to replay.");
   const mount = document.querySelector<HTMLDivElement>("#replay")!;
   mount.replaceChildren();
   const duration = Math.max(1, events.at(-1)!.timestamp - events[0].timestamp);
   const viewport = recordingViewport(events);
-  prepareTimeline(manifest, duration, events.filter(isInteraction).map((event) => event.timestamp - events[0].timestamp));
+  const segmentMarkers = markersForSegment(manifest, segment);
+  prepareTimeline(segmentMarkers, duration, events.filter(isInteraction).map((event) => event.timestamp - events[0].timestamp));
   const replayer = new Replayer(events as never[], {
     root: mount, skipInactive: true, showWarning: false, speed: DEFAULT_PLAYBACK_SPEED,
     mouseTail: { duration: 420, lineWidth: 2, strokeStyle: "rgba(106, 87, 255, .45)" },
     insertStyleRules: [".rec-focus-target{outline:3px solid #6956ff!important;outline-offset:3px!important;box-shadow:0 0 0 7px rgba(105,86,255,.18)!important;border-radius:4px!important}"]
   });
   fitReplay(mount, replayer, viewport);
-  window.addEventListener("resize", () => fitReplay(mount, replayer, viewport));
+  window.addEventListener("resize", () => fitReplay(mount, replayer, viewport), { signal: lifetime.signal });
   let playing = false;
   let scrubbing = false;
   const scrubber = document.querySelector<HTMLInputElement>("#scrubber")!;
@@ -70,7 +80,7 @@ async function replay(manifest: Manifest, segmentId: string | undefined) {
     if (!scrubbing) {
       const time = clamp(replayer.getCurrentTime(), 0, duration);
       updateTimelinePosition(time);
-      syncNarration(manifest, time);
+      syncNarration(segmentMarkers, time);
     }
     if (playing) requestAnimationFrame(updateProgress);
   };
@@ -97,36 +107,58 @@ async function replay(manifest: Manifest, segmentId: string | undefined) {
     replayer.setConfig({ speed: Number(button.dataset.speed) });
   });
   document.querySelectorAll<HTMLButtonElement>("[data-marker]").forEach((button) => button.onclick = () => playFrom(Number(button.dataset.marker)));
-  scrubber.addEventListener("pointerdown", () => { scrubbing = true; });
+  document.querySelectorAll<HTMLButtonElement>("[data-segment]").forEach((button) => button.onclick = () => {
+    const selected = manifest.segments.find((item) => item.id === button.dataset.segment);
+    void replay(manifest, selected).catch(renderError);
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-segment]").forEach((button) => {
+    const selected = button.dataset.segment === segment.id;
+    button.classList.toggle("selected", selected);
+    button.setAttribute("aria-current", selected ? "page" : "false");
+  });
+  scrubber.addEventListener("pointerdown", () => { scrubbing = true; }, { signal: lifetime.signal });
   scrubber.addEventListener("input", () => {
     const time = Number(scrubber.value);
     updateTimelinePosition(time);
-    syncNarration(manifest, time);
-  });
-  scrubber.addEventListener("change", () => { scrubbing = false; playing ? playFrom(Number(scrubber.value)) : replayer.pause(Number(scrubber.value)); });
+    syncNarration(segmentMarkers, time);
+  }, { signal: lifetime.signal });
+  scrubber.addEventListener("change", () => { scrubbing = false; playing ? playFrom(Number(scrubber.value)) : replayer.pause(Number(scrubber.value)); }, { signal: lifetime.signal });
   document.addEventListener("keydown", (event) => {
     if ((event.key !== "Enter" && event.key !== " ") || event.repeat || isInteractiveTarget(event.target)) return;
     event.preventDefault();
     togglePlayback();
-  });
-  syncNarration(manifest, 0);
+  }, { signal: lifetime.signal });
+  syncNarration(segmentMarkers, 0);
   const openingFrame = Math.max(0, (events.find((event) => event.type === 2)?.timestamp ?? events[0].timestamp) - events[0].timestamp);
   replayer.pause(openingFrame);
   updateTimelinePosition(openingFrame);
 }
 
-function prepareTimeline(manifest: Manifest, duration: number, interactions: number[]) {
+function prepareTimeline(markers: Marker[], duration: number, interactions: number[]) {
   const density = document.querySelector<HTMLElement>("#density")!;
   const buckets = Array.from({ length: 72 }, () => 0);
   interactions.forEach((time) => { buckets[Math.min(buckets.length - 1, Math.floor(time / duration * buckets.length))] += 1; });
   const max = Math.max(1, ...buckets);
   density.innerHTML = buckets.map((count) => `<i style="--level:${Math.max(.08, count / max)}"></i>`).join("");
-  document.querySelector<HTMLElement>("#timeline-markers")!.innerHTML = manifest.markers.map((marker) => `<button data-marker="${marker.t_ms}" title="${escape(marker.label)}" style="left:${clamp(marker.t_ms / duration * 100, 1, 99)}%"><span></span></button>`).join("");
+  document.querySelector<HTMLElement>("#timeline-markers")!.innerHTML = markers.map((marker) => `<button data-marker="${marker.t_ms}" title="${escape(marker.label)}" style="left:${clamp(marker.t_ms / duration * 100, 1, 99)}%"><span></span></button>`).join("");
 }
 
-function syncNarration(manifest: Manifest, time: number) {
-  const marker = [...manifest.markers].reverse().find((item) => item.t_ms <= time + 450);
+function syncNarration(markers: Marker[], time: number) {
+  const marker = [...markers].reverse().find((item) => item.t_ms <= time + 450);
   if (marker) setActionCaption(marker.label, marker.note ?? "Narrated journey checkpoint");
+}
+function markersForSegment(manifest: Manifest, segment: Segment) {
+  const index = manifest.segments.findIndex((item) => item.id === segment.id);
+  const nextOffset = manifest.segments[index + 1]?.clock_offset_ms ?? Infinity;
+  return manifest.markers
+    .filter((marker) => marker.t_ms >= segment.clock_offset_ms && marker.t_ms < nextOffset)
+    .map((marker) => ({ ...marker, t_ms: marker.t_ms - segment.clock_offset_ms }));
+}
+function segmentLabel(pageUrl: string) {
+  try {
+    const url = new URL(pageUrl);
+    return url.pathname === "/" ? url.host : `${url.host}${url.pathname}`;
+  } catch { return pageUrl; }
 }
 function setActionCaption(title: string, copy: string) { document.querySelector<HTMLElement>("#caption strong")!.textContent = title; document.querySelector<HTMLElement>("#caption p")!.textContent = copy; }
 function isInteraction(event: ReplayEvent) { return event.type === 3 && event.data?.source === 2; }
