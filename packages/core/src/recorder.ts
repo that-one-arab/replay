@@ -21,32 +21,32 @@ interface PageState {
 export class Recorder {
   private browser?: Browser;
   private context?: BrowserContext;
-  private cdpEndpoint?: string;
   private store?: SessionStore;
   private startedAt = 0;
   private readonly pages = new Map<Page, PageState>();
+  private readonly knownPages = new Set<Page>();
   private observedPages = new WeakSet<Page>();
   private origins = new Set<string>();
   private initialized = false;
 
   async attach(cdpEndpoint: string) {
     if (this.browser) await this.browser.close();
-    this.cdpEndpoint = cdpEndpoint;
+    this.knownPages.clear();
+    // Bindings belong to a single Playwright BrowserContext. Reattaching over
+    // CDP creates a new context facade, so it must receive its own bridge.
+    this.initialized = false;
     this.browser = await chromium.connectOverCDP(cdpEndpoint);
     this.context = this.browser.contexts()[0];
     if (!this.context) throw new Error("No browser context found at CDP endpoint");
+    this.context.on("page", (page) => this.registerPage(page));
+    for (const page of this.context.pages()) this.registerPage(page);
     return this;
   }
 
   async start(options: StartOptions = {}) {
-    if (!this.cdpEndpoint) throw new Error("Recorder is not attached. Run rec attach first.");
+    if (!this.browser || !this.context) throw new Error("Recorder is not attached. Run rec attach first.");
     if (this.store) throw new Error("A recording is already active");
-    // A Playwright CDP connection has page and binding state of its own. A
-    // recording is a natural lifecycle boundary, so reconnect before each one
-    // to avoid carrying stale target objects into the next agent journey.
-    await this.refreshConnection();
-    if (!this.context) throw new Error("No browser context found at CDP endpoint");
-    const pages = this.context.pages();
+    const pages = [...new Set([...this.context.pages(), ...this.knownPages])];
     const active = pages.find((page) => page.url() !== "about:blank") ?? pages[0];
     const defaultOrigin = active ? originOf(active.url()) : undefined;
     const origins = options.origins?.length ? options.origins : defaultOrigin ? [defaultOrigin] : [];
@@ -70,7 +70,6 @@ export class Recorder {
     await this.installBindings();
     const injection = await recorderScript();
     await this.context.addInitScript({ content: injection });
-    this.context.on("page", (page) => this.observePage(page));
     for (const page of pages) {
       // addInitScript only applies to documents created after registration.
       // Starting on an already-open page is the primary workflow, so inject the
@@ -127,23 +126,23 @@ export class Recorder {
     this.context = undefined;
   }
 
-  private async refreshConnection() {
-    await this.browser?.close();
-    this.browser = await chromium.connectOverCDP(this.cdpEndpoint!);
-    this.context = this.browser.contexts()[0];
-    this.initialized = false;
-    if (!this.context) throw new Error("No browser context found at CDP endpoint");
-  }
-
   private async installBindings() {
     if (this.initialized || !this.context) return;
     await this.context.exposeBinding("__rec_emit", ({ page }, payload: unknown) => {
-      const state = page ? this.pages.get(page) : undefined;
+      // Playwright can rehydrate a CDP page target between sessions. Prefer
+      // object identity, then resolve the active page by its current URL.
+      const state = page ? this.pages.get(page) ?? [...this.pages.values()].find((candidate) => candidate.page.url() === page.url()) : undefined;
       if (!state || !Array.isArray(payload)) return;
       state.queue.push(...payload);
       if (!state.flushTimer) state.flushTimer = setTimeout(() => void this.flush(state), FLUSH_MS);
     });
     this.initialized = true;
+  }
+
+  private registerPage(page: Page) {
+    if (this.knownPages.has(page)) return;
+    this.knownPages.add(page);
+    page.on("close", () => this.knownPages.delete(page));
   }
 
   private observePage(page: Page) {

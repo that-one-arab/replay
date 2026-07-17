@@ -15,17 +15,30 @@ const html = await readFile(resolve(root, "packages/demo/public/index.html"));
 const server = createServer((_request, response) => { response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); response.end(html); });
 const sockets = new Set<Socket>();
 server.on("connection", (socket) => { sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
+const cursorPositions = new WeakMap<Page, { x: number; y: number }>();
 
 try {
   await new Promise<void>((resolveListen, reject) => server.listen(port, "127.0.0.1", () => resolveListen()).on("error", reject));
   await rec("browser", "start");
-  const browser = await chromium.connectOverCDP("http://127.0.0.1:9333");
-  const context = browser.contexts()[0];
+  let browser = await chromium.connectOverCDP("http://127.0.0.1:9333");
+  let context = browser.contexts()[0];
   if (!context) throw new Error("The recordable Chromium did not expose a browser context.");
   // The browser intentionally persists between agent sessions. Remove an old
   // demo page so repeated runs stay a single, clean replay segment.
   await Promise.all(context.pages().filter((candidate) => candidate.url().startsWith(origin)).map((candidate) => candidate.close()));
-  const page = await context.newPage();
+  let page: Page;
+  try {
+    page = await context.newPage();
+  } catch {
+    // A saved browser PID can outlive its usable CDP target after Chrome exits.
+    // Recover once so a deterministic run never starts against a closed context.
+    await rec("browser", "stop");
+    await rec("browser", "start");
+    browser = await chromium.connectOverCDP("http://127.0.0.1:9333");
+    context = browser.contexts()[0];
+    if (!context) throw new Error("The restarted Chromium did not expose a browser context.");
+    page = await context.newPage();
+  }
   await page.goto(origin, { waitUntil: "networkidle" });
   // Rehearse once unrecorded, mirroring the agent workflow before evidence capture.
   await page.getByRole("button", { name: /set up workspace/i }).click();
@@ -85,16 +98,20 @@ async function rec(...args: string[]) {
 async function humanClick(page: Page, locator: Locator, dwellMs: number) {
   const box = await locator.boundingBox();
   if (!box) throw new Error("Expected an interactive target with a visible bounding box.");
-  // rrweb samples mouse movement; travelling in a few timed steps makes the
-  // cursor and target highlight read like a human walkthrough rather than a bot.
-  const start = { x: Math.max(16, box.x - 90), y: Math.max(16, box.y - 35) };
+  // rrweb samples mouse movement at 50ms. Keep a continuous cursor position
+  // and emit one eased sample per interval so the viewer can follow the path.
+  const start = cursorPositions.get(page) ?? { x: 84, y: 148 };
   const target = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-  await page.mouse.move(start.x, start.y);
-  for (let step = 1; step <= 7; step += 1) {
-    const ratio = step / 7;
-    await page.mouse.move(start.x + (target.x - start.x) * ratio, start.y + (target.y - start.y) * ratio);
-    await page.waitForTimeout(32);
+  const distance = Math.hypot(target.x - start.x, target.y - start.y);
+  const duration = Math.min(1_650, Math.max(720, distance * 2.1));
+  const steps = Math.ceil(duration / 50);
+  for (let step = 1; step <= steps; step += 1) {
+    const progress = step / steps;
+    const eased = 1 - (1 - progress) ** 2;
+    await page.mouse.move(start.x + (target.x - start.x) * eased, start.y + (target.y - start.y) * eased);
+    await page.waitForTimeout(50);
   }
+  cursorPositions.set(page, target);
   await page.waitForTimeout(dwellMs);
   await page.mouse.click(target.x, target.y);
 }
