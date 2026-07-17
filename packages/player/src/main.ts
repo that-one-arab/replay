@@ -88,6 +88,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     document.querySelector<HTMLElement>("#stage-status")!.textContent = value ? "Playing" : "Paused";
   };
   const updateProgress = () => {
+    if (lifetime.signal.aborted) return;
     if (!scrubbing && !bridgingTabs) {
       const time = clamp(tabStart + replayer.getCurrentTime(), tabStart, tabEnd);
       updateTimelinePosition(time);
@@ -151,6 +152,11 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   scrubber.addEventListener("change", () => {
     scrubbing = false;
     const time = Number(scrubber.value);
+    const target = segmentAtTime(manifest, eventSets, time);
+    if (target && target.id !== segment.id) {
+      void replay(manifest, eventSets, duration, target, time).catch(renderError);
+      return;
+    }
     playing ? playFrom(time) : replayer.pause(clamp(time, tabStart, tabEnd) - tabStart);
   }, { signal: lifetime.signal });
   document.addEventListener("keydown", (event) => {
@@ -170,6 +176,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     const bridgeStart = currentSessionTime;
     const wallStart = performance.now();
     const advance = () => {
+      if (lifetime.signal.aborted) return;
       const elapsed = (performance.now() - wallStart) * Number(replayer.config.speed);
       const time = Math.min(tab.clock_offset_ms, bridgeStart + elapsed);
       updateTimelinePosition(time);
@@ -218,7 +225,7 @@ function interactionTimes(manifest: Manifest, eventSets: Map<string, ReplayEvent
   });
 }
 function segmentAtTime(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>, time: number) {
-  return manifest.segments.find((segment) => {
+  return [...manifest.segments].sort((left, right) => right.clock_offset_ms - left.clock_offset_ms).find((segment) => {
     const events = eventSets.get(segment.id) ?? [];
     const end = segment.clock_offset_ms + Math.max(0, (events.at(-1)?.timestamp ?? 0) - (events[0]?.timestamp ?? 0));
     return time >= segment.clock_offset_ms && time <= end;

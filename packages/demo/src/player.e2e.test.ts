@@ -78,6 +78,17 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
     assert.equal(await page.locator("[data-segment='seg_2']").getAttribute("aria-current"), "page");
     assert.equal(await page.locator("#current-time").textContent(), "0:03");
     assert.equal(await page.locator("#total-time").textContent(), "0:06");
+
+    await page.locator("#scrubber").evaluate((node) => {
+      const scrubber = node as HTMLInputElement;
+      scrubber.value = "1000";
+      scrubber.dispatchEvent(new Event("input", { bubbles: true }));
+      scrubber.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await page.frameLocator(".replayer-wrapper iframe").getByText("Continue").waitFor();
+    assert.equal(await page.locator("[data-segment='seg_1']").getAttribute("aria-current"), "page");
+    assert.equal(await page.locator("[data-segment='seg_2']").isHidden(), true);
+    assert.equal(await page.locator("#current-time").textContent(), "0:01");
   } finally {
     await browser?.close();
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
