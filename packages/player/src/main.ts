@@ -91,7 +91,14 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     }
     replayer.pause();
   };
-  const togglePlayback = () => playing ? pausePlayback() : playFrom(Number(scrubber.value));
+  const togglePlayback = () => {
+    if (playing) return pausePlayback();
+    if (Number(scrubber.value) >= duration - 10) {
+      void replay(manifest, eventSets, duration, manifest.segments[0], 0, true).catch(renderError);
+      return;
+    }
+    playFrom(Number(scrubber.value));
+  };
   scrubber.max = String(duration);
   document.querySelector<HTMLElement>("#total-time")!.textContent = format(duration);
   const setPlaying = (value: boolean) => {

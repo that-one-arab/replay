@@ -104,6 +104,15 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
     await page.frameLocator(".replayer-wrapper iframe").getByText("Invite preview").waitFor();
     assert.equal(await page.locator("[data-segment='seg_2']").getAttribute("aria-current"), "page");
     assert.equal(await playbackState(page), "Playing");
+
+    await page.locator("[data-speed='8']").click();
+    await waitForPaused(page, 2_500);
+    assert.equal(await page.locator("#current-time").textContent(), "0:06");
+    await page.getByRole("button", { name: "Play replay" }).click();
+    await page.frameLocator(".replayer-wrapper iframe").getByText("Continue").waitFor();
+    assert.equal(await page.locator("[data-segment='seg_1']").getAttribute("aria-current"), "page");
+    assert.equal(await page.locator("[data-segment='seg_2']").isHidden(), true);
+    assert.equal(await playbackState(page), "Playing");
   } finally {
     await browser?.close();
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
