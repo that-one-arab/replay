@@ -21,6 +21,7 @@ interface PageState {
 export class Recorder {
   private browser?: Browser;
   private context?: BrowserContext;
+  private cdpEndpoint?: string;
   private store?: SessionStore;
   private startedAt = 0;
   private readonly pages = new Map<Page, PageState>();
@@ -30,6 +31,7 @@ export class Recorder {
 
   async attach(cdpEndpoint: string) {
     if (this.browser) await this.browser.close();
+    this.cdpEndpoint = cdpEndpoint;
     this.browser = await chromium.connectOverCDP(cdpEndpoint);
     this.context = this.browser.contexts()[0];
     if (!this.context) throw new Error("No browser context found at CDP endpoint");
@@ -37,8 +39,13 @@ export class Recorder {
   }
 
   async start(options: StartOptions = {}) {
-    if (!this.browser || !this.context) throw new Error("Recorder is not attached. Run rec attach first.");
+    if (!this.cdpEndpoint) throw new Error("Recorder is not attached. Run rec attach first.");
     if (this.store) throw new Error("A recording is already active");
+    // A Playwright CDP connection has page and binding state of its own. A
+    // recording is a natural lifecycle boundary, so reconnect before each one
+    // to avoid carrying stale target objects into the next agent journey.
+    await this.refreshConnection();
+    if (!this.context) throw new Error("No browser context found at CDP endpoint");
     const pages = this.context.pages();
     const active = pages.find((page) => page.url() !== "about:blank") ?? pages[0];
     const defaultOrigin = active ? originOf(active.url()) : undefined;
@@ -118,6 +125,14 @@ export class Recorder {
     await this.browser?.close();
     this.browser = undefined;
     this.context = undefined;
+  }
+
+  private async refreshConnection() {
+    await this.browser?.close();
+    this.browser = await chromium.connectOverCDP(this.cdpEndpoint!);
+    this.context = this.browser.contexts()[0];
+    this.initialized = false;
+    if (!this.context) throw new Error("No browser context found at CDP endpoint");
   }
 
   private async installBindings() {

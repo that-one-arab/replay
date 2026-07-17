@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
-import { chromium } from "playwright-core";
+import { chromium, type Locator, type Page } from "playwright-core";
 
 const execFile = promisify(execFileCallback);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -36,18 +36,23 @@ try {
   // confirmation before driving the browser.
   await page.waitForTimeout(600);
   await rec("marker", "Begin workspace setup", "--note", "The customer starts a new Orbit workspace.");
-  await page.getByRole("button", { name: /set up workspace/i }).click();
-  await page.waitForTimeout(250);
+  await humanClick(page, page.getByRole("button", { name: /set up workspace/i }), 720);
+  await humanPause(page, 680);
   await rec("marker", "Select the Growth plan", "--note", "The highlighted plan is selected before continuing.");
-  await page.getByRole("button", { name: /growth/i }).click();
-  await page.getByRole("button", { name: "Continue" }).click();
-  await page.waitForTimeout(250);
+  await humanClick(page, page.getByRole("button", { name: /growth/i }), 560);
+  await humanPause(page, 520);
+  await humanClick(page, page.getByRole("button", { name: "Continue" }), 700);
+  await humanPause(page, 640);
   await rec("marker", "Name the workspace", "--note", "Northstar Studio is the final workspace name.");
-  await page.getByLabel("Workspace name").fill("Northstar Studio");
-  await page.getByRole("button", { name: /create workspace/i }).click();
-  await page.waitForTimeout(250);
+  const workspaceName = page.getByLabel("Workspace name");
+  await humanClick(page, workspaceName, 380);
+  await workspaceName.press("ControlOrMeta+A");
+  await page.keyboard.type("Northstar Studio", { delay: 92 });
+  await humanPause(page, 620);
+  await humanClick(page, page.getByRole("button", { name: /create workspace/i }), 760);
+  await humanPause(page, 720);
   await rec("marker", "Confirm the workspace is live", "--note", "A success confirmation proves the onboarding journey completed.");
-  await page.getByRole("button", { name: /copy invite link/i }).click();
+  await humanClick(page, page.getByRole("button", { name: /copy invite link/i }), 480);
   const { stdout } = await rec("stop", "--outcome", "verified");
   const url = stdout.match(/Replay:\s+(\S+)/)?.[1];
   if (!url) throw new Error(`rec stop did not return a replay URL:\n${stdout}`);
@@ -75,4 +80,25 @@ async function rec(...args: string[]) {
   if (stderr) process.stderr.write(stderr);
   if (stdout) process.stdout.write(stdout);
   return { stdout, stderr };
+}
+
+async function humanClick(page: Page, locator: Locator, dwellMs: number) {
+  const box = await locator.boundingBox();
+  if (!box) throw new Error("Expected an interactive target with a visible bounding box.");
+  // rrweb samples mouse movement; travelling in a few timed steps makes the
+  // cursor and target highlight read like a human walkthrough rather than a bot.
+  const start = { x: Math.max(16, box.x - 90), y: Math.max(16, box.y - 35) };
+  const target = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.mouse.move(start.x, start.y);
+  for (let step = 1; step <= 7; step += 1) {
+    const ratio = step / 7;
+    await page.mouse.move(start.x + (target.x - start.x) * ratio, start.y + (target.y - start.y) * ratio);
+    await page.waitForTimeout(32);
+  }
+  await page.waitForTimeout(dwellMs);
+  await page.mouse.click(target.x, target.y);
+}
+
+async function humanPause(page: Page, durationMs: number) {
+  await page.waitForTimeout(durationMs);
 }
