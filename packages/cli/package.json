@@ -1,0 +1,12 @@
+{
+  "name": "@signit/rec-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "rec": "./dist/main.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test dist/**/*.test.js"
+  }
+}

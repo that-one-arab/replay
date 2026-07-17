@@ -1,0 +1,17 @@
+{
+  "name": "@signit/rec-player",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test dist/**/*.test.js"
+  },
+  "dependencies": {
+    "@rrweb/replay": "2.0.0-alpha.20"
+  },
+  "devDependencies": {
+    "vite": "^7.0.0"
+  }
+}

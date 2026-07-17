@@ -1,0 +1,17 @@
+{
+  "name": "@signit/rec-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test dist/storage.test.js"
+  },
+  "dependencies": {
+    "@rrweb/record": "2.0.0-alpha.20",
+    "playwright-core": "^1.55.0"
+  }
+}
