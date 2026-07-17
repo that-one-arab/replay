@@ -9,7 +9,8 @@
     "test": "node --test dist/**/*.test.js"
   },
   "dependencies": {
-    "@rrweb/replay": "2.0.0-alpha.20"
+    "@rrweb/replay": "2.0.0-alpha.20",
+    "rrweb": "2.1.0"
   },
   "devDependencies": {
     "vite": "^7.0.0"

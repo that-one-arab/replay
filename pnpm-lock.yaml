@@ -32,11 +32,20 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  packages/demo:
+    dependencies:
+      playwright-core:
+        specifier: ^1.55.0
+        version: 1.61.1
+
   packages/player:
     dependencies:
       '@rrweb/replay':
         specifier: 2.0.0-alpha.20
         version: 2.0.0-alpha.20
+      rrweb:
+        specifier: 2.1.0
+        version: 2.1.0
     devDependencies:
       vite:
         specifier: ^7.0.0

@@ -19,6 +19,7 @@ export class SessionStore {
   private readonly segments = new Map<string, Segment>();
   private sequence = new Map<string, number>();
   private eventTimes: number[] = [];
+  private manifestWrite: Promise<void> = Promise.resolve();
 
   private constructor(root: string, manifest: RecordingManifest) {
     this.root = root;
@@ -92,10 +93,16 @@ export class SessionStore {
   }
 
   private async writeManifest() {
-    const target = join(this.root, "manifest.json");
-    const temporary = `${target}.tmp`;
-    await writeFile(temporary, JSON.stringify(this.manifest, null, 2) + "\n");
-    await rename(temporary, target);
+    // Event batches can arrive from several pages at once. Serialize the
+    // replace operation so two writers never contend for manifest.json.tmp.
+    const write = async () => {
+      const target = join(this.root, "manifest.json");
+      const temporary = `${target}.tmp`;
+      await writeFile(temporary, JSON.stringify(this.manifest, null, 2) + "\n");
+      await rename(temporary, target);
+    };
+    this.manifestWrite = this.manifestWrite.then(write, write);
+    return this.manifestWrite;
   }
 }
 

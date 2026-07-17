@@ -24,6 +24,7 @@ export class Recorder {
   private store?: SessionStore;
   private startedAt = 0;
   private readonly pages = new Map<Page, PageState>();
+  private observedPages = new WeakSet<Page>();
   private origins = new Set<string>();
   private initialized = false;
 
@@ -45,6 +46,7 @@ export class Recorder {
     if (origins.length === 0) throw new Error("No page origin found. Navigate the browser or supply --origin.");
     this.origins = new Set(origins);
     this.startedAt = Date.now();
+    this.observedPages = new WeakSet<Page>();
     const id = `rec_${randomUUID().slice(0, 8)}`;
     const manifest: RecordingManifest = {
       format_version: 1,
@@ -59,9 +61,16 @@ export class Recorder {
     };
     this.store = await SessionStore.create(manifest);
     await this.installBindings();
-    await this.context.addInitScript({ content: await recorderScript() });
-    this.context.on("page", (page) => void this.activatePage(page));
-    for (const page of pages) await this.activatePage(page);
+    const injection = await recorderScript();
+    await this.context.addInitScript({ content: injection });
+    this.context.on("page", (page) => this.observePage(page));
+    for (const page of pages) {
+      // addInitScript only applies to documents created after registration.
+      // Starting on an already-open page is the primary workflow, so inject the
+      // exact same bundle before attempting to call its recorder API.
+      if (inScope(page.url(), this.origins)) await page.evaluate(injection).catch(() => undefined);
+      this.observePage(page);
+    }
     return { sessionId: id };
   }
 
@@ -119,12 +128,16 @@ export class Recorder {
       state.queue.push(...payload);
       if (!state.flushTimer) state.flushTimer = setTimeout(() => void this.flush(state), FLUSH_MS);
     });
-    await this.context.exposeBinding("__rec_should_start", ({ page }) => {
-      if (!page || !this.store || !inScope(page.url(), this.origins)) return undefined;
-      this.ensurePageState(page);
-      return { maskAllInputs: this.store.manifest.masking.mask_all_inputs };
-    });
     this.initialized = true;
+  }
+
+  private observePage(page: Page) {
+    if (this.observedPages.has(page)) return;
+    this.observedPages.add(page);
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) void this.activatePage(page);
+    });
+    void this.activatePage(page);
   }
 
   private async activatePage(page: Page) {
@@ -192,6 +205,5 @@ async function recorderScript() {
     };
     window.__recAddMarker = (label, note) => rrwebRecord?.record?.addCustomEvent?.("rec-marker", { label, note });
     window.__recStop = () => { flush(); stop?.(); stop = undefined; };
-    window.__rec_should_start?.().then((config) => config && window.__recStart(config));
   })();`;
 }

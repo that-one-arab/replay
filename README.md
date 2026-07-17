@@ -49,3 +49,15 @@ rec status | list | open <id> | doctor
 
 The recording format is documented in `docs/format.md`; the spike checklist is in
 `docs/spike-checklist.md`.
+
+## Deterministic demo replay
+
+The included Orbit onboarding app is a repeatable source for validating the recorder
+against a real Playwright-driven browser session. It launches the demo app, starts a
+recording using the same `rec` CLI commands an agent would use, performs the journey,
+and prints the resulting replay URL.
+
+```sh
+npm run build
+npm run demo:record
+```
