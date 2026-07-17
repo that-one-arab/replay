@@ -1,0 +1,12 @@
+{
+  "name": "@signit/rec-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "rec-mcp": "./dist/main.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test dist/main.test.js"
+  }
+}

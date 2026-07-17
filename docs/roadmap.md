@@ -11,12 +11,12 @@ The local recorder and replay prove the core artifact: rrweb capture over CDP,
 idle-aware playback, assets, markers, and one browser-session timeline across tabs.
 Recordings remain on the originating machine.
 
-## Phase 2 — agent-native capture workflow
+## Phase 2 — agent-native capture workflow (in progress)
 
 Make recording a first-class action for coding agents rather than a sequence of
-shell instructions. Deliver a small, structured tool surface for starting and
-stopping captures, adding markers, reading recording status, and returning the
-replay artifact and outcome to the agent's parent task. The tool contract should
+shell instructions. A local stdio MCP server now exposes start, marker, status,
+and stop; it reuses an attached browser or launches Chrome when needed. The
+remaining work is to mature the agent handoff contract. The tool contract should
 make origin scope, input masking, and failure states explicit.
 
 ## Phase 3 — portable recording artifacts
@@ -41,4 +41,3 @@ coverage for rapid navigation and SPA routes, redirects, frames, uploads, canvas
 long recordings, storage recovery, recording-health diagnostics, performance, and
 accessibility. This phase turns the proven workflow into a dependable product; it
 is not the next milestone.
-

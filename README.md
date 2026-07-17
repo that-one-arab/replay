@@ -4,8 +4,9 @@
 sessions. It attaches over CDP, records rrweb events, writes a crash-tolerant gzip
 bundle, and serves a local replay with idle time skipped by default.
 
-This repository is a local Phase 1 implementation. It has no hosted ingest, auth,
-or MCP server; recordings stay on the machine that created them.
+This repository contains the completed local Phase 1 implementation and the
+in-progress local MCP capture workflow from Phase 2. It has no hosted ingest or
+auth; recordings stay on the machine that created them.
 
 ## Quick start
 
@@ -65,7 +66,8 @@ rec status | list | open <id> | doctor
 
 The recording format is documented in `docs/format.md`; the spike checklist is in
 `docs/spike-checklist.md`. The path from this completed local implementation to
-agent-native capture and shared replay is in `docs/roadmap.md`.
+agent-native capture and shared replay is in `docs/roadmap.md`. The local stdio
+MCP server is documented in `docs/mcp.md`.
 
 ## Deterministic demo replay
 
