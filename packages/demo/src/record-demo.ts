@@ -11,6 +11,7 @@ const execFile = promisify(execFileCallback);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const port = Number(process.env.REC_DEMO_PORT ?? 4173);
 const origin = `http://127.0.0.1:${port}`;
+const IDLE_REVIEW_MS = 12_000;
 const html = await readFile(resolve(root, "packages/demo/public/index.html"));
 const server = createServer((_request, response) => { response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); response.end(html); });
 const sockets = new Set<Socket>();
@@ -54,6 +55,11 @@ try {
   await rec("marker", "Select the Growth plan", "--note", "The highlighted plan is selected before continuing.");
   await humanClick(page, page.getByRole("button", { name: /growth/i }), 560);
   await humanPause(page, 520);
+  // Simulate a genuine decision point. It creates an event-free span longer
+  // than rrweb's default 10-second inactive threshold, so Skip idle visibly
+  // changes the replay duration and behavior.
+  await rec("marker", "Review the selected plan", "--note", "The customer pauses to consider the Growth plan before continuing.");
+  await page.waitForTimeout(IDLE_REVIEW_MS);
   await humanClick(page, page.getByRole("button", { name: "Continue" }), 700);
   await humanPause(page, 640);
   await rec("marker", "Name the workspace", "--note", "Northstar Studio is the final workspace name.");
