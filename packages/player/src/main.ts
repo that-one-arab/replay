@@ -36,7 +36,7 @@ async function load(recordingId: string) {
 
 function renderShell(manifest: Manifest) {
   const segmentPicker = manifest.segments.length > 1
-    ? `<nav class="segment-picker" aria-label="Recorded browser tabs">${manifest.segments.map((segment, index) => `<button data-segment="${escape(segment.id)}" title="Opened at ${format(segment.clock_offset_ms)} — ${escape(segment.page_url)}"${index === 0 ? "" : " hidden"}><span>Tab ${index + 1}</span>${escape(segmentLabel(segment.page_url))}</button>`).join("")}</nav>`
+    ? `<nav class="segment-picker" aria-label="Recorded browser tabs">${manifest.segments.map((segment, index) => `<div class="segment-tab" data-segment="${escape(segment.id)}" title="Opened at ${format(segment.clock_offset_ms)} — ${escape(segment.page_url)}"${index === 0 ? "" : " hidden"}><span>Tab ${index + 1}</span>${escape(segmentLabel(segment.page_url))}</div>`).join("")}</nav>`
     : "";
   app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div>${segmentPicker}<div class="caption-card" id="caption"><span class="caption-kicker">SESSION REPLAY</span><strong>Press play to begin</strong><p>The timeline follows the full browser recording.</p></div><section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed"><button data-speed="${DEFAULT_PLAYBACK_SPEED}" class="selected">${DEFAULT_PLAYBACK_SPEED}×</button><button data-speed="2">2×</button><button data-speed="4">4×</button><button data-speed="8">8×</button></div><button class="skip-button active" id="skip"><span>↯</span> Skip idle</button></div><div class="timeline-wrap"><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section></main>`;
 }
@@ -151,14 +151,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     if (target && target.id !== segment.id) void replay(manifest, eventSets, duration, target, time).catch(renderError);
     else playFrom(time);
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-segment]").forEach((button) => button.onclick = () => {
-    const selected = manifest.segments.find((item) => item.id === button.dataset.segment);
-    const selectedEvents = selected ? eventSets.get(selected.id) : undefined;
-    const selectedDuration = selectedEvents && selectedEvents.length > 1 ? selectedEvents.at(-1)!.timestamp - selectedEvents[0].timestamp : 0;
-    const selectedTime = selected ? clamp(currentSessionTime, selected.clock_offset_ms, selected.clock_offset_ms + selectedDuration) : currentSessionTime;
-    void replay(manifest, eventSets, duration, selected, selectedTime).catch(renderError);
-  });
-  document.querySelectorAll<HTMLButtonElement>("[data-segment]").forEach((button) => {
+  document.querySelectorAll<HTMLElement>("[data-segment]").forEach((button) => {
     const selected = button.dataset.segment === segment.id;
     button.classList.toggle("selected", selected);
     button.setAttribute("aria-current", selected ? "page" : "false");
@@ -293,7 +286,7 @@ function segmentAtTime(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>
   });
 }
 function revealTabs(manifest: Manifest, time: number) {
-  document.querySelectorAll<HTMLButtonElement>("[data-segment]").forEach((button) => {
+  document.querySelectorAll<HTMLElement>("[data-segment]").forEach((button) => {
     const segment = manifest.segments.find((item) => item.id === button.dataset.segment);
     button.hidden = Boolean(segment && segment.clock_offset_ms > time);
   });

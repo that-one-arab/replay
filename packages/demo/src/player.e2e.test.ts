@@ -70,6 +70,7 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
 
     assert.equal(await page.locator("[data-segment]").count(), 2);
     assert.equal(await page.locator(".segment-picker").getAttribute("aria-label"), "Recorded browser tabs");
+    assert.equal(await page.locator(".segment-picker button").count(), 0, "tab state is not manually selectable");
     assert.equal(await page.locator("[data-segment='seg_1']").getAttribute("aria-current"), "page");
     assert.equal(await page.locator("[data-segment='seg_2']").isHidden(), true);
     await page.locator("[data-speed='8']").click();
