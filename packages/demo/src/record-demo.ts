@@ -13,7 +13,11 @@ const port = Number(process.env.REC_DEMO_PORT ?? 4173);
 const origin = `http://127.0.0.1:${port}`;
 const IDLE_REVIEW_MS = 12_000;
 const html = await readFile(resolve(root, "packages/demo/public/index.html"));
-const server = createServer((_request, response) => { response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); response.end(html); });
+const inviteHtml = await readFile(resolve(root, "packages/demo/public/invite-preview.html"));
+const server = createServer((request, response) => {
+  response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+  response.end(new URL(request.url ?? "/", origin).pathname === "/invite-preview" ? inviteHtml : html);
+});
 const sockets = new Set<Socket>();
 server.on("connection", (socket) => { sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
 const cursorPositions = new WeakMap<Page, { x: number; y: number }>();
@@ -72,6 +76,14 @@ try {
   await humanPause(page, 720);
   await rec("marker", "Confirm the workspace is live", "--note", "A success confirmation proves the onboarding journey completed.");
   await humanClick(page, page.getByRole("button", { name: /copy invite link/i }), 480);
+  await rec("marker", "Open the invite preview", "--note", "A same-origin popup should become a second replay segment.");
+  const popupPromise = context.waitForEvent("page");
+  await humanClick(page, page.getByRole("button", { name: /open invite preview/i }), 520);
+  const popup = await popupPromise;
+  await popup.waitForLoadState("networkidle");
+  await humanPause(popup, 700);
+  await rec("marker", "Confirm popup capture", "--note", "The invite preview interaction verifies the popup has its own rrweb stream.");
+  await humanClick(popup, popup.getByRole("button", { name: /copy preview invitation/i }), 540);
   const { stdout } = await rec("stop", "--outcome", "verified");
   const url = stdout.match(/Replay:\s+(\S+)/)?.[1];
   if (!url) throw new Error(`rec stop did not return a replay URL:\n${stdout}`);
@@ -79,14 +91,18 @@ try {
   if (!sessionId) throw new Error(`rec stop did not return a session id:\n${stdout}`);
   const manifest = await fetch(new URL(`/api/sessions/${sessionId}/manifest`, url)).then(async (response) => {
     if (!response.ok) throw new Error(`Manifest responded with ${response.status}`);
-    return response.json() as Promise<{ segments: { chunks: string[] }[] }>;
+    return response.json() as Promise<{ segments: { page_url: string; chunks: string[] }[] }>;
   });
   if (manifest.segments.every((segment) => segment.chunks.length === 0)) {
     throw new Error("Recorder captured no rrweb events. The local rec daemon is stale; restart it with `pkill -f 'packages/daemon/dist/main.js'`, then rerun `npm run demo:record`.");
   }
+  if (manifest.segments.length !== 2 || manifest.segments[1]?.chunks.length === 0 || !manifest.segments[1]?.page_url.endsWith("/invite-preview")) {
+    throw new Error("Popup recording did not produce a populated second segment for /invite-preview.");
+  }
   const replay = await fetch(url);
   if (!replay.ok) throw new Error(`Replay URL responded with ${replay.status}`);
   console.log(`\nDeterministic replay ready: ${url}`);
+  await popup.close();
   await page.close();
   await browser.close();
 } finally {

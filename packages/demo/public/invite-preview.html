@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Orbit invite preview</title>
+    <style>
+      :root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color:#1b2540; background:#f5f7fc; } *{box-sizing:border-box} body{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at 85% 12%,#d8d7ff 0,transparent 31%),#f5f7fc}.card{width:min(560px,90vw);padding:38px;background:#fff;border:1px solid #e5e9f2;border-radius:20px;box-shadow:0 22px 50px rgba(41,53,89,.09)}.eyebrow{margin:0 0 12px;color:#7867e9;font-size:11px;font-weight:800;letter-spacing:.14em}h1{margin:0;font-size:36px;letter-spacing:-.05em}.copy{margin:17px 0 28px;color:#68728a;font-size:16px;line-height:1.5}.invite{padding:16px;border:1px dashed #bdb5fb;border-radius:12px;background:#f8f7ff;color:#4d3dba;font-weight:700}.button{margin-top:22px;border:0;border-radius:10px;padding:13px 18px;background:#715bf0;color:#fff;font:inherit;font-weight:750;cursor:pointer;box-shadow:0 8px 18px rgba(103,82,226,.28)}
+    </style>
+  </head>
+  <body>
+    <main class="card"><p class="eyebrow">INVITE PREVIEW</p><h1>Northstar Studio</h1><p class="copy">Preview the invitation your new teammates will receive before sharing it.</p><div class="invite">You’re invited to collaborate in Northstar Studio.</div><button class="button" id="copy">Copy preview invitation</button></main>
+    <script>document.querySelector('#copy').addEventListener('click', event => { event.currentTarget.textContent = 'Preview invitation copied ✓'; });</script>
+  </body>
+</html>

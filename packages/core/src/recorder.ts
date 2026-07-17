@@ -143,6 +143,10 @@ export class Recorder {
     if (this.knownPages.has(page)) return;
     this.knownPages.add(page);
     page.on("close", () => this.knownPages.delete(page));
+    // New popup targets are announced after recording has started. The init
+    // script already covers their next document, but they still need the
+    // recorder's navigation observer to become their own segment.
+    if (this.store) this.observePage(page);
   }
 
   private observePage(page: Page) {
