@@ -63,6 +63,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   window.addEventListener("resize", () => fitReplay(mount, replayer, viewport), { signal: lifetime.signal });
   let playing = false;
   let scrubbing = false;
+  let resumeAfterScrub = false;
   let bridgingTabs = false;
   let tabFocusTimer: number | undefined;
   const scrubber = document.querySelector<HTMLInputElement>("#scrubber")!;
@@ -162,21 +163,30 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     button.classList.toggle("selected", selected);
     button.setAttribute("aria-current", selected ? "page" : "false");
   });
-  scrubber.addEventListener("pointerdown", () => { scrubbing = true; }, { signal: lifetime.signal });
+  const beginScrub = () => {
+    if (scrubbing) return;
+    scrubbing = true;
+    resumeAfterScrub = playing;
+    if (playing) pausePlayback();
+  };
+  scrubber.addEventListener("pointerdown", beginScrub, { signal: lifetime.signal });
   scrubber.addEventListener("input", () => {
+    beginScrub();
     const time = Number(scrubber.value);
     updateTimelinePosition(time);
     syncNarration(manifest.markers, time);
   }, { signal: lifetime.signal });
   scrubber.addEventListener("change", () => {
     scrubbing = false;
+    const shouldResume = resumeAfterScrub;
+    resumeAfterScrub = false;
     const time = Number(scrubber.value);
     const target = segmentAtTime(manifest, eventSets, time);
     if (target && target.id !== segment.id) {
-      void replay(manifest, eventSets, duration, target, time, playing).catch(renderError);
+      void replay(manifest, eventSets, duration, target, time, shouldResume).catch(renderError);
       return;
     }
-    playing ? playFrom(time) : replayer.pause(clamp(time, tabStart, tabEnd) - tabStart);
+    shouldResume ? playFrom(time) : replayer.pause(clamp(time, tabStart, tabEnd) - tabStart);
   }, { signal: lifetime.signal });
   const onPlaybackKey = (event: KeyboardEvent) => {
     if ((event.key !== "Enter" && event.key !== " ") || event.repeat || isTextEntryTarget(event.target)) return;

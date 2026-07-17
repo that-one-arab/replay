@@ -105,6 +105,19 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
     assert.equal(await page.locator("[data-segment='seg_2']").getAttribute("aria-current"), "page");
     assert.equal(await playbackState(page), "Playing");
 
+    await page.locator("#scrubber").evaluate((node) => {
+      const scrubber = node as HTMLInputElement;
+      const scrub = (time: string) => {
+        scrubber.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+        scrubber.value = time;
+        scrubber.dispatchEvent(new Event("input", { bubbles: true }));
+        scrubber.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      scrub("5900");
+      scrub("3500");
+    });
+    assert.equal(await playbackState(page), "Playing");
+
     await page.locator("[data-speed='8']").click();
     await waitForPaused(page, 2_500);
     assert.equal(await page.locator("#current-time").textContent(), "0:06");
