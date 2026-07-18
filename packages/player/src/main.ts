@@ -27,6 +27,8 @@ const MIN_REFRESH_INDICATOR_MS = 160;
 const MAX_REFRESH_INDICATOR_MS = 1_500;
 const TIMELINE_TOOLTIP_DELAY_MS = 550;
 const CAPTION_LINGER_MS = 4_500;
+const UI_IDLE_MS = 3_200;
+const SEEK_STEP_MS = 5_000;
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 const id = new URLSearchParams(location.search).get("id");
@@ -42,6 +44,9 @@ else {
   maintainReplayLease();
   void load(id);
 }
+app.addEventListener("pointermove", wakeInterface);
+app.addEventListener("pointerdown", wakeInterface);
+window.addEventListener("keydown", wakeInterface, true);
 
 function maintainReplayLease() {
   let leaseId: string | undefined;
@@ -117,8 +122,10 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
   const segmentPicker = manifest.segments.length > 1
     ? `<nav class="segment-picker" aria-label="Recorded browser tabs">${manifest.segments.map((segment, index) => `<div class="segment-tab" data-segment="${escape(segment.id)}" title="Opened at ${format(segment.clock_offset_ms)} — ${escape(segment.page_url)}"${index === 0 ? "" : " hidden"}><span>Tab ${index + 1}</span>${escape(segmentLabel(segment.page_url))}</div>`).join("")}</nav>`
     : "";
+  // The tuned default pace is the recording's "natural" speed — present it as
+  // 1× instead of leaking the internal multiplier into the control.
   const speedControls = [...new Set([0.25, 0.5, defaults.default_speed, 2, 4, 8])]
-    .map((speed) => `<button data-speed="${speed}"${speed === playbackSpeed ? " class=\"selected\"" : ""}>${speed}×</button>`)
+    .map((speed) => `<button data-speed="${speed}"${speed === playbackSpeed ? " class=\"selected\"" : ""}>${speed === defaults.default_speed ? "1×" : `${speed}×`}</button>`)
     .join("");
   const idleControls = ([
     ["cut", "Cut"],
@@ -134,7 +141,7 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
   const chaptersPanel = manifest.markers.length
     ? `<aside class="chapters-panel" id="chapters-panel" aria-label="Recording chapters"><header>Chapters<span>${manifest.markers.length}</span></header><ol>${manifest.markers.map((marker) => `<li><button type="button" data-chapter="${marker.t_ms}"${marker.color === "yellow" ? " data-chapter-color=\"yellow\"" : ""} aria-current="false"><b>${format(marker.t_ms)}</b><span><strong>${escape(marker.label)}</strong>${marker.note ? `<p>${escape(marker.note)}</p>` : ""}</span></button></li>`).join("")}</ol></aside>`
     : "";
-  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div><section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div><div class="idle-control" role="group" aria-label="Idle handling"><span>Idle</span>${idleControls}</div><b id="idle-summary"></b>${shareControl}${chaptersToggle}</div><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section>${chaptersPanel}<div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
+  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="state-flash" id="state-flash" aria-hidden="true"><span></span></div><b id="stage-status" class="sr-only" role="status">Paused</b>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div><section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div><div class="idle-control" role="group" aria-label="Idle handling"><span>Idle</span>${idleControls}</div><b id="idle-summary"></b>${shareControl}${chaptersToggle}</div><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section>${chaptersPanel}<div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
 }
 
 async function detectShareAvailability() {
@@ -253,11 +260,15 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   };
   scrubber.max = String(duration);
   document.querySelector<HTMLElement>("#total-time")!.textContent = format(duration);
+  let lastPlayState: boolean | undefined;
   const setPlaying = (value: boolean) => {
     playing = value;
     document.querySelector<HTMLButtonElement>("#play")!.classList.toggle("is-playing", value);
     document.querySelector<HTMLElement>("#stage-status")!.textContent = value ? "Playing" : "Paused";
     scheduleCaptionFade();
+    wakeInterface();
+    if (lastPlayState !== undefined && lastPlayState !== value) flashPlayState(value);
+    lastPlayState = value;
   };
   const hideRefresh = () => {
     if (refreshTimer) window.clearTimeout(refreshTimer);
@@ -397,12 +408,25 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     const target = segmentAtTime(manifest, eventSets, time) ?? segment;
     void replay(manifest, eventSets, duration, target, time, shouldResume, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
   }, { signal: lifetime.signal });
-  const onPlaybackKey = (event: KeyboardEvent) => {
-    const isPlaybackKey = event.key === "Enter" || event.key === " " || event.key === "Spacebar" || event.code === "Space";
-    if (!isPlaybackKey || event.repeat || isTextEntryTarget(event.target)) return;
-    event.preventDefault();
-    togglePlayback();
+  const seekBy = (delta: number) => {
+    const time = clamp(currentSessionTime + delta, 0, duration);
+    const target = segmentAtTime(manifest, eventSets, time) ?? segment;
+    void replay(manifest, eventSets, duration, target, time, playing, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
   };
+  const onPlaybackKey = (event: KeyboardEvent) => {
+    if (event.repeat || isTextEntryTarget(event.target)) return;
+    if (event.key === "Enter" || event.key === " " || event.key === "Spacebar" || event.code === "Space") {
+      event.preventDefault();
+      togglePlayback();
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      event.preventDefault();
+      seekBy(event.key === "ArrowLeft" ? -SEEK_STEP_MS : SEEK_STEP_MS);
+    } else if (event.key === "f" || event.key === "F") {
+      event.preventDefault();
+      toggleFullscreen();
+    }
+  };
+  mount.addEventListener("click", () => togglePlayback(), { signal: lifetime.signal });
   replayDocumentKeyboardHandler = onPlaybackKey;
   window.addEventListener("keydown", onPlaybackKey, { capture: true, signal: lifetime.signal });
   const frameWindows = new Set<Window>();
@@ -791,6 +815,29 @@ function scheduleCaptionFade() {
   captionTimer = window.setTimeout(() => document.querySelector("#caption")?.classList.remove("is-visible"), CAPTION_LINGER_MS);
 }
 function isPlayerPlaying() { return document.querySelector("#play")?.classList.contains("is-playing") === true; }
+// The chrome steps back while the replay is playing and the pointer rests.
+let uiIdleTimer: number | undefined;
+function wakeInterface() {
+  const screen = document.querySelector<HTMLElement>(".replay-screen");
+  if (!screen) return;
+  screen.classList.remove("is-idle");
+  if (uiIdleTimer) window.clearTimeout(uiIdleTimer);
+  uiIdleTimer = window.setTimeout(() => {
+    if (isPlayerPlaying()) document.querySelector(".replay-screen")?.classList.add("is-idle");
+  }, UI_IDLE_MS);
+}
+function flashPlayState(playing: boolean) {
+  const flash = document.querySelector<HTMLElement>("#state-flash");
+  if (!flash) return;
+  flash.classList.toggle("is-pause", !playing);
+  flash.classList.remove("is-animating");
+  void flash.offsetWidth;
+  flash.classList.add("is-animating");
+}
+function toggleFullscreen() {
+  if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+  else void document.documentElement.requestFullscreen().catch(() => undefined);
+}
 function isActivityEvent(event: ReplayEvent) {
   // Match rrweb's own user-interaction range: mouse movement/clicks, scrolling,
   // viewport changes, and input count as activity; DOM mutation and narration
