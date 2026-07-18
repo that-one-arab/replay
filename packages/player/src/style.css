@@ -207,6 +207,84 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
 .caption-card p { margin: 4px 0 0; color: #c7cad5; font-size: 11px; line-height: 1.45; }
 .caption-card p[hidden] { display: none; }
 
+/* Session title and end cards */
+.session-overlay {
+  position: absolute;
+  z-index: 3;
+  inset: 0 0 126px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 9, 14, .58);
+  backdrop-filter: blur(12px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .35s ease;
+}
+.session-overlay.is-visible { opacity: 1; pointer-events: auto; }
+#intro-card { cursor: pointer; }
+.session-card {
+  max-width: min(600px, calc(100vw - 48px));
+  padding: 20px;
+  text-align: center;
+  transform: translateY(6px);
+  transition: transform .35s ease;
+}
+.session-overlay.is-visible .session-card { transform: none; }
+.session-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: rgba(255, 255, 255, .66);
+  font: 10px "DM Mono";
+  text-transform: uppercase;
+  letter-spacing: .14em;
+}
+.session-kicker i { width: 8px; height: 8px; background: #ff5257; border-radius: 50%; box-shadow: 0 0 10px rgba(255, 82, 87, .8); }
+.session-card h1 {
+  margin: 14px 0 0;
+  font-size: clamp(20px, 3.2vw, 30px);
+  font-weight: 800;
+  letter-spacing: -.02em;
+  line-height: 1.2;
+  color: #fff;
+}
+.session-meta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 14px;
+  color: rgba(255, 255, 255, .62);
+  font: 11px "DM Mono";
+}
+.outcome-badge { padding: 3px 9px; color: #171720; background: #b7abff; border-radius: 999px; font: 10px "DM Mono"; text-transform: capitalize; }
+.session-hint { margin: 26px 0 0; color: rgba(255, 255, 255, .5); font-size: 12px; }
+.session-notes {
+  display: -webkit-box;
+  margin: 16px auto 0;
+  max-width: 480px;
+  color: #c7cad5;
+  font-size: 12px;
+  line-height: 1.55;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.watch-again {
+  margin-top: 24px;
+  padding: 9px 22px;
+  color: #171720;
+  background: #f5f4fa;
+  border: 0;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .35);
+}
+.watch-again:hover { background: #fff; }
+
 /* Control deck */
 .control-deck {
   position: absolute;

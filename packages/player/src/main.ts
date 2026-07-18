@@ -8,7 +8,7 @@ type TabEvent = { t_ms: number; segment_id: string; type: "opened" | "focused" |
 type NavigationEvent = { segment_id: string; kind: "reload" | "navigate"; started_at_ms: number; committed_at_ms: number; ready_at_ms: number; from_url: string; to_url: string };
 type IdleMode = "cut" | "fast_forward" | "preserve";
 type ReplayDefaults = { idle_mode: IdleMode; idle_retained_ms: number; idle_fast_forward_speed: number; default_speed: number };
-type Manifest = { id: string; title: string; markers: Marker[]; segments: Segment[]; tab_events?: TabEvent[]; navigation_events?: NavigationEvent[]; raw_duration_ms?: number; replay_defaults?: ReplayDefaults };
+type Manifest = { id: string; title: string; created_at?: string; outcome?: string; notes?: string; markers: Marker[]; segments: Segment[]; tab_events?: TabEvent[]; navigation_events?: NavigationEvent[]; raw_duration_ms?: number; replay_defaults?: ReplayDefaults };
 type ReplayEvent = { timestamp: number; type: number; data?: { source?: number; href?: string; width?: number; height?: number; text?: string; id?: number; x?: number; y?: number; recSynthetic?: "approach"; positions?: { x: number; y: number; id?: number; timeOffset?: number }[] } };
 type IdleRange = { start: number; end: number };
 type TimelineIdleRange = IdleRange & { originalDuration: number; mode: IdleMode; speed: number };
@@ -37,6 +37,7 @@ let currentSessionTime = 0;
 let lastNarrationKey: string | undefined;
 let captionTimer: number | undefined;
 let chaptersOpen: boolean | undefined;
+let introDismissed = false;
 let shareAvailable = false;
 let shareUrl: string | undefined;
 if (!id) renderError("Choose a recording with `rec open <id>`.");
@@ -89,6 +90,7 @@ async function load(recordingId: string) {
   try {
     currentSessionTime = 0;
     lastNarrationKey = undefined;
+    introDismissed = false;
     shareUrl = undefined;
     shareAvailable = await detectShareAvailability();
     const manifest = await request<Manifest>(`/api/sessions/${encodeURIComponent(recordingId)}/manifest`);
@@ -108,6 +110,7 @@ async function load(recordingId: string) {
       installTimelineTooltips();
       wireShareControl(resolvedManifest.id);
       wireChapters();
+      wireSessionCards();
       await replay(projection.manifest, projection.eventSets, projection.duration, projection.manifest.segments[0], projection.toPlayback(rawTime), autoplay, (nextMode, requestedTime, shouldAutoplay) => {
         idleMode = nextMode;
         void present(projection.toRaw(requestedTime), shouldAutoplay).catch(renderError);
@@ -138,10 +141,15 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
   const chaptersToggle = manifest.markers.length
     ? `<button class="chapters-toggle" id="chapters-toggle" type="button" aria-controls="chapters-panel" aria-expanded="false">Chapters<b>${manifest.markers.length}</b></button>`
     : "";
+  const sessionMeta = sessionMetaMarkup(manifest);
+  const introCard = introDismissed
+    ? ""
+    : `<div class="session-overlay is-visible" id="intro-card"><div class="session-card"><span class="session-kicker"><i></i>Rec replay</span><h1>${escape(manifest.title)}</h1>${sessionMeta}<p class="session-hint">Press play — or space — to watch the recorded journey</p></div></div>`;
+  const endCard = `<div class="session-overlay" id="end-card"><div class="session-card"><span class="session-kicker"><i></i>Replay complete</span><h1>${escape(manifest.title)}</h1>${sessionMeta}${manifest.notes ? `<p class="session-notes">${escape(manifest.notes)}</p>` : ""}<button class="watch-again" id="watch-again" type="button">Watch again</button></div></div>`;
   const chaptersPanel = manifest.markers.length
     ? `<aside class="chapters-panel" id="chapters-panel" aria-label="Recording chapters"><header>Chapters<span>${manifest.markers.length}</span></header><ol>${manifest.markers.map((marker) => `<li><button type="button" data-chapter="${marker.t_ms}"${marker.color === "yellow" ? " data-chapter-color=\"yellow\"" : ""} aria-current="false"><b>${format(marker.t_ms)}</b><span><strong>${escape(marker.label)}</strong>${marker.note ? `<p>${escape(marker.note)}</p>` : ""}</span></button></li>`).join("")}</ol></aside>`
     : "";
-  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="state-flash" id="state-flash" aria-hidden="true"><span></span></div><b id="stage-status" class="sr-only" role="status">Paused</b>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div><section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div><div class="idle-control" role="group" aria-label="Idle handling"><span>Idle</span>${idleControls}</div><b id="idle-summary"></b>${shareControl}${chaptersToggle}</div><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section>${chaptersPanel}<div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
+  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="state-flash" id="state-flash" aria-hidden="true"><span></span></div><b id="stage-status" class="sr-only" role="status">Paused</b>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div>${introCard}${endCard}<section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div><div class="idle-control" role="group" aria-label="Idle handling"><span>Idle</span>${idleControls}</div><b id="idle-summary"></b>${shareControl}${chaptersToggle}</div><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section>${chaptersPanel}<div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
 }
 
 async function detectShareAvailability() {
@@ -233,6 +241,11 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     updateActiveMarker(time);
   };
   const playFrom = (time: number) => {
+    // Real playback is starting — the session cards yield to the recording.
+    // rrweb's seek-while-paused also emits start/pause internally, so the
+    // cards cannot key off setPlaying.
+    dismissIntro();
+    setEndCard(false);
     const start = tabEnd >= duration - 10 && time >= duration - 10 ? tabStart : clamp(time, tabStart, tabEnd);
     // A direct marker/timeline jump is a new playback baseline. Do not announce
     // navigation transitions that were crossed before the selected point.
@@ -344,7 +357,11 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   });
   replayer.on("finish", () => {
     if (nextFocus) void bridgeToNewTab(nextFocus);
-    else { setPlaying(false); updateTimelinePosition(tabEnd); }
+    else {
+      setPlaying(false);
+      updateTimelinePosition(tabEnd);
+      setEndCard(true);
+    }
   });
   replayer.on("mouse-interaction", (payload: unknown) => {
     const interaction = payload as { type?: number; target?: unknown; x?: number; y?: number };
@@ -373,6 +390,8 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     if (visibleNavigation) showRefresh(visibleNavigation, refreshPinned);
   });
   document.querySelectorAll<HTMLButtonElement>("[data-marker], [data-chapter]").forEach((button) => button.onclick = () => {
+    dismissIntro();
+    setEndCard(false);
     const time = Number(button.dataset.marker ?? button.dataset.chapter);
     const target = segmentAtTime(manifest, eventSets, time);
     if (target && target.id !== segment.id) void replay(manifest, eventSets, duration, target, time, false, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
@@ -395,6 +414,8 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   scrubber.addEventListener("pointerdown", beginScrub, { signal: lifetime.signal });
   scrubber.addEventListener("input", () => {
     beginScrub();
+    dismissIntro();
+    setEndCard(false);
     const time = Number(scrubber.value);
     updateTimelinePosition(time);
     syncNavigationAt(time, true);
@@ -409,6 +430,8 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     void replay(manifest, eventSets, duration, target, time, shouldResume, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
   }, { signal: lifetime.signal });
   const seekBy = (delta: number) => {
+    dismissIntro();
+    setEndCard(false);
     const time = clamp(currentSessionTime + delta, 0, duration);
     const target = segmentAtTime(manifest, eventSets, time) ?? segment;
     void replay(manifest, eventSets, duration, target, time, playing, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
@@ -640,6 +663,33 @@ function updateActiveMarker(time: number) {
   });
 }
 
+function sessionMetaMarkup(manifest: Manifest) {
+  const items: string[] = [];
+  if (manifest.outcome && manifest.outcome !== "other") items.push(`<b class="outcome-badge">${escape(manifest.outcome)}</b>`);
+  const created = manifest.created_at ? formatDate(manifest.created_at) : "";
+  if (created) items.push(`<span>${escape(created)}</span>`);
+  items.push(`<span>${format(manifest.raw_duration_ms)}</span>`);
+  return `<div class="session-meta">${items.join("")}</div>`;
+}
+function formatDate(iso: string) {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+function wireSessionCards() {
+  const play = () => document.querySelector<HTMLButtonElement>("#play")?.click();
+  const intro = document.querySelector<HTMLElement>("#intro-card");
+  if (intro) intro.onclick = play;
+  const again = document.querySelector<HTMLButtonElement>("#watch-again");
+  if (again) again.onclick = play;
+}
+function dismissIntro() {
+  if (introDismissed) return;
+  introDismissed = true;
+  document.querySelector("#intro-card")?.classList.remove("is-visible");
+}
+function setEndCard(visible: boolean) {
+  document.querySelector("#end-card")?.classList.toggle("is-visible", visible);
+}
 function wireChapters() {
   const toggle = document.querySelector<HTMLButtonElement>("#chapters-toggle");
   const panel = document.querySelector<HTMLElement>("#chapters-panel");
