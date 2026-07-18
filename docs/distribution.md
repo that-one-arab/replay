@@ -10,6 +10,16 @@ marketplace catalog and `plugins/rec-mcp`, but never the Rec application source
 or runtime archives. Codex supports Git-backed marketplace sources and caches
 the installed plugin separately from the runtime.
 
+To create that repository from this checkout, preserve the plugin directory
+itself (not only its contents):
+
+```sh
+mkdir -p <plugin-marketplace>/plugins
+cp -R /Users/mo/Documents/stitch/plugins/rec-mcp <plugin-marketplace>/plugins/rec-mcp
+```
+
+The marketplace catalog's `source.path` must remain `./plugins/rec-mcp`.
+
 ## User installation
 
 Install **Rec browser recordings** from the approved Codex marketplace. The
