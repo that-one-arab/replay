@@ -184,9 +184,10 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
         node.addEventListener("keydown", (event) => replayDocumentKeyboardHandler?.(event as KeyboardEvent), true);
       },
     }] as never[],
-    insertStyleRules: [".rec-focus-target{outline:3px solid #6956ff!important;outline-offset:3px!important;box-shadow:0 0 0 7px rgba(105,86,255,.18)!important;border-radius:4px!important}"]
+    insertStyleRules: [".rec-focus-target{outline:2px solid rgba(105,86,255,.9)!important;outline-offset:3px!important;box-shadow:0 0 0 6px rgba(105,86,255,.16)!important;border-radius:4px!important}"]
   });
   fitReplay(mount, replayer, viewport);
+  revealCursorOnFirstMove(replayer, lifetime);
   window.addEventListener("resize", () => fitReplay(mount, replayer, viewport), { signal: lifetime.signal });
   let playing = false;
   let scrubbing = false;
@@ -321,12 +322,16 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     else { setPlaying(false); updateTimelinePosition(tabEnd); }
   });
   replayer.on("mouse-interaction", (payload: unknown) => {
-    const target = (payload as { target?: unknown }).target;
+    const interaction = payload as { type?: number; target?: unknown; x?: number; y?: number };
+    // 2 = click, 4 = double click in rrweb's MouseInteractions enum. Focus,
+    // blur, and pointer downs replay silently.
+    if (interaction.type !== 2 && interaction.type !== 4) return;
+    spawnClickRipple(replayer, interaction);
+    const target = interaction.target;
     if (!isElementLike(target)) return;
     target.classList.remove("rec-focus-target");
     target.classList.add("rec-focus-target");
     window.setTimeout(() => target.classList.remove("rec-focus-target"), 900);
-    setActionCaption(`Clicked ${readableTarget(target)}`, "The selected control is highlighted in the replay.");
   });
   document.querySelector<HTMLButtonElement>("#play")!.onclick = togglePlayback;
   document.querySelectorAll<HTMLButtonElement>("[data-idle-mode]").forEach((button) => button.onclick = () => {
@@ -751,13 +756,15 @@ function humanizeEvents(events: ReplayEvent[]) {
     if (event.type === 3 && event.data?.source === 1) continue;
     const adjusted = { ...event, timestamp: event.timestamp + addedDelay, data: event.data ? { ...event.data } : undefined };
     const pointer = pointerPosition(adjusted);
-    if (isDirectPointerInteraction(adjusted) && pointer && (!cursor || adjusted.timestamp - cursor.t >= 280)) {
+    // The first pointer position has no visible origin to travel from — the
+    // cursor fades in on target instead of flying in from the page corner.
+    if (isDirectPointerInteraction(adjusted) && pointer && cursor && adjusted.timestamp - cursor.t >= 280) {
       const approachAt = Math.max(lastEmittedAt + 1, adjusted.timestamp - CURSOR_APPROACH_MS);
       if (approachAt < adjusted.timestamp - 45) {
         // A single endpoint still lets rrweb paint the cursor directly on the
-        // target. Give it a short, timed path instead. The first path starts
-        // at the visible origin; later paths continue from the prior target.
-        const origin = cursor ?? { x: 0, y: 0 };
+        // target. Give it a short, timed path instead, continuing from the
+        // prior target.
+        const origin = cursor;
         const steps = 8;
         const positions = Array.from({ length: steps }, (_, index) => {
           const progress = index / (steps - 1);
@@ -830,6 +837,30 @@ function recordingViewport(events: ReplayEvent[]) {
   const meta = events.find((event) => event.type === 4 && event.data?.width && event.data?.height);
   return { width: meta?.data?.width ?? 1280, height: meta?.data?.height ?? 720 };
 }
+function revealCursorOnFirstMove(replayer: Replayer, lifetime: AbortController) {
+  const mouse = replayer.wrapper.querySelector<HTMLElement>(".replayer-mouse");
+  if (!mouse) return;
+  // rrweb parks the cursor at the page origin until the first pointer event
+  // positions it. Keep it invisible until then.
+  const reveal = new MutationObserver(() => {
+    replayer.wrapper.classList.add("rec-cursor-live");
+    reveal.disconnect();
+  });
+  reveal.observe(mouse, { attributes: true, attributeFilter: ["style"] });
+  lifetime.signal.addEventListener("abort", () => reveal.disconnect(), { once: true });
+}
+function spawnClickRipple(replayer: Replayer, interaction: { x?: number; y?: number }) {
+  const mouse = replayer.wrapper.querySelector<HTMLElement>(".replayer-mouse");
+  const x = typeof interaction.x === "number" ? interaction.x : parseFloat(mouse?.style.left ?? "");
+  const y = typeof interaction.y === "number" ? interaction.y : parseFloat(mouse?.style.top ?? "");
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  const ripple = document.createElement("span");
+  ripple.className = "rec-click-ripple";
+  ripple.style.left = `${x}px`;
+  ripple.style.top = `${y}px`;
+  replayer.wrapper.appendChild(ripple);
+  window.setTimeout(() => ripple.remove(), 700);
+}
 function fitReplay(mount: HTMLElement, replayer: Replayer, viewport: { width: number; height: number }) {
   const scale = Math.min(mount.clientWidth / viewport.width, mount.clientHeight / viewport.height);
   replayer.wrapper.style.width = `${viewport.width}px`;
@@ -845,7 +876,6 @@ function isTextEntryTarget(target: EventTarget | null) {
 }
 type ElementLike = { nodeType: number; classList: DOMTokenList; getAttribute(name: string): string | null; textContent: string | null; tagName: string };
 function isElementLike(value: unknown): value is ElementLike { return typeof value === "object" && value !== null && (value as { nodeType?: number }).nodeType === 1 && "classList" in value; }
-function readableTarget(target: ElementLike) { const text = target.getAttribute("aria-label") || target.textContent?.trim() || target.tagName.toLowerCase(); return `“${text.replace(/\s+/g, " ").slice(0, 64)}”`; }
 async function request<T>(url: string, init?: RequestInit) { const response = await fetch(url, init); if (!response.ok) throw new Error((await response.json().catch(() => ({ error: response.statusText }))).error); return response.json() as Promise<T>; }
 function format(ms?: number) { if (!ms) return "0:00"; const seconds = Math.round(ms / 1000); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`; }
 function formatDuration(ms: number) { return `${(ms / 1_000).toFixed(ms >= 10_000 ? 0 : 1)}s`; }

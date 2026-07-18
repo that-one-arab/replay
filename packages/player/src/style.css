@@ -24,7 +24,38 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
 }
 .replay-screen #replay > .replayer-wrapper { flex: 0 0 auto; transform-origin: center; background: #111218; }
 .replay-screen #replay iframe { border: 0 !important; }
-.replay-screen .replayer-mouse { transition: left 55ms linear, top 55ms linear; will-change: left, top; }
+/* Replayed cursor: a centered dot instead of rrweb's arrow — the driver is an
+   agent, not a hand, and the dot reads cleanly at any replay scale. */
+.replay-screen .replayer-mouse {
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border: 2px solid rgba(23, 23, 32, .85);
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px rgba(185, 172, 255, .5), 0 2px 8px rgba(0, 0, 0, .4);
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  transition: left 90ms cubic-bezier(.22, .61, .36, 1), top 90ms cubic-bezier(.22, .61, .36, 1), opacity .25s ease;
+  will-change: left, top;
+}
+.replay-screen .replayer-wrapper.rec-cursor-live .replayer-mouse { opacity: 1; }
+.replay-screen .replayer-mouse::after { content: none; }
+.replay-screen .rec-click-ripple {
+  position: absolute;
+  z-index: 11;
+  width: 46px;
+  height: 46px;
+  margin: -23px 0 0 -23px;
+  border-radius: 50%;
+  border: 2px solid rgba(169, 155, 255, .95);
+  background: radial-gradient(circle, rgba(169, 155, 255, .5), rgba(169, 155, 255, 0) 70%);
+  pointer-events: none;
+  animation: rec-ripple .55s cubic-bezier(.2, .6, .35, 1) forwards;
+}
+@keyframes rec-ripple {
+  from { transform: scale(.25); opacity: 1; }
+  to { transform: scale(1.35); opacity: 0; }
+}
 .video-shade {
   position: absolute;
   z-index: 2;
