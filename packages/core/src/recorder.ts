@@ -95,6 +95,7 @@ export class Recorder {
       recorder: { version: "0.1.0", rrweb: "2.0.0-alpha.20", record_canvas: this.recordCanvas, record_cross_origin_iframes: this.origins.size > 1 },
       origins,
       masking: { mask_all_inputs: Boolean(options.maskAllInputs), passwords: true },
+      ...(options.replayDefaults ? { replay_defaults: options.replayDefaults } : {}),
       segments: [],
       tab_events: [],
       navigation_events: [],

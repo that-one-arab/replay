@@ -181,6 +181,9 @@ async function ensureBrowser(argumentsValue: JsonObject) {
     launched: result.launched === true,
     cdpEndpoint: result.cdp_endpoint,
     browserState: result.browser_state,
+    browserConfigState: result.browser_config_state,
+    browserConfig: result.browser_config,
+    activeBrowserConfig: result.active_browser_config,
   };
 }
 
@@ -192,6 +195,7 @@ async function attachBrowser(argumentsValue: JsonObject) {
     managed: result.managed === true,
     cdpEndpoint: result.cdp_endpoint,
     browserState: result.browser_state,
+    browserConfigState: result.browser_config_state,
   };
 }
 
@@ -213,6 +217,12 @@ async function recordingStatus() {
     managedBrowser: health.managed_browser === true,
     pageCount: numberOrZero(health.page_count),
     navigatedPageCount,
+    browserConfigState: health.browser_config_state,
+    browserConfig: health.browser_config,
+    activeBrowserConfig: health.active_browser_config,
+    replayDefaults: health.replay_defaults,
+    configWarnings: health.config_warnings,
+    configError: health.config_error,
     recording: recording ? {
       sessionId: health.sessionId,
       elapsedMs: health.elapsedMs,
@@ -269,7 +279,7 @@ async function uploadArtifact(sessionId: string, artifact: string, shareEndpoint
 async function ensureDaemon(): Promise<JsonObject> {
   try { return object(await api("GET", "/health", undefined, false)); } catch { /* start below */ }
   if (!existsSync(daemonEntry)) throw new Error("rec is not built. Run pnpm build before starting the MCP server.");
-  const child = spawn(process.execPath, [daemonEntry], { detached: true, stdio: "ignore", cwd: resolve(moduleDirectory, "../../..") });
+  const child = spawn(process.execPath, [daemonEntry], { detached: true, stdio: "ignore", cwd: resolve(moduleDirectory, "../../.."), env: { ...process.env, REC_CONFIG_CWD: process.cwd() } });
   child.unref();
   let lastError: unknown;
   for (let attempt = 0; attempt < 25; attempt += 1) {

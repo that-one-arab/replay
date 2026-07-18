@@ -55,6 +55,13 @@ export interface RecordingManifest {
   recorder: { version: string; rrweb: string; record_canvas: boolean; record_cross_origin_iframes: boolean };
   origins: string[];
   masking: { mask_all_inputs: boolean; passwords: true };
+  /** Author defaults for player-only pacing; absent on recordings made before configuration support. */
+  replay_defaults?: {
+    idle_mode: "cut" | "fast_forward" | "preserve";
+    idle_retained_ms: number;
+    idle_fast_forward_speed: number;
+    default_speed: number;
+  };
   raw_duration_ms?: number;
   active_duration_ms?: number;
   segments: Segment[];
@@ -71,6 +78,8 @@ export interface StartOptions {
   maskAllInputs?: boolean;
   /** Opt-in because canvas pixels can add sensitive visual data and bundle size. */
   recordCanvas?: boolean;
+  /** Resolved by Rec's daemon, not normally passed by a coding agent. */
+  replayDefaults?: RecordingManifest["replay_defaults"];
 }
 
 export interface StopResult {

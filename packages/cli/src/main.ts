@@ -5,7 +5,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 // The CLI build runs immediately after core's build, including when this
 // workspace has not been linked by a package manager yet.
-import { exportPath, exportSession, importSession } from "../../core/dist/index.js";
+import { exportPath, exportSession, importSession, resolveRecConfig } from "../../core/dist/index.js";
 
 const endpoint = process.env.REC_DAEMON_URL ?? "http://127.0.0.1:7717";
 const [command, ...args] = process.argv.slice(2);
@@ -23,6 +23,7 @@ try {
     case "export": await exportRecording(args); break;
     case "import": await importRecording(args); break;
     case "share": await shareRecording(args); break;
+    case "config": await config(args); break;
     case "doctor": await doctor(); break;
     default: usage(command ? `Unknown command: ${command}` : undefined);
   }
@@ -122,7 +123,18 @@ async function doctor() {
   try { const health = await api("GET", "/health") as { cdp_endpoint?: string; state: string }; results.push(`daemon: healthy (${health.state})`); results.push(`browser: ${health.cdp_endpoint ?? "not attached"}`); } catch { results.push("daemon: unavailable (run pnpm build, then any rec command)"); }
   const home = process.env.REC_HOME ?? join(process.env.HOME ?? process.cwd(), ".rec");
   results.push(`spool: ${home}`);
+  try {
+    const config = await resolveRecConfig();
+    results.push(`config: ${config.sources.length ? config.sources.join(", ") : "built-in defaults"}`);
+    for (const warning of config.warnings) results.push(`config warning: ${warning}`);
+  } catch (error) { results.push(`config: invalid (${error instanceof Error ? error.message : String(error)})`); }
   console.log(results.join("\n"));
+}
+
+async function config(values: string[]) {
+  if (values[0] !== "show") return usage("Use rec config show");
+  const config = await resolveRecConfig();
+  print({ browser: { ...config.browser, viewport: `${config.browser.viewport.width}x${config.browser.viewport.height}` }, replay: config.replay, sources: config.sources, warnings: config.warnings });
 }
 
 async function api(method: string, path: string, body?: unknown): Promise<unknown> {
@@ -138,7 +150,7 @@ async function ensureDaemon() {
   try { if ((await fetch(`${endpoint}/health`)).ok) return; } catch { /* start below */ }
   const entry = resolve(process.cwd(), "packages/daemon/dist/main.js");
   if (!existsSync(entry)) throw new Error("rec is not built. Run pnpm install && pnpm build first.");
-  const child = spawn(process.execPath, [entry], { detached: true, stdio: "ignore", cwd: process.cwd() });
+  const child = spawn(process.execPath, [entry], { detached: true, stdio: "ignore", cwd: process.cwd(), env: { ...process.env, REC_CONFIG_CWD: process.cwd() } });
   child.unref();
   for (let attempt = 0; attempt < 25; attempt += 1) {
     await new Promise((resolveWait) => setTimeout(resolveWait, 100));

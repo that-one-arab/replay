@@ -22,6 +22,7 @@ void main().catch((error: unknown) => {
 async function main() {
   await ensureDaemon();
   const ensured = object(await api("POST", "/api/browser/ensure", { executable: process.env.REC_BROWSER_EXECUTABLE }, false));
+  if (ensured.browser_state === "restart_required") throw new Error("Rec browser settings changed. Stop the managed browser with `rec browser stop`, then start this task again.");
   const cdpEndpoint = requiredString(ensured.cdp_endpoint, "Rec browser CDP endpoint");
   const command = process.env.REC_PLAYWRIGHT_MCP_COMMAND ?? "npx";
   const args = playwrightArgs();
@@ -49,7 +50,7 @@ function playwrightArgs() {
 async function ensureDaemon(): Promise<JsonObject> {
   try { return object(await api("GET", "/health", undefined, false)); } catch { /* launch below */ }
   if (!existsSync(daemonEntry)) throw new Error("rec is not built. Run npm run build before starting the Playwright launcher.");
-  const child = spawn(process.execPath, [daemonEntry], { detached: true, stdio: "ignore", cwd: resolve(moduleDirectory, "../../.."), env: process.env });
+  const child = spawn(process.execPath, [daemonEntry], { detached: true, stdio: "ignore", cwd: resolve(moduleDirectory, "../../.."), env: { ...process.env, REC_CONFIG_CWD: process.cwd() } });
   child.unref();
   let lastError: unknown;
   for (let attempt = 0; attempt < 25; attempt += 1) {

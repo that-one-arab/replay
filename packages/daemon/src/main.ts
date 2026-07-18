@@ -4,12 +4,13 @@ import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
-import { Recorder, exportSession, recHome, sessionsDir, sessionPath, type Outcome, type RecordingManifest, type StartOptions } from "@signit/rec-core";
+import { Recorder, exportSession, recHome, resolveRecConfig, sessionsDir, sessionPath, type BrowserConfig, type Outcome, type RecordingManifest, type StartOptions } from "@signit/rec-core";
 
 const port = Number(process.env.REC_PORT ?? 7717);
 const recorder = new Recorder();
 let cdpEndpoint: string | undefined;
 let managedBrowser = existsSync(join(recHome(), "browser.json"));
+let activeBrowserConfig: BrowserConfig | undefined;
 
 const server = createServer((request, response) => void route(request, response).catch((error: unknown) => reply(response, 500, { error: messageOf(error) })));
 server.listen(port, "127.0.0.1", () => console.log(`rec daemon listening on http://127.0.0.1:${port}`));
@@ -23,7 +24,8 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   if (request.method === "POST" && url.pathname === "/api/browser/stop") return reply(response, 200, await stopBrowser());
   if (request.method === "POST" && url.pathname === "/api/sessions/start") {
     if (!cdpEndpoint) throw new Error("No browser attached. Run rec attach --cdp <url> or rec browser start.");
-    return reply(response, 201, await recorder.start(body as StartOptions));
+    const config = await resolveRecConfig();
+    return reply(response, 201, await recorder.start({ ...(body as StartOptions), replayDefaults: config.replay }));
   }
   if (request.method === "POST" && url.pathname === "/api/sessions/marker") {
     await recorder.marker(String(body?.label ?? ""), optionalString(body?.note), markerPlacement(body?.placement));
@@ -48,28 +50,37 @@ async function route(request: IncomingMessage, response: ServerResponse) {
 async function startBrowser(executable: string) {
   await recoverLostBrowserRecording();
   if (recorder.status().state === "recording") throw new Error("Cannot change browser attachment while a recording is active");
+  const resolved = await resolveRecConfig();
+  const browserConfig: BrowserConfig = executable ? { ...resolved.browser, executable } : resolved.browser;
+  const fingerprint = JSON.stringify({ browser: browserConfig });
   const statePath = join(recHome(), "browser.json");
   if (existsSync(statePath)) {
     try {
-      const saved = JSON.parse(await readFile(statePath, "utf8")) as { pid: number; cdp_endpoint: string };
+      const saved = JSON.parse(await readFile(statePath, "utf8")) as ManagedBrowserState;
       process.kill(saved.pid, 0);
+      if (saved.config_fingerprint !== fingerprint) {
+        return { managed: true, launched: false, browser_state: "restart_required", browser_config_state: "restart_required", browser_config: browserConfig, active_browser_config: saved.browser_config };
+      }
       await waitForBrowser(saved.cdp_endpoint, 5);
       await recorder.attach(saved.cdp_endpoint);
       cdpEndpoint = saved.cdp_endpoint;
       managedBrowser = true;
-      return { managed: true, launched: false, cdp_endpoint: cdpEndpoint, browser_state: "ready" };
+      activeBrowserConfig = saved.browser_config;
+      return browserResponse(false, "ready", browserConfig);
     } catch {
       await unlink(statePath).catch(() => undefined);
     }
   }
-  const browser = executable || process.env.REC_BROWSER_EXECUTABLE || chromeExecutable();
+  const browser = browserConfig.executable || chromeExecutable();
   if (!browser) throw new Error("Chrome was not found. Set REC_BROWSER_EXECUTABLE or use rec attach --cdp.");
   const managedEndpoint = "http://127.0.0.1:9333";
   if (await browserAvailable(managedEndpoint)) {
     throw new Error(`A browser is already listening at ${managedEndpoint}, but Rec does not own it. Use recording_attach_browser with its endpoint or stop that browser before calling recording_browser_ensure.`);
   }
   await mkdir(recHome(), { recursive: true });
-  const child = spawn(browser, ["--remote-debugging-port=9333", `--user-data-dir=${join(recHome(), "chromium-profile")}`, "--no-first-run", "--no-default-browser-check"], { detached: true, stdio: "ignore" });
+  const launchArgs = ["--remote-debugging-port=9333", `--user-data-dir=${join(recHome(), "chromium-profile")}`, "--no-first-run", "--no-default-browser-check"];
+  if (browserConfig.headless) launchArgs.push("--headless=new", `--window-size=${browserConfig.viewport.width},${browserConfig.viewport.height}`);
+  const child = spawn(browser, launchArgs, { detached: true, stdio: "ignore" });
   child.unref();
   cdpEndpoint = managedEndpoint;
   try {
@@ -82,9 +93,10 @@ async function startBrowser(executable: string) {
     cdpEndpoint = undefined;
     throw error;
   }
-  await writeFile(statePath, JSON.stringify({ pid: child.pid, cdp_endpoint: cdpEndpoint }) + "\n");
+  await writeFile(statePath, JSON.stringify({ pid: child.pid, cdp_endpoint: cdpEndpoint, config_fingerprint: fingerprint, browser_config: browserConfig }) + "\n");
   managedBrowser = true;
-  return { managed: true, launched: true, cdp_endpoint: cdpEndpoint, browser_state: "ready" };
+  activeBrowserConfig = browserConfig;
+  return browserResponse(true, "ready", browserConfig);
 }
 
 async function stopBrowser() {
@@ -98,6 +110,7 @@ async function stopBrowser() {
   await recorder.close();
   cdpEndpoint = undefined;
   managedBrowser = false;
+  activeBrowserConfig = undefined;
   return { stopped: true, managed: true };
 }
 
@@ -109,11 +122,13 @@ async function attachBrowser(endpoint: string) {
   await recorder.attach(endpoint);
   cdpEndpoint = endpoint;
   managedBrowser = false;
+  activeBrowserConfig = undefined;
   return { managed: false, cdp_endpoint: cdpEndpoint, browser_state: "ready" };
 }
 
 async function health() {
   const browser = recorder.browserStatus();
+  const config = await configDiagnostics();
   return {
     ok: true,
     cdp_endpoint: cdpEndpoint,
@@ -121,8 +136,30 @@ async function health() {
     browser_state: browser.attached ? "ready" : "unavailable",
     page_count: browser.pageCount,
     navigated_page_count: browser.navigatedPageCount,
+    ...config,
     ...recorder.status(),
   };
+}
+
+type ManagedBrowserState = { pid: number; cdp_endpoint: string; config_fingerprint?: string; browser_config?: BrowserConfig };
+function browserResponse(launched: boolean, browserState: "ready" | "restart_required", config: BrowserConfig) {
+  return {
+    managed: true,
+    launched,
+    ...(browserState === "ready" ? { cdp_endpoint: cdpEndpoint } : {}),
+    browser_state: browserState,
+    browser_config_state: browserState === "ready" ? "matched" : "restart_required",
+    browser_config: config,
+    ...(activeBrowserConfig ? { active_browser_config: activeBrowserConfig } : {}),
+  };
+}
+async function configDiagnostics() {
+  try {
+    const config = await resolveRecConfig();
+    return { browser_config: config.browser, replay_defaults: config.replay, config_sources: config.sources, config_warnings: config.warnings, browser_config_state: managedBrowser && !activeBrowserConfig ? "restart_required" : "matched" };
+  } catch (error) {
+    return { config_error: messageOf(error), browser_config_state: "invalid" };
+  }
 }
 
 /**
