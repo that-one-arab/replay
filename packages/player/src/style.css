@@ -261,7 +261,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
   color: rgba(255, 255, 255, .62);
   font: 11px "DM Mono";
 }
-.outcome-badge { padding: 3px 9px; color: #171720; background: #b7abff; border-radius: 999px; font: 10px "DM Mono"; text-transform: capitalize; }
 .session-hint { margin: 26px 0 0; color: rgba(255, 255, 255, .5); font-size: 12px; }
 .session-notes {
   display: -webkit-box;

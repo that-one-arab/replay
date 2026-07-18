@@ -484,21 +484,40 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     const target = segmentAtTime(manifest, eventSets, time) ?? segment;
     void replay(manifest, eventSets, duration, target, time, shouldResume, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
   }, { signal: lifetime.signal });
-  const seekBy = (delta: number) => {
+  const jumpTo = (time: number) => {
     dismissIntro();
     setEndCard(false);
-    const time = clamp(currentSessionTime + delta, 0, duration);
-    const target = segmentAtTime(manifest, eventSets, time) ?? segment;
-    void replay(manifest, eventSets, duration, target, time, playing, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
+    const clamped = clamp(time, 0, duration);
+    const target = segmentAtTime(manifest, eventSets, clamped) ?? segment;
+    void replay(manifest, eventSets, duration, target, clamped, playing, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
+  };
+  const seekBy = (delta: number) => jumpTo(currentSessionTime + delta);
+  // Arrow keys hop between chapter markers so viewers land on the moments that
+  // matter; with no markers they fall back to a fixed jog. A small epsilon keeps
+  // a jump from snapping back onto the marker the playhead is already sitting on.
+  const jumpToMarker = (direction: -1 | 1) => {
+    const times = manifest.markers
+      .map((marker) => marker.t_ms)
+      .filter((time) => time > 0 && time < duration)
+      .sort((left, right) => left - right);
+    if (!times.length) { seekBy(direction * SEEK_STEP_MS); return; }
+    const next = direction > 0
+      ? times.find((time) => time > currentSessionTime + 250)
+      : [...times].reverse().find((time) => time < currentSessionTime - 250);
+    jumpTo(next ?? (direction > 0 ? duration : 0));
   };
   const onPlaybackKey = (event: KeyboardEvent) => {
-    if (event.repeat || isTextEntryTarget(event.target)) return;
+    // The replayed page is a passive playback, so keystrokes must never reach its
+    // form fields — only guard against text entry in the player's own chrome
+    // (top document), never the recorded content inside the replay iframe.
+    if (event.repeat) return;
+    if (isTextEntryTarget(event.target) && isMainDocumentTarget(event.target)) return;
     if (event.key === "Enter" || event.key === " " || event.key === "Spacebar" || event.code === "Space") {
       event.preventDefault();
       togglePlayback();
     } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       event.preventDefault();
-      seekBy(event.key === "ArrowLeft" ? -SEEK_STEP_MS : SEEK_STEP_MS);
+      jumpToMarker(event.key === "ArrowLeft" ? -1 : 1);
     } else if (event.key === "f" || event.key === "F") {
       event.preventDefault();
       toggleFullscreen();
@@ -723,7 +742,8 @@ function updateActiveMarker(time: number) {
 
 function sessionMetaMarkup(manifest: Manifest) {
   const items: string[] = [];
-  if (manifest.outcome && manifest.outcome !== "other") items.push(`<b class="outcome-badge">${escape(manifest.outcome)}</b>`);
+  // Recordings are a general-purpose capture of any flow, not just bug repros,
+  // so the card carries no outcome tag — only neutral context (date, length).
   const created = manifest.created_at ? formatDate(manifest.created_at) : "";
   if (created) items.push(`<span>${escape(created)}</span>`);
   items.push(`<span>${format(manifest.raw_duration_ms)}</span>`);
@@ -1227,6 +1247,11 @@ function isTextEntryTarget(target: EventTarget | null) {
   if (element.isContentEditable || ["TEXTAREA", "SELECT"].includes(element.tagName ?? "")) return true;
   if (element.tagName !== "INPUT") return false;
   return !["button", "checkbox", "color", "file", "hidden", "image", "radio", "range", "reset", "submit"].includes((element.type ?? "text").toLowerCase());
+}
+// A target lives in the player's own chrome only when it belongs to the top
+// document; anything inside the replay iframe reports a different ownerDocument.
+function isMainDocumentTarget(target: EventTarget | null) {
+  return !!target && target instanceof Node && target.ownerDocument === document;
 }
 type ElementLike = { nodeType: number; classList: DOMTokenList; getAttribute(name: string): string | null; textContent: string | null; tagName: string };
 function isElementLike(value: unknown): value is ElementLike { return typeof value === "object" && value !== null && (value as { nodeType?: number }).nodeType === 1 && "classList" in value; }
