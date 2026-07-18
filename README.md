@@ -123,6 +123,7 @@ usage, and limitations are in the [Railway sharing guide](docs/phase-4-railway-s
 
 ## Documentation
 
+- [Architecture](ARCHITECTURE.md)
 - [MCP tools and lifecycle](docs/mcp.md)
 - [Recording format](docs/format.md)
 - [Portable artifacts: implementation and E2E guide](docs/phase-3-portable-artifacts.md)
