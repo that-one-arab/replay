@@ -11,6 +11,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const userHome = homedir();
 const developmentHome = join(userHome, ".rec-dev");
 const developmentPort = 7718;
+const developmentShareUrl = "https://stitch-production-2492.up.railway.app";
 const marketplaceName = "rec-dev";
 const marketplaceRoot = join(developmentHome, "codex-marketplace");
 const developmentPluginRoot = join(marketplaceRoot, "plugins", "rec-mcp-dev");
@@ -55,7 +56,7 @@ async function printStatus() {
       recHome: developmentHome,
       daemonUrl: `http://127.0.0.1:${developmentPort}`,
       source: repositoryRoot,
-      sharing: "disabled",
+      sharing: developmentShareUrl,
     },
     production: {
       plugin: "rec-mcp@rec",
@@ -94,6 +95,7 @@ export function developmentMcpConfig(root, home, port) {
     REC_HOME: home,
     REC_PORT: String(port),
     REC_DAEMON_URL: `http://127.0.0.1:${port}`,
+    REC_SHARE_URL: developmentShareUrl,
   };
   return {
     mcpServers: {

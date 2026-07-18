@@ -10,6 +10,7 @@ test("development Codex MCP configuration isolates browser and recording state",
     assert.equal(server.env.REC_HOME, "/Users/example/.rec-dev");
     assert.equal(server.env.REC_PORT, "7718");
     assert.equal(server.env.REC_DAEMON_URL, "http://127.0.0.1:7718");
+    assert.equal(server.env.REC_SHARE_URL, "https://stitch-production-2492.up.railway.app");
   }
   assert.match(config.mcpServers.rec.args[0], /packages\/mcp\/dist\/main\.js$/);
   assert.match(config.mcpServers.playwright.args[0], /packages\/playwright-launcher\/dist\/main\.js$/);

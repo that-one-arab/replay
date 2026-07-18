@@ -6,7 +6,7 @@ they each expose the MCP server names `rec` and `playwright`.
 | Lane | Code | Browser/session state | Daemon | Sharing |
 | --- | --- | --- | --- | --- |
 | Production | Marketplace plugin and packaged runtime | `~/.rec` | `127.0.0.1:7717` | Enabled by the production plugin |
-| Development | Current source checkout | `~/.rec-dev` | `127.0.0.1:7718` | Disabled |
+| Development | Current source checkout | `~/.rec-dev` | `127.0.0.1:7718` | Enabled against the shared share service |
 
 The state split includes the Chrome profile, browser ownership file, sessions,
 exports, and configuration. Development never downloads or reuses the production
