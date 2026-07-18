@@ -36,6 +36,29 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
     await waitForRefresh(page, 5_000);
     assert.notEqual(await page.locator("#current-time").textContent(), "0:07", "reload context remains visible before the next compacted idle interval");
 
+    // Recreating the replay during a seek must also reset transient navigation
+    // UI from the old replay instance. The refresh did not occur at time zero.
+    await page.locator("#scrubber").evaluate((node) => {
+      const scrubber = node as HTMLInputElement;
+      scrubber.value = "0";
+      scrubber.dispatchEvent(new Event("input", { bubbles: true }));
+      scrubber.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await page.waitForTimeout(50);
+    assert.equal(await page.locator("#refresh-indicator").evaluate((element) => element.classList.contains("is-visible")), false, "seeking away from a reload clears its refresh indicator");
+
+    // rrweb rebuilds from historical events when seeking forward. That rebuild
+    // includes the old navigation meta event, but it is not a refresh happening
+    // at the selected time.
+    await page.locator("#scrubber").evaluate((node) => {
+      const scrubber = node as HTMLInputElement;
+      scrubber.value = "6000";
+      scrubber.dispatchEvent(new Event("input", { bubbles: true }));
+      scrubber.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await page.waitForTimeout(100);
+    assert.equal(await page.locator("#refresh-indicator").evaluate((element) => element.classList.contains("is-visible")), false, "seeking past a reload does not announce it again");
+
     const replayAction = page.frameLocator(".replayer-wrapper iframe").getByText("Continue");
     await replayAction.focus();
     await replayAction.evaluate((element) => element.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true, cancelable: true })));
@@ -231,6 +254,7 @@ async function waitForHidden(locator: import("playwright-core").Locator, timeout
   throw new Error("Tab did not close in time.");
 }
 
+const fixtureRecordingStartedAt = 1_700_000_000_000;
 const fixtureEvents = [
   { type: 4, data: { href: "http://fixture/", width: 800, height: 450 }, timestamp: 0 },
   { type: 2, data: { node: { type: 0, childNodes: [{ type: 1, name: "html", publicId: "", systemId: "", id: 2 }, { type: 2, tagName: "html", attributes: {}, id: 3, childNodes: [{ type: 2, tagName: "head", attributes: {}, id: 4, childNodes: [] }, { type: 2, tagName: "body", attributes: {}, id: 5, childNodes: [{ type: 2, tagName: "button", attributes: { id: "fixture-action" }, id: 6, childNodes: [{ type: 3, textContent: "Continue", id: 7 }] }] }] }], id: 1 }, initialOffset: { left: 0, top: 0 } }, timestamp: 10 },
@@ -242,7 +266,7 @@ const fixtureEvents = [
   { type: 3, data: { source: 1, positions: [{ x: 160, y: 100, id: 6, timeOffset: 0 }] }, timestamp: 16_000 },
   { type: 3, data: { source: 2, type: 2, id: 6, x: 160, y: 100, pointerType: 0 }, timestamp: 16_000 },
   { type: 5, data: { tag: "fixture", payload: { step: "after-idle" } }, timestamp: 16_001 },
-];
+].map((event) => ({ ...event, timestamp: event.timestamp + fixtureRecordingStartedAt }));
 
 function fixtureSnapshot() {
   return { type: 0, childNodes: [{ type: 1, name: "html", publicId: "", systemId: "", id: 2 }, { type: 2, tagName: "html", attributes: {}, id: 3, childNodes: [{ type: 2, tagName: "head", attributes: {}, id: 4, childNodes: [] }, { type: 2, tagName: "body", attributes: {}, id: 5, childNodes: [{ type: 2, tagName: "button", attributes: { id: "fixture-action" }, id: 6, childNodes: [{ type: 3, textContent: "Continue", id: 7 }] }] }] }], id: 1 };
@@ -252,21 +276,21 @@ const inviteEvents = [
   { type: 4, data: { href: "http://fixture/invite-preview", width: 800, height: 450 }, timestamp: 3_000 },
   { type: 2, data: { node: { type: 0, childNodes: [{ type: 1, name: "html", publicId: "", systemId: "", id: 2 }, { type: 2, tagName: "html", attributes: {}, id: 3, childNodes: [{ type: 2, tagName: "head", attributes: {}, id: 4, childNodes: [] }, { type: 2, tagName: "body", attributes: {}, id: 5, childNodes: [{ type: 2, tagName: "h1", attributes: {}, id: 6, childNodes: [{ type: 3, textContent: "Invite preview", id: 7 }] }] }] }], id: 1 }, initialOffset: { left: 0, top: 0 } }, timestamp: 3_010 },
   { type: 5, data: { tag: "fixture", payload: { step: "popup-opened" } }, timestamp: 6_000 },
-];
+].map((event) => ({ ...event, timestamp: event.timestamp + fixtureRecordingStartedAt }));
 
 const onboardingEvents = [
   fixtureEvents[0],
   fixtureEvents[1],
-  { type: 5, data: { tag: "fixture", payload: { step: "onboarding-complete" } }, timestamp: 2_000 },
+  { type: 5, data: { tag: "fixture", payload: { step: "onboarding-complete" } }, timestamp: fixtureRecordingStartedAt + 2_000 },
 ];
 
 const focusCycleOnboardingEvents = [
   fixtureEvents[0],
   fixtureEvents[1],
-  { type: 5, data: { tag: "fixture", payload: { step: "returned-to-main-tab" } }, timestamp: 6_000 },
+  { type: 5, data: { tag: "fixture", payload: { step: "returned-to-main-tab" } }, timestamp: fixtureRecordingStartedAt + 6_000 },
 ];
 const focusCycleInviteEvents = [
   inviteEvents[0],
   inviteEvents[1],
-  { type: 5, data: { tag: "fixture", payload: { step: "background-tab-closed" } }, timestamp: 6_000 },
+  { type: 5, data: { tag: "fixture", payload: { step: "background-tab-closed" } }, timestamp: fixtureRecordingStartedAt + 6_000 },
 ];

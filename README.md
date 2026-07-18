@@ -1,87 +1,104 @@
 # rec
 
-`rec` is a local-first, DOM-based browser session recorder for agent-driven Chromium
-sessions. It attaches over CDP, records rrweb events, writes a crash-tolerant gzip
-bundle, and serves a local replay with idle time skipped by default.
+Rec lets a coding agent record the browser session it uses to reproduce or verify
+a change, then hand back a local replay link. Recordings stay on the machine that
+created them; there is no hosted service or sharing layer yet.
 
-This repository contains the completed local Phase 1 implementation and the
-in-progress local MCP capture workflow from Phase 2. It has no hosted ingest or
-auth; recordings stay on the machine that created them.
+## Quick start: Codex
 
-## Quick start
+Rec records while stock Playwright MCP drives the browser. Install both MCP
+servers in the project where Codex will work.
+
+### 1. Build Rec
 
 ```sh
+cd /absolute/path/to/rec
 pnpm install
 pnpm build
-# For CLI/script use, start the managed browser and point Playwright at its endpoint.
+```
+
+Node.js, `npx`, and Google Chrome must be available. The launcher obtains the
+separate `@playwright/mcp` dependency on first use.
+
+### 2. Configure Codex
+
+Create or update `<target-project>/.codex/config.toml`. Replace
+`/absolute/path/to/rec` with this checkout's real path.
+
+```toml
+[mcp_servers.rec]
+command = "node"
+args = ["/absolute/path/to/rec/packages/mcp/dist/main.js"]
+
+[mcp_servers.playwright]
+command = "node"
+args = ["/absolute/path/to/rec/packages/playwright-launcher/dist/main.js"]
+```
+
+Restart Codex or open a new task. The Playwright entry must point to Rec's
+launcher, not directly to stock Playwright MCP: the launcher starts Rec's
+dedicated Chrome when needed and connects Playwright to that same browser.
+
+### 3. Ask normally
+
+Start the app under test, then open a Codex task in that app's project and say:
+
+> Read BUG_TICKET.md, reproduce the issue, and capture a Rec replay.
+
+For a fix:
+
+> Fix the issue, verify it in the browser, and record a Rec replay of the verified result.
+
+Codex uses Playwright for every browser action and Rec for recording lifecycle
+and optional markers. It returns a local replay URL when finished. You do not
+need to start Chrome, choose a port, or describe the recording workflow.
+
+## What a replay includes
+
+- A single browser-session timeline, including recorded tabs and focus changes.
+- Captured DOM events, markers, and static assets needed for local replay.
+- Idle time reduced by default, plus seeking, speed controls, and keyboard
+  play/pause.
+
+Passwords are masked. Recordings do not include scripts, API responses, or assets
+larger than 10 MiB.
+
+## If something goes wrong
+
+- **No page available:** have the agent navigate the target app through
+  Playwright, then start the recording.
+- **Empty replay or the wrong browser:** make sure the `playwright` MCP entry
+  points to `packages/playwright-launcher/dist/main.js`, not stock Playwright
+  MCP directly.
+- **Chrome cannot start:** install Google Chrome or set `REC_BROWSER_EXECUTABLE`
+  to its executable path.
+
+Do not use Web Preview, Codex's in-app browser, Arc, or a manually opened Chrome
+for a Rec recording; they are not connected to Rec's recorder.
+
+## Development and manual use
+
+The direct CLI is for developing or troubleshooting Rec, rather than the normal
+coding-agent workflow:
+
+```sh
 pnpm rec browser start
 pnpm rec start --title "Checkout repro"
 pnpm rec marker "Submitting checkout"
 pnpm rec stop --outcome reproduced
-pnpm rec open <session-id>
 ```
 
-`rec browser start` uses macOS Google Chrome when available. Set
-`REC_BROWSER_EXECUTABLE` to override it. A browser may also be launched separately
-with a remote debugging port and attached using `rec attach --cdp <url>`.
-
-Recordings are stored in `~/.rec/sessions` (or `REC_HOME`). Passwords are always
-masked; pass `--mask-all-inputs` for sensitive flows. `--origin` may be repeated to
-strictly scope what pages are captured. Static CSS, image, and font resources are
-copied into the recording when available, so replay does not depend on those live
-resources. The recorder intentionally excludes scripts, API responses, and assets
-larger than 10 MiB.
-
-Canvas recording is opt-in because it can include sensitive pixels and substantially
-increase bundle size:
+`pnpm rec open <session-id>` prints a replay URL. The included deterministic
+demo can also create single- or multi-tab recordings:
 
 ```sh
-pnpm rec start --title "Canvas repro" --origin https://app.example --record-canvas
+pnpm demo:record
+pnpm demo:record:multi
 ```
 
-To capture a cross-origin iframe through rrweb's bridge, explicitly scope both the
-parent and iframe origins. Any iframe outside that allowlist is replaced in replay by
-an explanatory placeholder, rather than loading a live external page.
+## Documentation
 
-## Commands
-
-```text
-rec browser start|stop
-rec attach --cdp <url>
-rec start [--title <text>] [--origin <origin>] [--mask-all-inputs] [--record-canvas]
-rec marker <label> [--note <text>]
-rec stop [--outcome reproduced|verified|other] [--notes <text>]
-rec status | list | open <id> | doctor
-```
-
-For Codex, the installed Rec plugin launches stock Playwright MCP through Rec's
-bridge automatically. The coding agent can use Playwright first and begin a
-recording later; developers do not need to start Chrome or provide a CDP port.
-
-## Replay behavior
-
-- A recording is a browser session: multi-tab runs expose a tab strip and one
-  shared timeline in the player. Tabs appear and receive focus at their recorded
-  creation time during playback.
-- Static resources are served from the local session bundle at replay time.
-- Idle time is skipped by default; controls expose seeking, speed, and keyboard
-  play/pause.
-
-The recording format is documented in `docs/format.md`; the spike checklist is in
-`docs/spike-checklist.md`. The path from this completed local implementation to
-agent-native capture and shared replay is in `docs/roadmap.md`; the current Phase 2
-contract is in `docs/phase-2-agent-native-capture-plan.md`. The local stdio MCP
-server is documented in `docs/mcp.md`.
-
-## Deterministic demo replay
-
-The included Orbit onboarding app is a repeatable source for validating the recorder
-against a real Playwright-driven browser session. It launches the demo app, starts a
-recording using the same `rec` CLI commands an agent would use, performs the journey,
-and prints the resulting replay URL.
-
-```sh
-npm run build
-npm run demo:record        # single-tab browser session
-npm run demo:record:multi  # browser session that opens an invite-preview tab
-```
+- [MCP tools and lifecycle](docs/mcp.md)
+- [Recording format](docs/format.md)
+- [Fresh-agent acceptance checklist](docs/phase-2-acceptance.md)
+- [Roadmap](docs/roadmap.md)

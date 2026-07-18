@@ -284,9 +284,8 @@ never terminated by Rec. Reattachment while recording is rejected.
 - Add local unit/regression coverage for ensure, stale recovery, external attach,
   start-without-page, attachment-while-recording rejection, marker placement, and
   empty-stop rejection.
-- Add an opt-in local smoke command that launches Rec Chrome, starts stock
-  Playwright MCP against it, drives the deterministic demo, records a marker, and
-  validates a nonempty replay.
+- Use local regression coverage and a fresh-agent acceptance check to validate the
+  separate Rec and stock Playwright MCP workflow.
 - Do not add CI.
 
 ## Acceptance criteria

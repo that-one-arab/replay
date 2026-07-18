@@ -102,6 +102,10 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   let tabFocusTimer: number | undefined;
   let refreshTimer: number | undefined;
   let frameKeyboardTimer: number | undefined;
+  // rrweb rebuilds the document from historical events whenever it seeks. A
+  // navigation meta event included in that reconstruction is not a refresh
+  // occurring now, so only announce one after the requested seek position.
+  const refreshCutoff = clamp(requestedSessionTime - tabStart, 0, tabDuration);
   const scrubber = document.querySelector<HTMLInputElement>("#scrubber")!;
   const nextFocus = nextFocusForSegment(manifest, segment.id, requestedSessionTime);
   const updateTimelinePosition = (time: number) => {
@@ -174,7 +178,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   replayer.on("resume", () => { setPlaying(true); requestAnimationFrame(updateProgress); });
   replayer.on("pause", () => setPlaying(false));
   replayer.on("event-cast", (event: unknown) => {
-    if (isRefreshEvent(event, events)) showRefresh();
+    if (isRefreshEvent(event, events) && event.timestamp - events[0]!.timestamp > refreshCutoff) showRefresh();
   });
   replayer.on("finish", () => {
     if (nextFocus) void bridgeToNewTab(nextFocus);
@@ -267,6 +271,10 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   lifetime.signal.addEventListener("abort", () => {
     if (tabFocusTimer) window.clearTimeout(tabFocusTimer);
     if (refreshTimer) window.clearTimeout(refreshTimer);
+    // The refresh overlay belongs to the replay instance that emitted the
+    // navigation. Seeking replaces that instance, so it must not leak into the
+    // newly requested point on the timeline.
+    document.querySelector<HTMLElement>("#refresh-indicator")?.classList.remove("is-visible");
     if (frameKeyboardTimer) window.clearTimeout(frameKeyboardTimer);
     replayDocumentKeyboardHandler = undefined;
     frameWindows.forEach((frameWindow) => frameWindow.removeEventListener("keydown", onPlaybackKey, true));
@@ -481,8 +489,9 @@ function isMarkerStep(event: ReplayEvent, index: number) {
   if (event.type === 3) return event.data?.source === 2 || event.data?.source === 5 || event.data?.source === 0;
   return index > 0 && (event.type === 2 || event.type === 4);
 }
-function isRefreshEvent(event: unknown, events: ReplayEvent[]) {
-  return isReplayEvent(event) && event.type === 4 && event !== events[0];
+function isRefreshEvent(event: unknown, events: ReplayEvent[]): event is ReplayEvent {
+  const initialNavigation = events.find((candidate) => candidate.type === 4);
+  return isReplayEvent(event) && event.type === 4 && event.timestamp > (initialNavigation?.timestamp ?? Infinity);
 }
 function humanizeEvents(events: ReplayEvent[]) {
   const output: ReplayEvent[] = [];

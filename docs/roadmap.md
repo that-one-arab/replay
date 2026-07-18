@@ -11,13 +11,14 @@ The local recorder and replay prove the core artifact: rrweb capture over CDP,
 idle-aware playback, assets, markers, and one browser-session timeline across tabs.
 Recordings remain on the originating machine.
 
-## Phase 2 — agent-native capture workflow (in progress)
+## Phase 2 — agent-native capture workflow (complete)
 
-Make recording a first-class action for coding agents rather than a sequence of
-shell instructions. A local stdio MCP server now exposes start, marker, status,
-and stop; it reuses an attached browser or launches Chrome when needed. The
-remaining work is to mature the agent handoff contract. The tool contract should
-make origin scope, input masking, and failure states explicit.
+Recording is a first-class coding-agent workflow: stock Playwright MCP drives the
+browser while Rec MCP records that exact browser and returns a local replay. The
+local handoff contract, browser ownership rules, ordered optional markers, empty
+capture protection, regression coverage, and fresh-agent acceptance checklist are
+complete. Broader masking policy and production hardening remain intentionally
+deferred.
 
 ## Phase 3 — portable recording artifacts
 
