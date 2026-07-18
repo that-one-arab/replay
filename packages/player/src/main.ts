@@ -8,14 +8,20 @@ type TabEvent = { t_ms: number; segment_id: string; type: "opened" | "focused" |
 type Manifest = { id: string; title: string; markers: Marker[]; segments: Segment[]; tab_events?: TabEvent[]; raw_duration_ms?: number };
 type ReplayEvent = { timestamp: number; type: number; data?: { source?: number; width?: number; height?: number; text?: string; id?: number; x?: number; y?: number; recSynthetic?: "approach"; positions?: { x: number; y: number; id?: number; timeOffset?: number }[] } };
 type IdleRange = { start: number; end: number };
+type TimelineIdleRange = IdleRange & { originalDuration: number };
+type PlaybackProjection = { manifest: Manifest; eventSets: Map<string, ReplayEvent[]>; duration: number; activities: number[]; playbackEnd: number; idleRanges: TimelineIdleRange[]; toPlayback(time: number): number; toRaw(time: number): number };
 
 // Keep the default pace in one place so product teams can tune it without
 // changing the replay control behavior.
 const DEFAULT_PLAYBACK_SPEED = 1.25;
 const TAB_FOCUS_DELAY_MS = 700;
 const IDLE_THRESHOLD_MS = 3_000;
+const IDLE_RETAINED_MS = 2_000;
 const RELOAD_CONTEXT_MS = 750;
 const CURSOR_APPROACH_MS = 420;
+const REFRESH_INDICATOR_MS = 1_100;
+const MIN_REFRESH_INDICATOR_MS = 160;
+const MAX_REFRESH_INDICATOR_MS = 1_500;
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 const id = new URLSearchParams(location.search).get("id");
@@ -32,22 +38,34 @@ async function load(recordingId: string) {
       segment.id,
       humanizeEvents(await request<ReplayEvent[]>(`/api/sessions/${encodeURIComponent(manifest.id)}/events?segment=${encodeURIComponent(segment.id)}`)),
     ] as const)));
-    const duration = sessionDuration(manifest, eventSets);
-    const playbackManifest = { ...manifest, markers: resolveMarkerTimes(manifest, eventSets) };
-    renderShell(playbackManifest);
-    prepareTimeline(playbackManifest.markers, duration, activityTimes(playbackManifest, eventSets), eventEndTime(playbackManifest, eventSets));
-    await replay(playbackManifest, eventSets, duration, playbackManifest.segments[0], 0);
+    const resolvedManifest = { ...manifest, markers: resolveMarkerTimes(manifest, eventSets) };
+    let cuttingIdle = true;
+    let playbackSpeed = DEFAULT_PLAYBACK_SPEED;
+    const present = async (rawTime = 0, autoplay = false) => {
+      const projection = projectPlayback(resolvedManifest, eventSets, cuttingIdle);
+      activePlayback?.abort();
+      renderShell(projection.manifest, cuttingIdle, playbackSpeed);
+      prepareTimeline(projection.manifest.markers, projection.duration, projection.activities, projection.playbackEnd, projection.idleRanges);
+      await replay(projection.manifest, projection.eventSets, projection.duration, projection.manifest.segments[0], projection.toPlayback(rawTime), autoplay, (enabled, requestedTime, shouldAutoplay) => {
+        cuttingIdle = enabled;
+        void present(projection.toRaw(requestedTime), shouldAutoplay).catch(renderError);
+      }, playbackSpeed, (nextSpeed) => { playbackSpeed = nextSpeed; });
+    };
+    await present();
   } catch (error) { renderError(error instanceof Error ? error.message : String(error)); }
 }
 
-function renderShell(manifest: Manifest) {
+function renderShell(manifest: Manifest, cuttingIdle: boolean, playbackSpeed: number) {
   const segmentPicker = manifest.segments.length > 1
     ? `<nav class="segment-picker" aria-label="Recorded browser tabs">${manifest.segments.map((segment, index) => `<div class="segment-tab" data-segment="${escape(segment.id)}" title="Opened at ${format(segment.clock_offset_ms)} — ${escape(segment.page_url)}"${index === 0 ? "" : " hidden"}><span>Tab ${index + 1}</span>${escape(segmentLabel(segment.page_url))}</div>`).join("")}</nav>`
     : "";
-  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span>↻</span><strong>Page refreshed</strong><p>Loading the recorded page state</p></div><div class="caption-card" id="caption"><span class="caption-kicker">SESSION REPLAY</span><strong>Press play to begin</strong><p>The timeline follows the full browser recording.</p></div><section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed"><button data-speed="${DEFAULT_PLAYBACK_SPEED}" class="selected">${DEFAULT_PLAYBACK_SPEED}×</button><button data-speed="2">2×</button><button data-speed="4">4×</button><button data-speed="8">8×</button></div><button class="skip-button active" id="skip" aria-label="Cut idle time" aria-pressed="true"><span>✂</span> Cut idle <b id="idle-summary"></b></button></div><div class="timeline-wrap"><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section></main>`;
+  const speedControls = [0.25, 0.5, DEFAULT_PLAYBACK_SPEED, 2, 4, 8]
+    .map((speed) => `<button data-speed="${speed}"${speed === playbackSpeed ? " class=\"selected\"" : ""}>${speed}×</button>`)
+    .join("");
+  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong>Page is refreshing</strong></div><div class="caption-card" id="caption"><span class="caption-kicker">SESSION REPLAY</span><strong>Press play to begin</strong><p>The timeline follows the full browser recording.</p></div><section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div><button class="skip-button${cuttingIdle ? " active" : ""}" id="skip" aria-label="${cuttingIdle ? "Cut idle time" : "Keep idle time"}" aria-pressed="${cuttingIdle}"><span>✂</span> Cut idle <b id="idle-summary"></b></button></div><div class="timeline-wrap"><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section></main>`;
 }
 
-async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>, duration: number, segment: Segment | undefined, requestedSessionTime: number, autoplay = false) {
+async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>, duration: number, segment: Segment | undefined, requestedSessionTime: number, autoplay = false, onCutIdleChange?: (enabled: boolean, requestedTime: number, autoplay: boolean) => void, playbackSpeed = DEFAULT_PLAYBACK_SPEED, onPlaybackSpeedChange?: (speed: number) => void) {
   if (!segment) return;
   activePlayback?.abort();
   const lifetime = new AbortController();
@@ -60,11 +78,12 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   const tabStart = segment.clock_offset_ms;
   const tabEnd = tabStart + tabDuration;
   const viewport = recordingViewport(events);
+  let selectedPlaybackSpeed = playbackSpeed;
   let replayDocumentKeyboardHandler: ((event: KeyboardEvent) => void) | undefined;
   const replayer = new Replayer(events as never[], {
     // rrweb only skips when a later mouse/input event exists. Rec owns this
     // policy so navigation, reload, and verification waits are accelerated too.
-    root: mount, skipInactive: false, showWarning: false, speed: DEFAULT_PLAYBACK_SPEED,
+    root: mount, skipInactive: false, showWarning: false, speed: selectedPlaybackSpeed,
     mouseTail: false,
     plugins: [{
       onBuild(node: Node) {
@@ -80,13 +99,9 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   let scrubbing = false;
   let resumeAfterScrub = false;
   let bridgingTabs = false;
-  let cuttingIdle = false;
-  let cutIdleEnabled = true;
   let tabFocusTimer: number | undefined;
   let refreshTimer: number | undefined;
   let frameKeyboardTimer: number | undefined;
-  let idleCutFrame: number | undefined;
-  const localIdleRanges = idleRanges(segmentActivityTimes(events, tabStart), tabEnd);
   const scrubber = document.querySelector<HTMLInputElement>("#scrubber")!;
   const nextFocus = nextFocusForSegment(manifest, segment.id, requestedSessionTime);
   const updateTimelinePosition = (time: number) => {
@@ -103,15 +118,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     updateTimelinePosition(start);
     replayer.play(start - tabStart);
   };
-  const cancelIdleCut = () => {
-    if (!cuttingIdle) return false;
-    cuttingIdle = false;
-    if (idleCutFrame) window.cancelAnimationFrame(idleCutFrame);
-    idleCutFrame = undefined;
-    return true;
-  };
   const pausePlayback = () => {
-    cancelIdleCut();
     if (bridgingTabs) {
       bridgingTabs = false;
       if (tabFocusTimer) window.clearTimeout(tabFocusTimer);
@@ -122,13 +129,9 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     replayer.pause();
   };
   const togglePlayback = () => {
-    if (cancelIdleCut()) {
-      replayer.pause();
-      return;
-    }
     if (playing) return pausePlayback();
     if (replayer.getCurrentTime() >= tabDuration - 10) {
-      void replay(manifest, eventSets, duration, manifest.segments[0], 0, true).catch(renderError);
+      void replay(manifest, eventSets, duration, manifest.segments[0], 0, true, onCutIdleChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
       return;
     }
     playFrom(Number(scrubber.value));
@@ -144,21 +147,12 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     const indicator = document.querySelector<HTMLElement>("#refresh-indicator")!;
     indicator.classList.add("is-visible");
     if (refreshTimer) window.clearTimeout(refreshTimer);
-    refreshTimer = window.setTimeout(() => indicator.classList.remove("is-visible"), 1_100);
-  };
-  const cutIdleRange = (range: IdleRange) => {
-    if (!cutIdleEnabled || cuttingIdle || !playing) return;
-    cuttingIdle = true;
-    const resumeAt = clamp(range.end, tabStart, tabEnd);
-    replayer.pause();
-    updateTimelinePosition(resumeAt);
-    setActionCaption("Idle time removed", `Cut ${formatDuration(resumeAt - range.start)} with no fast-forward.`);
-    idleCutFrame = requestAnimationFrame(() => {
-      idleCutFrame = undefined;
-      if (lifetime.signal.aborted || !cuttingIdle) return;
-      cuttingIdle = false;
-      replayer.play(resumeAt - tabStart);
-    });
+    const duration = clamp(
+      REFRESH_INDICATOR_MS * DEFAULT_PLAYBACK_SPEED / selectedPlaybackSpeed,
+      MIN_REFRESH_INDICATOR_MS,
+      MAX_REFRESH_INDICATOR_MS,
+    );
+    refreshTimer = window.setTimeout(() => indicator.classList.remove("is-visible"), duration);
   };
   const updateProgress = () => {
     if (lifetime.signal.aborted) return;
@@ -180,10 +174,6 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   replayer.on("resume", () => { setPlaying(true); requestAnimationFrame(updateProgress); });
   replayer.on("pause", () => setPlaying(false));
   replayer.on("event-cast", (event: unknown) => {
-    const eventTime = sessionEventTime(event, events, tabStart);
-    if (eventTime === undefined) return;
-    const idleRange = localIdleRanges.find((range) => nearlyEqual(range.start, eventTime));
-    if (idleRange) cutIdleRange(idleRange);
     if (isRefreshEvent(event, events)) showRefresh();
   });
   replayer.on("finish", () => {
@@ -200,21 +190,21 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   });
   document.querySelector<HTMLButtonElement>("#play")!.onclick = togglePlayback;
   document.querySelector<HTMLButtonElement>("#skip")!.onclick = () => {
-    cutIdleEnabled = !cutIdleEnabled;
-    const button = document.querySelector<HTMLButtonElement>("#skip")!;
-    button.classList.toggle("active", cutIdleEnabled);
-    button.setAttribute("aria-pressed", String(cutIdleEnabled));
-    button.setAttribute("aria-label", cutIdleEnabled ? "Cut idle time" : "Keep idle time");
+    onCutIdleChange?.(document.querySelector<HTMLButtonElement>("#skip")!.getAttribute("aria-pressed") !== "true", currentSessionTime, playing);
   };
   document.querySelectorAll<HTMLButtonElement>("[data-speed]").forEach((button) => button.onclick = () => {
     document.querySelector(".speed-control .selected")?.classList.remove("selected");
     button.classList.add("selected");
-    replayer.setConfig({ speed: Number(button.dataset.speed) });
+    const speed = Number(button.dataset.speed);
+    selectedPlaybackSpeed = speed;
+    replayer.setConfig({ speed });
+    onPlaybackSpeedChange?.(speed);
+    if (document.querySelector<HTMLElement>("#refresh-indicator")!.classList.contains("is-visible")) showRefresh();
   });
   document.querySelectorAll<HTMLButtonElement>("[data-marker]").forEach((button) => button.onclick = () => {
     const time = Number(button.dataset.marker);
     const target = segmentAtTime(manifest, eventSets, time);
-    if (target && target.id !== segment.id) void replay(manifest, eventSets, duration, target, time).catch(renderError);
+    if (target && target.id !== segment.id) void replay(manifest, eventSets, duration, target, time, false, onCutIdleChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
     else playFrom(time);
   });
   document.querySelectorAll<HTMLElement>("[data-segment]").forEach((button) => {
@@ -240,12 +230,8 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     const shouldResume = resumeAfterScrub;
     resumeAfterScrub = false;
     const time = Number(scrubber.value);
-    const target = segmentAtTime(manifest, eventSets, time);
-    if (target && target.id !== segment.id) {
-      void replay(manifest, eventSets, duration, target, time, shouldResume).catch(renderError);
-      return;
-    }
-    shouldResume ? playFrom(time) : replayer.pause(clamp(time, tabStart, tabEnd) - tabStart);
+    const target = segmentAtTime(manifest, eventSets, time) ?? segment;
+    void replay(manifest, eventSets, duration, target, time, shouldResume, onCutIdleChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
   }, { signal: lifetime.signal });
   const onPlaybackKey = (event: KeyboardEvent) => {
     const isPlaybackKey = event.key === "Enter" || event.key === " " || event.key === "Spacebar" || event.code === "Space";
@@ -282,7 +268,6 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     if (tabFocusTimer) window.clearTimeout(tabFocusTimer);
     if (refreshTimer) window.clearTimeout(refreshTimer);
     if (frameKeyboardTimer) window.clearTimeout(frameKeyboardTimer);
-    if (idleCutFrame) window.cancelAnimationFrame(idleCutFrame);
     replayDocumentKeyboardHandler = undefined;
     frameWindows.forEach((frameWindow) => frameWindow.removeEventListener("keydown", onPlaybackKey, true));
     frameDocuments.forEach((frameDocument) => frameDocument.removeEventListener("keydown", onPlaybackKey, true));
@@ -293,7 +278,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     bridgingTabs = true;
     tabFocusTimer = undefined;
     updateTimelinePosition(Math.max(focus.t_ms, time));
-    await replay(manifest, eventSets, duration, tab, Math.max(focus.t_ms, time), true);
+    await replay(manifest, eventSets, duration, tab, Math.max(focus.t_ms, time), true, onCutIdleChange, selectedPlaybackSpeed, onPlaybackSpeedChange);
   };
   const announceAndFocusNewTab = (focus: TabEvent, time: number) => {
     if (bridgingTabs) return;
@@ -340,15 +325,66 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   }
 }
 
-function prepareTimeline(markers: Marker[], duration: number, interactions: number[], playbackEnd: number) {
+function projectPlayback(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>, cuttingIdle: boolean): PlaybackProjection {
+  const playbackEnd = eventEndTime(manifest, eventSets);
+  const activities = activityTimes(manifest, eventSets);
+  const rawIdle = idleRanges(activities, playbackEnd);
+  const ranges = cuttingIdle ? rawIdle : [];
+  const toPlayback = (time: number) => {
+    let removed = 0;
+    for (const range of ranges) {
+      if (time >= range.end) { removed += range.end - range.start - IDLE_RETAINED_MS; continue; }
+      if (time > range.start) return range.start - removed + (time - range.start) * IDLE_RETAINED_MS / (range.end - range.start);
+      break;
+    }
+    return time - removed;
+  };
+  const toRaw = (time: number) => {
+    let removed = 0;
+    for (const range of ranges) {
+      const compactStart = range.start - removed;
+      const compactEnd = compactStart + IDLE_RETAINED_MS;
+      if (time >= compactEnd) { removed += range.end - range.start - IDLE_RETAINED_MS; continue; }
+      if (time > compactStart) return range.start + (time - compactStart) * (range.end - range.start) / IDLE_RETAINED_MS;
+      break;
+    }
+    return time + removed;
+  };
+  const projectedManifest: Manifest = {
+    ...manifest,
+    raw_duration_ms: toPlayback(playbackEnd),
+    segments: manifest.segments.map((segment) => ({ ...segment, clock_offset_ms: toPlayback(segment.clock_offset_ms) })),
+    tab_events: manifest.tab_events?.map((event) => ({ ...event, t_ms: toPlayback(event.t_ms) })),
+    markers: manifest.markers.map((marker) => ({ ...marker, t_ms: toPlayback(marker.t_ms) })),
+  };
+  const projectedEvents = new Map(projectedManifest.segments.map((segment) => {
+    const source = eventSets.get(segment.id) ?? [];
+    const originalSegment = manifest.segments.find((item) => item.id === segment.id)!;
+    const started = source[0]?.timestamp ?? 0;
+    const events = source.map((event) => ({ ...event, timestamp: started + toPlayback(originalSegment.clock_offset_ms + event.timestamp - started) - segment.clock_offset_ms }));
+    return [segment.id, events] as const;
+  }));
+  const projectedIdle = rawIdle.map((range) => ({ start: toPlayback(range.start), end: toPlayback(range.end), originalDuration: range.end - range.start }));
+  return {
+    manifest: projectedManifest,
+    eventSets: projectedEvents,
+    duration: toPlayback(playbackEnd),
+    activities: activities.map(toPlayback),
+    playbackEnd: toPlayback(playbackEnd),
+    idleRanges: projectedIdle,
+    toPlayback,
+    toRaw,
+  };
+}
+
+function prepareTimeline(markers: Marker[], duration: number, interactions: number[], playbackEnd: number, projectedIdle: TimelineIdleRange[]) {
   const density = document.querySelector<HTMLElement>("#density")!;
   const buckets = Array.from({ length: 72 }, () => 0);
   interactions.forEach((time) => { buckets[Math.min(buckets.length - 1, Math.floor(time / duration * buckets.length))] += 1; });
   const max = Math.max(1, ...buckets);
   density.innerHTML = buckets.map((count) => `<i style="--level:${Math.max(.08, count / max)}"></i>`).join("");
-  const idle = idleRanges(interactions, playbackEnd);
-  document.querySelector<HTMLElement>("#idle-ranges")!.innerHTML = idle.map((range) => `<i data-idle-range title="Idle for ${formatDuration(range.end - range.start)}" style="left:${clamp(range.start / duration * 100, 0, 100)}%;width:${clamp((range.end - range.start) / duration * 100, 0, 100)}%"></i>`).join("");
-  document.querySelector<HTMLElement>("#idle-summary")!.textContent = idle.length ? `${idle.length} gap${idle.length === 1 ? "" : "s"}` : "";
+  document.querySelector<HTMLElement>("#idle-ranges")!.innerHTML = projectedIdle.map((range) => `<i data-idle-range title="${nearlyEqual(range.originalDuration, range.end - range.start) ? `Idle for ${formatDuration(range.originalDuration)}` : `Idle reduced from ${formatDuration(range.originalDuration)} to ${formatDuration(range.end - range.start)}`}" style="left:${clamp(range.start / duration * 100, 0, 100)}%;width:${clamp((range.end - range.start) / duration * 100, 0, 100)}%"></i>`).join("");
+  document.querySelector<HTMLElement>("#idle-summary")!.textContent = projectedIdle.length ? `${projectedIdle.length} gap${projectedIdle.length === 1 ? "" : "s"}` : "";
   document.querySelector<HTMLElement>("#timeline-markers")!.innerHTML = markers.map((marker) => `<button data-marker="${marker.t_ms}" title="${escape(marker.label)}" style="left:${clamp(marker.t_ms / duration * 100, 1, 99)}%"><span></span></button>`).join("");
 }
 
@@ -462,9 +498,26 @@ function humanizeEvents(events: ReplayEvent[]) {
     if (isDirectPointerInteraction(adjusted) && pointer && (!cursor || adjusted.timestamp - cursor.t >= 280)) {
       const approachAt = Math.max(lastEmittedAt + 1, adjusted.timestamp - CURSOR_APPROACH_MS);
       if (approachAt < adjusted.timestamp - 45) {
-        output.push({ type: 3, timestamp: approachAt, data: { source: 1, recSynthetic: "approach", positions: [{ ...pointer, timeOffset: 0 }] } });
+        // A single endpoint still lets rrweb paint the cursor directly on the
+        // target. Give it a short, timed path instead. The first path starts
+        // at the visible origin; later paths continue from the prior target.
+        const origin = cursor ?? { x: 0, y: 0 };
+        const steps = 8;
+        const positions = Array.from({ length: steps }, (_, index) => {
+          const progress = index / (steps - 1);
+          const eased = progress < 0.5
+            ? 4 * progress ** 3
+            : 1 - (-2 * progress + 2) ** 3 / 2;
+          return {
+            x: origin.x + (pointer.x - origin.x) * eased,
+            y: origin.y + (pointer.y - origin.y) * eased,
+            id: pointer.id,
+            timeOffset: Math.round(progress * CURSOR_APPROACH_MS),
+          };
+        });
+        output.push({ type: 3, timestamp: approachAt, data: { source: 1, recSynthetic: "approach", positions } });
         lastEmittedAt = approachAt;
-        cursor = { ...pointer, t: approachAt };
+        cursor = { ...pointer, t: adjusted.timestamp };
       }
     }
     if (isVisibleShortFill(adjusted)) {

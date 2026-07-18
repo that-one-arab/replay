@@ -26,15 +26,15 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
     await page.goto(`${origin}/replay?id=fixture`, { waitUntil: "networkidle" });
     assert.equal(await page.locator("[data-idle-range]").count(), 2);
-    assert.equal(await page.locator("[data-idle-range]").first().getAttribute("title"), "Idle for 6.3s");
+    assert.equal(await page.locator("[data-idle-range]").first().getAttribute("title"), "Idle reduced from 6.3s to 2.0s");
     assert.equal(await page.locator("#idle-summary").textContent(), "2 gaps");
     assert.equal(await page.locator("#skip").getAttribute("aria-pressed"), "true");
     assert.match((await page.locator("#skip").textContent()) ?? "", /Cut idle/);
 
     const play = page.getByRole("button", { name: "Play replay" });
     await play.click();
-    await waitForRefresh(page, 2_000);
-    assert.notEqual(await page.locator("#current-time").textContent(), "0:16", "reload context remains visible before the next idle cut");
+    await waitForRefresh(page, 5_000);
+    assert.notEqual(await page.locator("#current-time").textContent(), "0:07", "reload context remains visible before the next compacted idle interval");
 
     const replayAction = page.frameLocator(".replayer-wrapper iframe").getByText("Continue");
     await replayAction.focus();
@@ -54,11 +54,11 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
 
     await page.locator("[data-speed='8']").click();
     await waitForPaused(page, 2_000);
-    assert.equal(await page.locator("#current-time").textContent(), "0:16");
+    assert.equal(await page.locator("#current-time").textContent(), "0:07");
     await play.click();
     await page.waitForTimeout(40);
     assert.match((await playbackState(page)) ?? "", /^(Playing|Paused)$/);
-    assert.notEqual(await page.locator("#current-time").textContent(), "0:16");
+    assert.notEqual(await page.locator("#current-time").textContent(), "0:07");
 
     await page.reload({ waitUntil: "networkidle" });
     await page.locator("#skip").click();
@@ -95,8 +95,8 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
     await page.frameLocator(".replayer-wrapper iframe").getByText("Invite preview").waitFor();
     assert.equal(await page.locator("[data-segment='seg_2']").isHidden(), false);
     assert.equal(await page.locator("[data-segment='seg_2']").getAttribute("aria-current"), "page");
-    assert.match((await page.locator("#current-time").textContent()) ?? "", /^0:0[3-6]$/, "the focus transition is shown after the new tab appears");
-    assert.equal(await page.locator("#total-time").textContent(), "0:07");
+    assert.equal(await page.locator("#current-time").textContent(), "0:02", "the focus transition follows the compacted timeline");
+    assert.equal(await page.locator("#total-time").textContent(), "0:04");
 
     await page.locator("[data-speed='1.25']").click();
     await page.locator("#scrubber").evaluate((node) => {
@@ -138,7 +138,7 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
 
     await page.locator("[data-speed='8']").click();
     await waitForPaused(page, 2_500);
-    assert.equal(await page.locator("#current-time").textContent(), "0:06");
+    assert.equal(await page.locator("#current-time").textContent(), "0:04");
     await page.getByRole("button", { name: "Play replay" }).click();
     await page.frameLocator(".replayer-wrapper iframe").getByText("Continue").waitFor();
     assert.equal(await page.locator("[data-segment='seg_1']").getAttribute("aria-current"), "page");
