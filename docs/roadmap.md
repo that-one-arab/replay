@@ -28,12 +28,16 @@ or local viewer so an agent can attach the artifact to a handoff before hosted
 sharing exists. Implementation and maintenance notes are in
 [phase-3-portable-artifacts.md](phase-3-portable-artifacts.md).
 
-## Phase 4 — secure sharing and review
+## Phase 4 — secure sharing and review (in progress)
 
 Add the service needed for collaborators to open a recording through a durable
 share link: upload, access control, expiration/revocation, and a hosted replay
 viewer. Include review affordances that make the artifact useful in a coding
 workflow, such as markers, notes, and a concise recorded outcome.
+
+The current Phase 4A Railway implementation is intentionally limited to public
+bearer links; deployment and known deferrals are documented in
+[phase-4-railway-sharing.md](phase-4-railway-sharing.md).
 
 ## Phase 5 — production hardening (intentionally late)
 

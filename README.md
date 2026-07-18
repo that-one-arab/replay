@@ -114,10 +114,26 @@ Import verifies the artifact’s contents before installing it and never overwri
 an existing recording. The recipient needs Rec installed locally, but not access
 to the recording machine or browser.
 
+## Share a replay (Railway prototype)
+
+Deploy the included share service to Railway with a persistent `/data` volume,
+then set its public URL locally:
+
+```sh
+export REC_SHARE_URL=https://<your-service-domain>
+pnpm rec share <session-id>
+```
+
+This is an explicit upload after recording stops. The resulting link is currently
+an unlisted bearer link—anyone with it can view the recording—so use only
+non-sensitive recordings. Deployment, agent usage, and limitations are in the
+[Railway sharing guide](docs/phase-4-railway-sharing.md).
+
 ## Documentation
 
 - [MCP tools and lifecycle](docs/mcp.md)
 - [Recording format](docs/format.md)
 - [Portable artifacts: implementation and E2E guide](docs/phase-3-portable-artifacts.md)
+- [Railway share links](docs/phase-4-railway-sharing.md)
 - [Fresh-agent acceptance checklist](docs/phase-2-acceptance.md)
 - [Roadmap](docs/roadmap.md)

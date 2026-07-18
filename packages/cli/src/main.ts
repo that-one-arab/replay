@@ -22,6 +22,7 @@ try {
     case "open": await openReplay(args[0]); break;
     case "export": await exportRecording(args); break;
     case "import": await importRecording(args); break;
+    case "share": await shareRecording(args); break;
     case "doctor": await doctor(); break;
     default: usage(command ? `Unknown command: ${command}` : undefined);
   }
@@ -103,6 +104,19 @@ async function importRecording(values: string[]) {
   console.log(`Replay: ${endpoint}/replay?id=${encodeURIComponent(result.sessionId)}`);
 }
 
+async function shareRecording(values: string[]) {
+  const id = values.shift();
+  if (!id) return usage("rec share requires a session id");
+  const shareEndpoint = process.env.REC_SHARE_URL?.replace(/\/$/, "");
+  if (!shareEndpoint) throw new Error("REC_SHARE_URL is required to share a recording.");
+  const artifact = exportPath(id);
+  if (!existsSync(artifact)) await exportSession(id, artifact);
+  const response = await fetch(`${shareEndpoint}/v1/recordings`, { method: "POST", headers: { "content-type": "application/vnd.rec" }, body: await readFile(artifact) });
+  const result = await response.json().catch(() => ({})) as { error?: string; shareUrl?: string };
+  if (!response.ok || !result.shareUrl) throw new Error(result.error ?? "Share service did not return a share URL.");
+  console.log(`Shared ${id}: ${result.shareUrl}`);
+}
+
 async function doctor() {
   const results: string[] = [];
   try { const health = await api("GET", "/health") as { cdp_endpoint?: string; state: string }; results.push(`daemon: healthy (${health.state})`); results.push(`browser: ${health.cdp_endpoint ?? "not attached"}`); } catch { results.push("daemon: unavailable (run pnpm build, then any rec command)"); }
@@ -139,4 +153,4 @@ function flag(values: string[], name: string) { const index = values.indexOf(nam
 function duration(ms?: number) { if (!ms) return "0s"; const seconds = Math.round(ms / 1000); return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`; }
 function size(bytes: number) { return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`; }
 function print(value: unknown) { console.log(JSON.stringify(value, null, 2)); }
-function usage(message?: string): never { if (message) console.error(message); console.error("Usage: rec browser start|stop | attach --cdp <url> | start [--record-canvas] | marker <label> [--note <text>] [--placement after_previous|before_next] | stop | status | list | open <id> | export <id> [--output <file.rec>] | import <file.rec> | doctor"); process.exit(2); }
+function usage(message?: string): never { if (message) console.error(message); console.error("Usage: rec browser start|stop | attach --cdp <url> | start [--record-canvas] | marker <label> [--note <text>] [--placement after_previous|before_next] | stop | status | list | open <id> | export <id> [--output <file.rec>] | import <file.rec> | share <id> | doctor"); process.exit(2); }

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type JsonObject = { [key: string]: Json };
@@ -80,6 +81,16 @@ const tools: JsonObject[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "recording_share",
+    description: "Explicitly upload a completed portable recording to the configured Rec share service and return its public bearer link.",
+    inputSchema: {
+      type: "object",
+      required: ["sessionId"],
+      properties: { sessionId: { type: "string", description: "Completed recording ID returned by recording_stop." } },
+      additionalProperties: false,
+    },
+  },
 ];
 
 void run();
@@ -138,6 +149,7 @@ async function callTool(name: string, argumentsValue: JsonObject): Promise<JsonO
       case "recording_marker": return toolResult(await addMarker(argumentsValue));
       case "recording_status": return toolResult(await recordingStatus());
       case "recording_stop": return toolResult(await stopRecording(argumentsValue));
+      case "recording_share": return toolResult(await shareRecording(argumentsValue));
       default: throw new Error(`Unknown tool: ${name}`);
     }
   } catch (error) {
@@ -218,6 +230,19 @@ async function stopRecording(argumentsValue: JsonObject) {
   const sessionId = requiredString(result.sessionId, "Recorder session ID");
   const portableArtifactPath = optionalString(result.portable_bundle);
   return { ...result, ...(portableArtifactPath ? { portableArtifactPath } : {}), replayUrl: replayUrl(sessionId) };
+}
+
+async function shareRecording(argumentsValue: JsonObject) {
+  const sessionId = requiredString(argumentsValue.sessionId, "Recorder session ID");
+  const shareEndpoint = process.env.REC_SHARE_URL?.replace(/\/$/, "");
+  if (!shareEndpoint) throw new Error("REC_SHARE_URL is not configured for this Rec MCP server.");
+  const home = process.env.REC_HOME ?? join(process.env.HOME ?? process.cwd(), ".rec");
+  const artifact = join(home, "exports", `${sessionId}.rec`);
+  if (!existsSync(artifact)) throw new Error(`Portable artifact ${artifact} was not found. Call recording_stop before recording_share.`);
+  const response = await fetch(`${shareEndpoint}/v1/recordings`, { method: "POST", headers: { "content-type": "application/vnd.rec" }, body: await readFile(artifact) });
+  const result = object(await response.json().catch(() => ({})));
+  if (!response.ok) throw new Error(optionalString(result.error) ?? response.statusText);
+  return { sessionId, shareUrl: requiredString(result.shareUrl, "Share URL") };
 }
 
 async function ensureDaemon(): Promise<JsonObject> {

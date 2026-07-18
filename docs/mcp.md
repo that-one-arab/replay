@@ -1,6 +1,6 @@
 # Agent-native recording MCP server
 
-`rec-mcp` is a local stdio MCP server. It gives an MCP-capable coding agent six
+`rec-mcp` is a local stdio MCP server. It gives an MCP-capable coding agent seven
 structured tools instead of requiring it to parse the `rec` CLI's terminal output.
 It never exposes the recorder beyond the local machine.
 
@@ -12,6 +12,7 @@ It never exposes the recorder beyond the local machine.
 | `recording_marker` | Adds an optional labelled checkpoint to the active recording. |
 | `recording_status` | Returns browser ownership, endpoint, page readiness, and active capture counts. |
 | `recording_stop` | Stops capture and returns its ID, local bundle details, a portable `.rec` artifact path, and local replay URL only when event data was captured. |
+| `recording_share` | Explicitly uploads a stopped recording to `REC_SHARE_URL` and returns its public bearer link. |
 
 ## Two-server workflow
 

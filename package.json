@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "description": "Local, DOM-based browser session replay for agent-driven sessions.",
   "scripts": {
-    "build": "tsc -p packages/core/tsconfig.json && tsc -p packages/daemon/tsconfig.json && tsc -p packages/cli/tsconfig.json && tsc -p packages/mcp/tsconfig.json && tsc -p packages/playwright-launcher/tsconfig.json && tsc -p packages/demo/tsconfig.json && tsc -p packages/player/tsconfig.json && cd packages/player && ./node_modules/.bin/vite build",
-    "check": "tsc -p packages/core/tsconfig.json --noEmit && tsc -p packages/daemon/tsconfig.json --noEmit && tsc -p packages/cli/tsconfig.json --noEmit && tsc -p packages/mcp/tsconfig.json --noEmit && tsc -p packages/playwright-launcher/tsconfig.json --noEmit && tsc -p packages/demo/tsconfig.json --noEmit && tsc -p packages/player/tsconfig.json --noEmit",
-    "test": "node --test packages/core/dist/storage.test.js packages/daemon/dist/main.test.js packages/mcp/dist/main.test.js packages/playwright-launcher/dist/main.test.js packages/demo/dist/player.e2e.test.js",
+    "build": "tsc -p packages/core/tsconfig.json && tsc -p packages/daemon/tsconfig.json && tsc -p packages/cli/tsconfig.json && tsc -p packages/mcp/tsconfig.json && tsc -p packages/playwright-launcher/tsconfig.json && tsc -p packages/demo/tsconfig.json && tsc -p packages/player/tsconfig.json && tsc -p packages/share-server/tsconfig.json && cd packages/player && ./node_modules/.bin/vite build",
+    "check": "tsc -p packages/core/tsconfig.json --noEmit && tsc -p packages/daemon/tsconfig.json --noEmit && tsc -p packages/cli/tsconfig.json --noEmit && tsc -p packages/mcp/tsconfig.json --noEmit && tsc -p packages/playwright-launcher/tsconfig.json --noEmit && tsc -p packages/demo/tsconfig.json --noEmit && tsc -p packages/player/tsconfig.json --noEmit && tsc -p packages/share-server/tsconfig.json --noEmit",
+    "test": "node --test packages/core/dist/storage.test.js packages/daemon/dist/main.test.js packages/mcp/dist/main.test.js packages/playwright-launcher/dist/main.test.js packages/demo/dist/player.e2e.test.js packages/share-server/dist/main.test.js",
     "rec": "node packages/cli/dist/main.js",
     "demo:record": "node packages/demo/dist/record-demo.js",
     "demo:record:multi": "node packages/demo/dist/record-demo.js --multi-tab"
