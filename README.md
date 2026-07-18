@@ -9,15 +9,11 @@ Rec is installed as one ready-to-run package: the Rec runtime, its Codex plugin,
 and the Playwright launcher. You do not clone this repository or manually wire
 MCP paths.
 
-Download the approved macOS Apple-silicon release, unpack it, and run:
-
-```sh
-./rec-<version>-darwin-arm64/install.sh
-```
-
-The installer places Rec under `~/.rec`, configures the plugin, and installs it
-in Codex. Open a new Codex task afterward. Google Chrome is required. The
-launcher obtains the separate `@playwright/mcp` dependency on first use.
+Install **Rec browser recordings** from the approved Codex marketplace, then
+open a new Codex task. On its first use, the plugin downloads the correct
+verified runtime into `~/.rec` and starts it automatically. Google Chrome is
+required. The launcher obtains the separate `@playwright/mcp` dependency on
+first use.
 
 ### Ask normally
 
@@ -134,4 +130,5 @@ usage, and limitations are in the [Railway sharing guide](docs/phase-4-railway-s
 - [Configuration](docs/configuration.md)
 - [Fresh-agent acceptance checklist](docs/phase-2-acceptance.md)
 - [Codex distribution and release build](docs/distribution.md)
+- [Changelog](CHANGELOG.md)
 - [Roadmap](docs/roadmap.md)

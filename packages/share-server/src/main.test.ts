@@ -26,7 +26,7 @@ test("uploads a portable artifact and serves its replay data", async () => {
     await store.finalize();
     const artifact = join(source, "fixture.rec");
     await exportSession("rec_share_fixture", artifact);
-    server = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], { env: { ...process.env, PORT: String(port), REC_SHARE_DATA_DIR: data, REC_SHARE_PUBLIC_URL: endpoint }, stdio: "ignore" });
+    server = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], { env: { ...process.env, PORT: String(port), REC_SHARE_DATA_DIR: data, REC_SHARE_PUBLIC_URL: endpoint, REC_RELEASE_PUBLISH_TOKEN: "test-release-token" }, stdio: "ignore" });
     await waitForHealth(endpoint);
     const upload = await fetch(`${endpoint}/v1/recordings`, { method: "POST", body: await readFile(artifact) });
     assert.equal(upload.status, 201);
@@ -38,6 +38,26 @@ test("uploads a portable artifact and serves its replay data", async () => {
     const manifest = await fetch(`${endpoint}/api/sessions/rec_share_fixture/manifest`);
     assert.equal(manifest.status, 200);
     assert.equal((await manifest.json() as { title: string }).title, "Shared fixture");
+    const denied = await fetch(`${endpoint}/v1/releases`, { method: "PUT", body: Buffer.from("release") });
+    assert.equal(denied.status, 403);
+    const published = await fetch(`${endpoint}/v1/releases`, {
+      method: "PUT",
+      headers: { authorization: "Bearer test-release-token", "x-rec-release-version": "0.2.0", "x-rec-release-platform": "darwin-arm64" },
+      body: Buffer.from("release"),
+    });
+    assert.equal(published.status, 201);
+    const latest = await fetch(`${endpoint}/v1/releases/latest?platform=darwin-arm64`);
+    assert.equal(latest.status, 200);
+    const metadata = await latest.json() as { version: string; archiveUrl: string; sha256: string };
+    assert.equal(metadata.version, "0.2.0");
+    assert.match(metadata.sha256, /^[a-f0-9]{64}$/);
+    assert.deepEqual(Buffer.from(await (await fetch(metadata.archiveUrl)).arrayBuffer()), Buffer.from("release"));
+    const duplicate = await fetch(`${endpoint}/v1/releases`, {
+      method: "PUT",
+      headers: { authorization: "Bearer test-release-token", "x-rec-release-version": "0.2.0", "x-rec-release-platform": "darwin-arm64" },
+      body: Buffer.from("replacement"),
+    });
+    assert.equal(duplicate.status, 409);
   } finally {
     if (server) await stop(server);
     if (previousHome === undefined) delete process.env.REC_HOME;

@@ -1,0 +1,24 @@
+import { readFile } from "node:fs/promises";
+import { basename, resolve } from "node:path";
+
+const [archiveInput] = process.argv.slice(2);
+const endpoint = process.env.REC_RELEASE_PUBLISH_URL?.replace(/\/$/, "") ?? "https://stitch-production-2492.up.railway.app";
+const token = process.env.REC_RELEASE_PUBLISH_TOKEN ?? (process.env.REC_RELEASE_PUBLISH_TOKEN_FILE ? (await readFile(process.env.REC_RELEASE_PUBLISH_TOKEN_FILE, "utf8")).trim() : undefined);
+if (!archiveInput) throw new Error("Usage: REC_RELEASE_PUBLISH_TOKEN=<token> node scripts/publish-release.mjs <archive.tar.gz>");
+if (!token) throw new Error("REC_RELEASE_PUBLISH_TOKEN or REC_RELEASE_PUBLISH_TOKEN_FILE is required.");
+const archive = resolve(archiveInput);
+const match = /^rec-(\d+\.\d+\.\d+)-(darwin-arm64)\.tar\.gz$/.exec(basename(archive));
+if (!match) throw new Error("Archive name must be rec-<version>-darwin-arm64.tar.gz.");
+const response = await fetch(`${endpoint}/v1/releases`, {
+  method: "PUT",
+  headers: {
+    authorization: `Bearer ${token}`,
+    "x-rec-release-version": match[1],
+    "x-rec-release-platform": match[2],
+    "content-type": "application/gzip",
+  },
+  body: await readFile(archive),
+});
+const result = await response.json().catch(() => ({}));
+if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : `Release publish failed with ${response.status}.`);
+console.log(JSON.stringify(result, null, 2));

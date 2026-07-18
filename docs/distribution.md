@@ -1,29 +1,47 @@
 # Codex distribution
 
-Rec is distributed to end users as a versioned macOS Apple-silicon archive, not
-as a source checkout. The archive contains a private Node runtime, Rec's
-compiled runtime payload, the Codex plugin, and `install.sh`.
+Rec is distributed to end users through an approved Codex marketplace, not as a
+source checkout. The plugin includes a small bootstrapper; on first use it
+downloads the matching versioned macOS Apple-silicon runtime, verifies its
+checksum, and starts Rec normally.
+
+The marketplace should be a small, plugin-only Git repository. It contains the
+marketplace catalog and `plugins/rec-mcp`, but never the Rec application source
+or runtime archives. Codex supports Git-backed marketplace sources and caches
+the installed plugin separately from the runtime.
 
 ## User installation
 
-Download the approved `rec-<version>-darwin-arm64.tar.gz` release, unpack it,
-then run its installer:
+Install **Rec browser recordings** from the approved Codex marketplace. The
+first task that uses its MCPs installs the runtime under
+`~/.rec/runtimes/<version>` automatically. A new Codex task then has both Rec
+and the shared Playwright launcher available. No archive, `pnpm install`,
+source checkout, or manual MCP configuration is required.
+
+Until Rec is accepted into a curated marketplace, the same workflow is one
+terminal command from the private plugin marketplace repository:
 
 ```sh
-tar -xzf rec-<version>-darwin-arm64.tar.gz
-./rec-<version>-darwin-arm64/install.sh
+codex plugin marketplace add <plugin-marketplace-git-url> && codex plugin add rec-mcp@rec
 ```
 
-The installer places the runtime in `~/.rec/runtimes/<version>`, preserves the
-previous plugin as a timestamped backup, configures the bundled Codex plugin,
-and asks Codex to install it. A new Codex task then has both Rec and the shared
-Playwright launcher available. No `pnpm install`, source checkout, or manual
-MCP configuration is required.
+The initial release feed permits public reads so a Codex plugin can bootstrap
+without asking users for credentials; publishing is protected by a maintainer
+token. It serves compiled artifacts only, not the source checkout. Authenticated
+downloads and stronger source-protection measures remain later hardening work.
 
-The release is designed for a private, authenticated artifact channel. Do not
-publish a release archive to a public source repository when source visibility
-matters. The release service and signing identity are intentionally separate
-from this repository.
+## Versioning
+
+Rec uses `MAJOR.MINOR.PATCH` Semantic Versioning. The root package is the
+single source of truth; every deployable package and the Codex plugin must use
+that exact version. `pnpm release:check` enforces the invariant and requires a
+matching changelog entry. `pnpm release:version <version>` updates the version
+fields together, then the release notes must be added before packaging.
+
+The release feed publishes immutable archives by platform and version. A client
+requests its current platform and receives the highest available version; once
+installed, the runtime remains pinned until a newer plugin session requests the
+feed again.
 
 ## Maintainer release build
 
@@ -35,10 +53,11 @@ pnpm package:macos
 ```
 
 This produces `.artifacts/rec-<version>-darwin-arm64.tar.gz` and its matching
-`.sha256` checksum. Before upload, the release process must sign the archive,
-notarize the embedded Node-based app bundle if required by the chosen delivery
-channel, and upload the archive, checksum, and signature to the private
-artifact service.
+`.sha256` checksum. Publish the archive with
+`REC_RELEASE_PUBLISH_TOKEN=<token> node scripts/publish-release.mjs <archive>`.
+The hosted release feed stores immutable version/platform pairs and is what the
+Codex bootstrapper reads. Before publishing, sign the archive and notarize the
+embedded Node-based app bundle if required by the delivery channel.
 
 ## Scope and limitation
 

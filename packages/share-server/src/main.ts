@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import { mkdir, readFile, rename, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -14,8 +14,13 @@ process.env.REC_HOME = join(dataDir, "spool");
 const uploadsDir = join(dataDir, "uploads");
 const sharesPath = join(dataDir, "shares.json");
 const maxUploadBytes = Number(process.env.REC_SHARE_MAX_UPLOAD_BYTES ?? 50 * 1024 * 1024);
+const releasesDir = resolve(process.env.REC_RELEASE_DIR ?? join(dataDir, "releases"));
+const releasesPath = join(releasesDir, "index.json");
+const maxReleaseBytes = Number(process.env.REC_RELEASE_MAX_UPLOAD_BYTES ?? 150 * 1024 * 1024);
+const releasePublishToken = process.env.REC_RELEASE_PUBLISH_TOKEN;
 
 type Share = { id: string; session_id: string; title: string; created_at: string; bytes: number };
+type Release = { version: string; platform: "darwin-arm64"; archive: string; sha256: string; bytes: number; published_at: string };
 
 const server = createServer((request, response) => void route(request, response).catch((error: unknown) => reply(response, 500, { error: messageOf(error) })));
 server.listen(port, "0.0.0.0", () => console.log(`rec share server listening on http://0.0.0.0:${port}`));
@@ -25,6 +30,10 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   const url = new URL(request.url ?? "/", origin);
   if (request.method === "GET" && url.pathname === "/health") return reply(response, 200, { ok: true });
   if (request.method === "POST" && url.pathname === "/v1/recordings") return upload(request, response, origin);
+  if (request.method === "PUT" && url.pathname === "/v1/releases") return publishRelease(request, response);
+  if (request.method === "GET" && url.pathname === "/v1/releases/latest") return latestRelease(response, origin, url.searchParams.get("platform"));
+  const releaseArchive = /^\/v1\/releases\/(rec-[0-9]+\.[0-9]+\.[0-9]+-darwin-arm64\.tar\.gz)$/.exec(url.pathname);
+  if (request.method === "GET" && releaseArchive) return serveRelease(response, releaseArchive[1]);
   const shared = /^\/r\/([a-f0-9]{24})$/.exec(url.pathname);
   if (request.method === "GET" && shared) return redirectToShare(response, shared[1]);
   const replay = /^\/api\/sessions\/([^/]+)\/(manifest|events)$/.exec(url.pathname);
@@ -36,8 +45,39 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   reply(response, 404, { error: "Not found" });
 }
 
+async function publishRelease(request: IncomingMessage, response: ServerResponse) {
+  if (!releasePublishToken || !validPublishToken(request.headers.authorization)) return reply(response, 403, { error: "Release publishing is not authorized." });
+  const version = releaseVersion(request.headers["x-rec-release-version"]);
+  const platform = releasePlatform(request.headers["x-rec-release-platform"]);
+  const body = await binaryBody(request, maxReleaseBytes, "Release");
+  const archive = `rec-${version}-${platform}.tar.gz`;
+  const existing = await readReleases();
+  if (existing.some((entry) => entry.version === version && entry.platform === platform)) return reply(response, 409, { error: `Rec ${version} for ${platform} is already published and cannot be replaced.` });
+  await mkdir(releasesDir, { recursive: true });
+  await writeFile(join(releasesDir, archive), body);
+  const release: Release = { version, platform, archive, sha256: createHash("sha256").update(body).digest("hex"), bytes: body.byteLength, published_at: new Date().toISOString() };
+  existing.push(release);
+  await writeReleases(existing);
+  reply(response, 201, release);
+}
+
+async function latestRelease(response: ServerResponse, origin: string, platform: string | null) {
+  if (platform !== "darwin-arm64") return reply(response, 400, { error: "platform=darwin-arm64 is required." });
+  const release = (await readReleases()).filter((entry) => entry.platform === platform).sort((left, right) => compareVersions(right.version, left.version))[0];
+  if (!release) return reply(response, 404, { error: "No runtime release is available for this platform." });
+  reply(response, 200, { version: release.version, platform: release.platform, sha256: release.sha256, bytes: release.bytes, archiveUrl: `${origin}/v1/releases/${release.archive}` });
+}
+
+async function serveRelease(response: ServerResponse, archive: string) {
+  const release = (await readReleases()).find((entry) => entry.archive === archive);
+  const path = join(releasesDir, archive);
+  if (!release || !existsSync(path)) return reply(response, 404, { error: "Runtime release not found." });
+  response.writeHead(200, { "content-type": "application/gzip", "content-length": release.bytes, "cache-control": "public, max-age=31536000, immutable" });
+  createReadStream(path).pipe(response);
+}
+
 async function upload(request: IncomingMessage, response: ServerResponse, origin: string) {
-  const body = await binaryBody(request);
+  const body = await binaryBody(request, maxUploadBytes, "Recording");
   await mkdir(uploadsDir, { recursive: true });
   const temporary = join(uploadsDir, `${randomBytes(12).toString("hex")}.rec`);
   await writeFile(temporary, body, { flag: "wx" });
@@ -101,21 +141,38 @@ function servePlayerAsset(response: ServerResponse, pathname: string) {
 
 async function readManifest(id: string) { return JSON.parse(await readFile(join(sessionPath(id), "manifest.json"), "utf8")) as RecordingManifest; }
 async function readShares() { try { return JSON.parse(await readFile(sharesPath, "utf8")) as Share[]; } catch { return []; } }
+async function readReleases() { try { return JSON.parse(await readFile(releasesPath, "utf8")) as Release[]; } catch { return []; } }
 async function writeShares(shares: Share[]) {
   await mkdir(dirname(sharesPath), { recursive: true });
   const temporary = `${sharesPath}.tmp`;
   await writeFile(temporary, JSON.stringify(shares, null, 2) + "\n");
   await rename(temporary, sharesPath);
 }
-function binaryBody(request: IncomingMessage): Promise<Buffer> {
+async function writeReleases(releases: Release[]) {
+  await mkdir(releasesDir, { recursive: true });
+  const temporary = `${releasesPath}.tmp`;
+  await writeFile(temporary, JSON.stringify(releases, null, 2) + "\n");
+  await rename(temporary, releasesPath);
+}
+function binaryBody(request: IncomingMessage, maxBytes: number, label: string): Promise<Buffer> {
   return new Promise((resolveBody, reject) => {
     const chunks: Buffer[] = [];
     let bytes = 0;
-    request.on("data", (chunk: Buffer) => { bytes += chunk.byteLength; if (bytes > maxUploadBytes) { request.destroy(new Error(`Recording exceeds the ${maxUploadBytes} byte upload limit.`)); return; } chunks.push(chunk); });
+    request.on("data", (chunk: Buffer) => { bytes += chunk.byteLength; if (bytes > maxBytes) { request.destroy(new Error(`${label} exceeds the ${maxBytes} byte upload limit.`)); return; } chunks.push(chunk); });
     request.on("end", () => resolveBody(Buffer.concat(chunks)));
     request.on("error", reject);
   });
 }
+function validPublishToken(header: string | undefined) {
+  const supplied = header?.match(/^Bearer (.+)$/)?.[1];
+  if (!supplied || !releasePublishToken) return false;
+  const expected = Buffer.from(releasePublishToken);
+  const received = Buffer.from(supplied);
+  return expected.byteLength === received.byteLength && timingSafeEqual(expected, received);
+}
+function releaseVersion(value: string | string[] | undefined) { if (typeof value === "string" && /^\d+\.\d+\.\d+$/.test(value)) return value; throw new Error("x-rec-release-version must be a semantic version such as 0.1.0."); }
+function releasePlatform(value: string | string[] | undefined): Release["platform"] { if (value === "darwin-arm64") return value; throw new Error("x-rec-release-platform must be darwin-arm64."); }
+function compareVersions(left: string, right: string) { const a = left.split(".").map(Number); const b = right.split(".").map(Number); return a[0]! - b[0]! || a[1]! - b[1]! || a[2]! - b[2]!; }
 function requestOrigin(request: IncomingMessage) { return process.env.REC_SHARE_PUBLIC_URL?.replace(/\/$/, "") ?? `http://${request.headers.host ?? `127.0.0.1:${port}`}`; }
 function reply(response: ServerResponse, status: number, value: unknown) { response.writeHead(status, { "content-type": "application/json; charset=utf-8" }); response.end(JSON.stringify(value)); }
 function messageOf(error: unknown) { return error instanceof Error ? error.message : String(error); }

@@ -1,13 +1,18 @@
 {
   "mcpServers": {
     "rec": {
-      "command": "__REC_RUNTIME_DIR__/bin/rec-mcp",
+      "command": "node",
+      "args": ["./scripts/rec-bootstrap.mjs", "rec-mcp"],
+      "cwd": ".",
       "env": {
+        "REC_RELEASE_URL": "https://stitch-production-2492.up.railway.app/v1/releases/latest",
         "REC_SHARE_URL": "https://stitch-production-2492.up.railway.app"
       }
     },
     "playwright": {
-      "command": "__REC_RUNTIME_DIR__/bin/rec-playwright-launcher"
+      "command": "node",
+      "args": ["./scripts/rec-bootstrap.mjs", "rec-playwright-launcher"],
+      "cwd": "."
     }
   }
 }
