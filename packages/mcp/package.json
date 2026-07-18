@@ -1,10 +1,14 @@
 {
   "name": "@rec/mcp",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
-  "files": ["dist"],
-  "bin": { "rec-mcp": "./dist/main.js" },
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "rec-mcp": "./dist/main.js"
+  },
   "dependencies": {
     "@rec/core": "workspace:*"
   },

@@ -131,5 +131,6 @@ usage, and limitations are in the [Railway sharing guide](docs/phase-4-railway-s
 - [Configuration](docs/configuration.md)
 - [Fresh-agent acceptance checklist](docs/phase-2-acceptance.md)
 - [Codex distribution and release build](docs/distribution.md)
+- [Development and release lanes](docs/development-and-releases.md)
 - [Changelog](CHANGELOG.md)
 - [Roadmap](docs/roadmap.md)

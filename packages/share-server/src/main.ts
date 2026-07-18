@@ -32,6 +32,8 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   if (request.method === "POST" && url.pathname === "/v1/recordings") return upload(request, response, origin);
   if (request.method === "PUT" && url.pathname === "/v1/releases") return publishRelease(request, response);
   if (request.method === "GET" && url.pathname === "/v1/releases/latest") return latestRelease(response, origin, url.searchParams.get("platform"));
+  const releaseMetadata = /^\/v1\/releases\/(\d+\.\d+\.\d+)$/.exec(url.pathname);
+  if (request.method === "GET" && releaseMetadata) return releaseByVersion(response, origin, releaseMetadata[1]!, url.searchParams.get("platform"));
   const releaseArchive = /^\/v1\/releases\/(rec-[0-9]+\.[0-9]+\.[0-9]+-darwin-arm64\.tar\.gz)$/.exec(url.pathname);
   if (request.method === "GET" && releaseArchive) return serveRelease(response, releaseArchive[1]);
   const shared = /^\/r\/([a-f0-9]{24})$/.exec(url.pathname);
@@ -65,7 +67,14 @@ async function latestRelease(response: ServerResponse, origin: string, platform:
   if (platform !== "darwin-arm64") return reply(response, 400, { error: "platform=darwin-arm64 is required." });
   const release = (await readReleases()).filter((entry) => entry.platform === platform).sort((left, right) => compareVersions(right.version, left.version))[0];
   if (!release) return reply(response, 404, { error: "No runtime release is available for this platform." });
-  reply(response, 200, { version: release.version, platform: release.platform, sha256: release.sha256, bytes: release.bytes, archiveUrl: `${origin}/v1/releases/${release.archive}` });
+  reply(response, 200, releaseMetadata(origin, release));
+}
+
+async function releaseByVersion(response: ServerResponse, origin: string, version: string, platform: string | null) {
+  if (platform !== "darwin-arm64") return reply(response, 400, { error: "platform=darwin-arm64 is required." });
+  const release = (await readReleases()).find((entry) => entry.platform === platform && entry.version === version);
+  if (!release) return reply(response, 404, { error: `Rec ${version} for ${platform} is not available.` });
+  reply(response, 200, releaseMetadata(origin, release));
 }
 
 async function serveRelease(response: ServerResponse, archive: string) {
@@ -173,6 +182,7 @@ function validPublishToken(header: string | undefined) {
 function releaseVersion(value: string | string[] | undefined) { if (typeof value === "string" && /^\d+\.\d+\.\d+$/.test(value)) return value; throw new Error("x-rec-release-version must be a semantic version such as 0.1.0."); }
 function releasePlatform(value: string | string[] | undefined): Release["platform"] { if (value === "darwin-arm64") return value; throw new Error("x-rec-release-platform must be darwin-arm64."); }
 function compareVersions(left: string, right: string) { const a = left.split(".").map(Number); const b = right.split(".").map(Number); return a[0]! - b[0]! || a[1]! - b[1]! || a[2]! - b[2]!; }
+function releaseMetadata(origin: string, release: Release) { return { version: release.version, platform: release.platform, sha256: release.sha256, bytes: release.bytes, archiveUrl: `${origin}/v1/releases/${release.archive}` }; }
 function requestOrigin(request: IncomingMessage) { return process.env.REC_SHARE_PUBLIC_URL?.replace(/\/$/, "") ?? `http://${request.headers.host ?? `127.0.0.1:${port}`}`; }
 function reply(response: ServerResponse, status: number, value: unknown) { response.writeHead(status, { "content-type": "application/json; charset=utf-8" }); response.end(JSON.stringify(value)); }
 function messageOf(error: unknown) { return error instanceof Error ? error.message : String(error); }

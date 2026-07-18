@@ -10,9 +10,10 @@ import { promisify } from "node:util";
 import { execFile as execute } from "node:child_process";
 
 const execFile = promisify(execute);
-const releaseEndpoint = process.env.REC_RELEASE_URL ?? "https://stitch-production-2492.up.railway.app/v1/releases/latest";
+const releaseEndpoint = process.env.REC_RELEASE_URL ?? "https://stitch-production-2492.up.railway.app/v1/releases";
 const runtimeHome = process.env.REC_RUNTIME_HOME ?? join(homedir(), ".rec", "runtimes");
 const platform = `${process.platform}-${process.arch}`;
+const runtimeVersion = process.env.REC_RUNTIME_VERSION;
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const component = process.argv[2];
@@ -35,7 +36,7 @@ export async function ensureRuntime(options = {}) {
   const configuredHome = options.runtimeHome ?? runtimeHome;
   const configuredPlatform = options.platform ?? platform;
   if (configuredPlatform !== "darwin-arm64") throw new Error(`No Rec runtime is available for ${configuredPlatform}.`);
-  const metadata = await releaseMetadata(configuredEndpoint, configuredPlatform);
+  const metadata = await releaseMetadata(configuredEndpoint, configuredPlatform, options.version ?? runtimeVersion);
   const runtime = join(configuredHome, metadata.version);
   if (existsSync(join(runtime, "bin", "rec-mcp"))) return runtime;
   await mkdir(configuredHome, { recursive: true });
@@ -46,14 +47,24 @@ export async function ensureRuntime(options = {}) {
   });
 }
 
-async function releaseMetadata(endpoint, expectedPlatform) {
-  const url = new URL(endpoint);
+async function releaseMetadata(endpoint, expectedPlatform, expectedVersion) {
+  const url = releaseMetadataUrl(endpoint, expectedVersion);
   url.searchParams.set("platform", expectedPlatform);
   const response = await fetch(url);
   const value = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(typeof value.error === "string" ? value.error : `Release feed returned ${response.status}.`);
   if (!value || typeof value.version !== "string" || !/^\d+\.\d+\.\d+$/.test(value.version) || value.platform !== expectedPlatform || typeof value.archiveUrl !== "string" || !/^[a-f0-9]{64}$/.test(value.sha256 ?? "")) throw new Error("Release feed returned invalid metadata.");
+  if (expectedVersion && value.version !== expectedVersion) throw new Error(`Release feed returned ${value.version}; expected pinned Rec runtime ${expectedVersion}.`);
   return value;
+}
+
+function releaseMetadataUrl(endpoint, version) {
+  const url = new URL(endpoint);
+  const suffix = version ?? "latest";
+  // Accept the previous /latest setting during migration, while new plugin
+  // releases point at the collection endpoint and request their own version.
+  url.pathname = url.pathname.replace(/\/(?:latest|\d+\.\d+\.\d+)$/, "").replace(/\/$/, "") + `/${suffix}`;
+  return url;
 }
 
 async function installRuntime(metadata, destination, home) {

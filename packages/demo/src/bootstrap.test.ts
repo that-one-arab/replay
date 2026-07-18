@@ -29,7 +29,7 @@ test("bootstrap installs a verified runtime from the release feed", async () => 
     const checksum = createHash("sha256").update(artifact).digest("hex");
     server.on("request", (request, response) => {
       const origin = `http://${request.headers.host}`;
-      if (request.url?.startsWith("/v1/releases/latest")) {
+      if (request.url?.startsWith(`/v1/releases/${version}`)) {
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify({ version, platform, sha256: checksum, archiveUrl: `${origin}/archive` }));
       } else if (request.url === "/archive") {
@@ -42,8 +42,8 @@ test("bootstrap installs a verified runtime from the release feed", async () => 
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Could not start the release feed fixture.");
     const bootstrapUrl = new URL("../../../plugins/rec-mcp/scripts/rec-bootstrap.mjs", import.meta.url).href;
-    const { ensureRuntime } = await import(bootstrapUrl) as { ensureRuntime: (options: { releaseEndpoint: string; runtimeHome: string; platform: string }) => Promise<string> };
-    const result = await ensureRuntime({ releaseEndpoint: `http://127.0.0.1:${address.port}/v1/releases/latest`, runtimeHome: installed, platform });
+    const { ensureRuntime } = await import(bootstrapUrl) as { ensureRuntime: (options: { releaseEndpoint: string; runtimeHome: string; platform: string; version: string }) => Promise<string> };
+    const result = await ensureRuntime({ releaseEndpoint: `http://127.0.0.1:${address.port}/v1/releases`, runtimeHome: installed, platform, version });
     assert.equal(result, join(installed, version));
     assert.equal(await readFile(join(result, "bin", "rec-mcp"), "utf8"), "#!/bin/sh\nexit 0\n");
   } finally {

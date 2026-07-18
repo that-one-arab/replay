@@ -52,6 +52,11 @@ test("uploads a portable artifact and serves its replay data", async () => {
     assert.equal(metadata.version, "0.2.0");
     assert.match(metadata.sha256, /^[a-f0-9]{64}$/);
     assert.deepEqual(Buffer.from(await (await fetch(metadata.archiveUrl)).arrayBuffer()), Buffer.from("release"));
+    const pinned = await fetch(`${endpoint}/v1/releases/0.2.0?platform=darwin-arm64`);
+    assert.equal(pinned.status, 200);
+    assert.equal((await pinned.json() as { version: string }).version, "0.2.0");
+    const absent = await fetch(`${endpoint}/v1/releases/9.9.9?platform=darwin-arm64`);
+    assert.equal(absent.status, 404);
     const duplicate = await fetch(`${endpoint}/v1/releases`, {
       method: "PUT",
       headers: { authorization: "Bearer test-release-token", "x-rec-release-version": "0.2.0", "x-rec-release-platform": "darwin-arm64" },

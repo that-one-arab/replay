@@ -306,7 +306,7 @@ sequenceDiagram
   participant Runtime as Packaged Rec runtime
 
   Codex->>Plugin: start rec or playwright MCP
-  Plugin->>Feed: GET latest release for darwin-arm64
+  Plugin->>Feed: GET pinned release for darwin-arm64
   Feed-->>Plugin: version, archive URL, SHA-256
   Plugin->>Disk: lock, download, verify, extract atomically
   Plugin->>Runtime: execute requested entry point
@@ -314,8 +314,9 @@ sequenceDiagram
 
 The bootstrapper uses an installation lock and verifies the downloaded archive's
 SHA-256 before extraction. It currently supports macOS on Apple silicon
-(`darwin-arm64`). Once installed, the runtime is reused until the release feed
-offers a newer version.
+(`darwin-arm64`). A production plugin requests the exact runtime version it was
+released with, so a new runtime is adopted only after an intentional marketplace
+plugin upgrade.
 
 `pnpm package:macos` builds a release archive containing the compiled runtime,
 the player assets, production dependencies, and an embedded Node executable. It
@@ -327,8 +328,8 @@ The release feed is hosted by the share server:
 
 - Maintainers publish with an authorized `PUT /v1/releases` request.
 - A version/platform pair is immutable once published.
-- Clients read `GET /v1/releases/latest?platform=darwin-arm64` and download the
-  archive URL it returns.
+- Production clients read `GET /v1/releases/<version>?platform=darwin-arm64`;
+  `latest` remains available only for diagnostics and older plugins.
 
 This packaging avoids making the source checkout a prerequisite for installation
 but is not a cryptographic secrecy boundary: a packaged JavaScript runtime can

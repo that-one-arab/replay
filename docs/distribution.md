@@ -2,7 +2,7 @@
 
 Rec is distributed to end users through an approved Codex marketplace, not as a
 source checkout. The plugin includes a small bootstrapper; on first use it
-downloads the matching versioned macOS Apple-silicon runtime, verifies its
+downloads its pinned versioned macOS Apple-silicon runtime, verifies its
 checksum, and starts Rec normally.
 
 The marketplace should be a small, plugin-only Git repository. It contains the
@@ -48,10 +48,12 @@ that exact version. `pnpm release:check` enforces the invariant and requires a
 matching changelog entry. `pnpm release:version <version>` updates the version
 fields together, then the release notes must be added before packaging.
 
-The release feed publishes immutable archives by platform and version. A client
-requests its current platform and receives the highest available version; once
-installed, the runtime remains pinned until a newer plugin session requests the
-feed again.
+The release feed publishes immutable archives by platform and version. A
+production plugin requests the exact runtime version it was released with, so
+users upgrade only after they update the marketplace plugin. The feed also has a
+`latest` endpoint for diagnostics and older plugins, but it is not the normal
+production upgrade path. See the [development and release lanes](development-and-releases.md)
+for switching, validation, release, and rollback steps.
 
 ## Maintainer release build
 
