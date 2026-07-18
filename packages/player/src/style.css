@@ -114,9 +114,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
   margin-left: 0;
 }
 /* Idle chrome: while playing, controls step back until the pointer returns. */
-.control-deck, .segment-picker { transition: opacity .35s ease; }
+.control-deck { transition: opacity .35s ease, transform .35s ease; }
+.segment-picker { transition: opacity .35s ease; }
 .replay-screen.is-idle { cursor: none; }
-.replay-screen.is-idle .control-deck,
+.replay-screen.is-idle .control-deck { opacity: 0; transform: translateX(-50%) translateY(10px); pointer-events: none; }
 .replay-screen.is-idle .segment-picker { opacity: 0; pointer-events: none; }
 
 /* Recorded tab strip */
@@ -155,7 +156,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
 .refresh-indicator {
   position: absolute;
   z-index: 3;
-  inset: 0 0 126px;
+  inset: 0;
+  padding-bottom: 118px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -187,7 +189,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
   position: absolute;
   z-index: 3;
   left: clamp(22px, 5vw, 78px);
-  bottom: 148px;
+  bottom: 136px;
   max-width: min(440px, calc(100vw - 44px));
   padding: 12px 16px;
   text-align: left;
@@ -211,7 +213,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
 .session-overlay {
   position: absolute;
   z-index: 3;
-  inset: 0 0 126px;
+  inset: 0;
+  padding-bottom: 118px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -285,108 +288,116 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
 }
 .watch-again:hover { background: #fff; }
 
-/* Control deck */
+/* Control deck: a floating island — timeline on top, one compact row below */
 .control-deck {
   position: absolute;
   z-index: 4;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 48px clamp(22px, 5vw, 78px) 24px;
-  background: linear-gradient(transparent, rgba(5, 5, 7, .92) 45%);
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  width: min(960px, calc(100vw - 32px));
 }
-.control-main { display: flex; align-items: center; gap: 13px; }
+.deck-island {
+  padding: 12px 14px 10px;
+  background: rgba(13, 14, 20, .82);
+  border: 1px solid rgba(196, 189, 255, .22);
+  border-radius: 14px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .45);
+  backdrop-filter: blur(16px);
+}
+.control-main { display: flex; align-items: center; gap: 10px; }
 .play-button {
   position: relative;
-  width: 38px;
-  height: 38px;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
   border: 0;
   border-radius: 50%;
   background: rgba(255, 255, 255, .94);
   cursor: pointer;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, .28);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .28);
 }
 .play-button span {
   position: absolute;
-  left: 15px;
-  top: 11px;
+  left: 12px;
+  top: 9px;
   width: 0;
   height: 0;
-  border-top: 8px solid transparent;
-  border-bottom: 8px solid transparent;
-  border-left: 11px solid #171720;
+  border-top: 7px solid transparent;
+  border-bottom: 7px solid transparent;
+  border-left: 10px solid #171720;
 }
 .play-button.is-playing span {
-  left: 13px;
-  top: 11px;
-  width: 11px;
-  height: 16px;
+  left: 11px;
+  top: 9px;
+  width: 10px;
+  height: 14px;
   border: 0;
   border-left: 3px solid #171720;
   border-right: 3px solid #171720;
 }
-.time-readout { min-width: 94px; color: rgba(255, 255, 255, .56); font: 11px "DM Mono"; }
+.time-readout { min-width: 84px; color: rgba(255, 255, 255, .56); font: 11px "DM Mono"; white-space: nowrap; }
 .time-readout strong { color: white; }
-.speed-control {
-  display: flex;
-  gap: 1px;
-  padding: 2px;
-  background: rgba(0, 0, 0, .38);
-  border: 1px solid rgba(255, 255, 255, .2);
-  border-radius: 6px;
-}
-.speed-control button {
-  color: rgba(255, 255, 255, .6);
-  background: transparent;
-  border: 0;
-  padding: 4px 7px;
-  border-radius: 4px;
-  cursor: pointer;
-  font: 10px "DM Mono";
-}
-.speed-control button.selected { color: #171720; background: #f5f4fa; }
-.camera-control {
+
+/* Deck menus: show the current value, keep the options one click away */
+.deck-menu { position: relative; }
+#speed-menu { margin-left: auto; }
+.menu-button {
   display: flex;
   align-items: center;
-  gap: 1px;
-  padding: 2px;
-  background: rgba(0, 0, 0, .38);
-  border: 1px solid rgba(255, 255, 255, .2);
-  border-radius: 6px;
-}
-.camera-control > span { padding: 0 4px; color: rgba(255, 255, 255, .55); font: 10px "DM Mono"; }
-.camera-control button {
-  color: rgba(255, 255, 255, .6);
-  background: transparent;
-  border: 0;
-  padding: 4px 7px;
-  border-radius: 4px;
-  cursor: pointer;
+  gap: 5px;
+  padding: 5px 9px;
+  color: rgba(255, 255, 255, .75);
+  background: rgba(255, 255, 255, .06);
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 7px;
   font: 10px "DM Mono";
-}
-.camera-control button.selected { color: #171720; background: #f5f4fa; }
-.idle-control {
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  margin-left: auto;
-  padding: 2px;
-  background: rgba(0, 0, 0, .38);
-  border: 1px solid rgba(255, 255, 255, .2);
-  border-radius: 6px;
-}
-.idle-control > span { padding: 0 4px; color: rgba(255, 255, 255, .55); font: 10px "DM Mono"; }
-.idle-control button {
-  color: rgba(255, 255, 255, .6);
-  background: transparent;
-  border: 0;
-  padding: 4px 7px;
-  border-radius: 4px;
   cursor: pointer;
-  font: 10px "DM Mono";
+  white-space: nowrap;
 }
-.idle-control button.selected { color: #171720; background: #f5f4fa; }
-.control-main > #idle-summary { padding: 2px 5px; color: #171720; background: #b7abff; border-radius: 999px; font: 9px "DM Mono"; }
+.menu-button:hover { color: #fff; background: rgba(255, 255, 255, .12); }
+.menu-button i { font-style: normal; font-size: 8px; opacity: .7; }
+.menu-button-icon { padding: 6px 8px; }
+.menu-pop {
+  position: absolute;
+  z-index: 7;
+  right: 0;
+  bottom: calc(100% + 12px);
+  min-width: 168px;
+  padding: 10px;
+  background: rgba(16, 17, 24, .95);
+  border: 1px solid rgba(196, 189, 255, .28);
+  border-radius: 10px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, .5);
+  backdrop-filter: blur(14px);
+}
+.menu-pop[hidden] { display: none; }
+#speed-menu .menu-pop { min-width: 92px; }
+.menu-options-column { flex-direction: column; }
+.menu-options-column button { text-align: left; }
+.menu-label {
+  display: block;
+  margin: 10px 0 5px;
+  color: rgba(255, 255, 255, .5);
+  font: 9px "DM Mono";
+  text-transform: uppercase;
+  letter-spacing: .12em;
+}
+.menu-label:first-child { margin-top: 0; }
+.menu-options { display: flex; gap: 3px; }
+.menu-options button {
+  flex: 1;
+  padding: 5px 8px;
+  color: rgba(255, 255, 255, .65);
+  background: rgba(255, 255, 255, .05);
+  border: 0;
+  border-radius: 6px;
+  font: 10px "DM Mono";
+  cursor: pointer;
+}
+.menu-options button:hover { background: rgba(255, 255, 255, .12); }
+.menu-options button.selected { color: #171720; background: #f5f4fa; }
+.menu-note { display: block; margin-top: 7px; color: rgba(255, 255, 255, .45); font: 9px "DM Mono"; }
 
 /* Share */
 .share-control { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -403,7 +414,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
 .share-button:hover { background: #c8bdff; }
 .share-button:disabled { opacity: .6; cursor: default; }
 .share-link {
-  max-width: min(260px, 32vw);
+  max-width: min(180px, 24vw);
   overflow: hidden;
   color: #b5aaff;
   font: 10px "DM Mono";
@@ -486,7 +497,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
 
 /* Timeline. Visual hierarchy, most prominent first: markers, the chaptered
    baseline and progress, activity density, then idle and navigation hints. */
-.timeline-wrap { position: relative; height: 44px; margin: 16px 2px 0; display: flex; align-items: end; }
+.timeline-wrap { position: relative; height: 38px; margin: 0 4px 10px; display: flex; align-items: end; }
 .timeline-chapters { position: absolute; z-index: 1; inset: 0; pointer-events: none; }
 .timeline-chapters i {
   position: absolute;
@@ -495,7 +506,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
   border-radius: 2px;
   background: rgba(255, 255, 255, .28);
 }
-.timeline-idle { position: absolute; z-index: 0; inset: 0 0 8px; overflow: hidden; pointer-events: none; }
+.timeline-idle { position: absolute; z-index: 0; inset: 0 0 7px; overflow: hidden; pointer-events: none; }
 .timeline-idle i {
   position: absolute;
   top: 0;
@@ -515,8 +526,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
   background: rgba(255, 202, 114, .85);
   box-shadow: 0 0 5px rgba(255, 202, 114, .4);
 }
-.timeline-density { position: absolute; z-index: 1; inset: 0 0 8px; display: flex; align-items: end; gap: 2px; }
-.timeline-density i { flex: 1; min-width: 1px; height: calc(var(--level) * 16px); border-radius: 1px 1px 0 0; background: rgba(148, 134, 255, .35); }
+.timeline-density { position: absolute; z-index: 1; inset: 0 0 7px; display: flex; align-items: end; gap: 2px; }
+.timeline-density i { flex: 1; min-width: 1px; height: calc(var(--level) * 13px); border-radius: 1px 1px 0 0; background: rgba(148, 134, 255, .35); }
 .timeline-progress { position: absolute; z-index: 2; left: 0; bottom: 0; height: 3px; border-radius: 3px; background: #fff; box-shadow: 0 0 9px #b9acff; }
 .timeline-playhead {
   position: absolute;
@@ -539,7 +550,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
   bottom: 0;
   transform: translateX(-50%);
   width: 22px;
-  height: 44px;
+  height: 38px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -601,9 +612,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
 .error p:last-child { color: #aaa7b6; }
 
 @media (max-width: 640px) {
-  .caption-card { left: 18px; bottom: 138px; }
-  .control-deck { padding: 42px 18px 18px; }
-  .speed-control button, .idle-control button, .camera-control button { padding: 4px 5px; }
-  .idle-control > span, .camera-control > span { display: none; }
-  .time-readout { min-width: 76px; }
+  .caption-card { left: 18px; bottom: 128px; }
+  .control-deck { bottom: 10px; width: calc(100vw - 20px); }
+  .deck-island { padding: 10px 10px 8px; }
+  .control-main { gap: 7px; }
+  .time-readout { min-width: 64px; }
+  .share-link { max-width: 110px; }
 }

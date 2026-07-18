@@ -22,6 +22,7 @@ const TAB_FOCUS_DELAY_MS = 700;
 const IDLE_THRESHOLD_MS = 3_000;
 const RELOAD_CONTEXT_MS = 750;
 const CURSOR_APPROACH_MS = 420;
+const KEYSTROKE_PACE_MS = 85;
 const REFRESH_INDICATOR_MS = 1_100;
 const MIN_REFRESH_INDICATOR_MS = 160;
 const MAX_REFRESH_INDICATOR_MS = 1_500;
@@ -67,6 +68,10 @@ else {
 app.addEventListener("pointermove", wakeInterface);
 app.addEventListener("pointerdown", wakeInterface);
 window.addEventListener("keydown", wakeInterface, true);
+app.addEventListener("click", (event) => {
+  if (!(event.target instanceof Element) || !event.target.closest(".deck-menu")) closeDeckMenus();
+});
+window.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDeckMenus(); }, true);
 
 function maintainReplayLease() {
   let leaseId: string | undefined;
@@ -130,6 +135,7 @@ async function load(recordingId: string) {
       wireShareControl(resolvedManifest.id);
       wireChapters();
       wireSessionCards();
+      wireDeckMenus();
       await replay(projection.manifest, projection.eventSets, projection.duration, projection.manifest.segments[0], projection.toPlayback(rawTime), autoplay, (nextMode, requestedTime, shouldAutoplay) => {
         idleMode = nextMode;
         void present(projection.toRaw(requestedTime), shouldAutoplay).catch(renderError);
@@ -146,17 +152,19 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
     : "";
   // The tuned default pace is the recording's "natural" speed — present it as
   // 1× instead of leaking the internal multiplier into the control.
-  const speedControls = [...new Set([0.25, 0.5, defaults.default_speed, 2, 4, 8])]
-    .map((speed) => `<button data-speed="${speed}"${speed === playbackSpeed ? " class=\"selected\"" : ""}>${speed === defaults.default_speed ? "1×" : `${speed}×`}</button>`)
-    .join("");
-  const cameraControl = cameraFeature
-    ? `<div class="camera-control" role="group" aria-label="Automatic zoom"><span>Zoom</span>${([["auto", "Auto"], ["off", "Off"]] as const).map(([mode, label]) => `<button data-camera-mode="${mode}"${(mode === "auto") === cameraZoomEnabled ? " class=\"selected\"" : ""}>${label}</button>`).join("")}</div>`
-    : "";
+  const speedOptions = [...new Set([0.25, 0.5, defaults.default_speed, 2, 4, 8])]
+    .map((speed) => ({ speed, label: speed === defaults.default_speed ? "1×" : `${speed}×` }));
+  const currentSpeedLabel = speedOptions.find((option) => option.speed === playbackSpeed)?.label ?? `${playbackSpeed}×`;
+  const speedMenu = `<div class="deck-menu" id="speed-menu"><button class="menu-button" id="speed-button" type="button" aria-haspopup="true" aria-expanded="false"><b id="speed-current">${currentSpeedLabel}</b><i aria-hidden="true">▾</i></button><div class="menu-pop" hidden><span class="menu-label">Speed</span><div class="menu-options menu-options-column">${speedOptions.map(({ speed, label }) => `<button data-speed="${speed}" data-speed-label="${label}"${speed === playbackSpeed ? " class=\"selected\"" : ""}>${label}</button>`).join("")}</div></div></div>`;
   const idleControls = ([
     ["cut", "Cut"],
     ["fast_forward", `${defaults.idle_fast_forward_speed}×`],
     ["preserve", "Keep"],
   ] as const).map(([mode, label]) => `<button data-idle-mode="${mode}"${mode === idleMode ? " class=\"selected\"" : ""}>${label}</button>`).join("");
+  const cameraSection = cameraFeature
+    ? `<span class="menu-label">Auto zoom</span><div class="menu-options">${([["auto", "Auto"], ["off", "Off"]] as const).map(([mode, label]) => `<button data-camera-mode="${mode}"${(mode === "auto") === cameraZoomEnabled ? " class=\"selected\"" : ""}>${label}</button>`).join("")}</div>`
+    : "";
+  const settingsMenu = `<div class="deck-menu" id="settings-menu"><button class="menu-button menu-button-icon" id="settings-button" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Replay settings"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button><div class="menu-pop" hidden><span class="menu-label">Idle time</span><div class="menu-options">${idleControls}</div><span class="menu-note" id="idle-summary"></span>${cameraSection}</div></div>`;
   const shareControl = shareAvailable
     ? `<div class="share-control" id="share-control">${shareUrl ? shareResultMarkup(shareUrl) : `<button class="share-button" id="share" type="button">Share</button>`}</div>`
     : "";
@@ -171,7 +179,7 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
   const chaptersPanel = manifest.markers.length
     ? `<aside class="chapters-panel" id="chapters-panel" aria-label="Recording chapters"><header>Chapters<span>${manifest.markers.length}</span></header><ol>${manifest.markers.map((marker) => `<li><button type="button" data-chapter="${marker.t_ms}"${marker.color === "yellow" ? " data-chapter-color=\"yellow\"" : ""} aria-current="false"><b>${format(marker.t_ms)}</b><span><strong>${escape(marker.label)}</strong>${marker.note ? `<p>${escape(marker.note)}</p>` : ""}</span></button></li>`).join("")}</ol></aside>`
     : "";
-  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="state-flash" id="state-flash" aria-hidden="true"><span></span></div><b id="stage-status" class="sr-only" role="status">Paused</b>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div>${introCard}${endCard}<section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div>${cameraControl}<div class="idle-control" role="group" aria-label="Idle handling"><span>Idle</span>${idleControls}</div><b id="idle-summary"></b>${shareControl}${chaptersToggle}</div><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section>${chaptersPanel}<div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
+  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="state-flash" id="state-flash" aria-hidden="true"><span></span></div><b id="stage-status" class="sr-only" role="status">Paused</b>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div>${introCard}${endCard}<section class="control-deck" aria-label="Browser replay controls"><div class="deck-island"><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div>${speedMenu}${settingsMenu}${shareControl}${chaptersToggle}</div></div></section>${chaptersPanel}<div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
 }
 
 async function detectShareAvailability() {
@@ -424,8 +432,11 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     camera.setEnabled(cameraZoomEnabled);
   });
   document.querySelectorAll<HTMLButtonElement>("[data-speed]").forEach((button) => button.onclick = () => {
-    document.querySelector(".speed-control .selected")?.classList.remove("selected");
+    document.querySelector("#speed-menu .selected")?.classList.remove("selected");
     button.classList.add("selected");
+    const current = document.querySelector<HTMLElement>("#speed-current");
+    if (current && button.dataset.speedLabel) current.textContent = button.dataset.speedLabel;
+    closeDeckMenus();
     const speed = Number(button.dataset.speed);
     selectedPlaybackSpeed = speed;
     replayer.setConfig({ speed });
@@ -691,7 +702,10 @@ function prepareTimeline(markers: Marker[], navigationEvents: NavigationEvent[],
     const label = `${action} — ${formatDuration(exactDuration)} transition`;
     return `<i data-navigation-event data-timeline-start="${event.started_at_ms}" data-timeline-end="${presentationEnd}" data-timeline-tooltip="${escape(label)}" style="left:${start}%;width:${Math.max(.45, end - start)}%"></i>`;
   }).join("");
-  document.querySelector<HTMLElement>("#idle-summary")!.textContent = projectedIdle.length ? `${projectedIdle.length} gap${projectedIdle.length === 1 ? "" : "s"}` : "";
+  const removed = projectedIdle.reduce((total, range) => total + Math.max(0, range.originalDuration - (range.end - range.start)), 0);
+  document.querySelector<HTMLElement>("#idle-summary")!.textContent = projectedIdle.length
+    ? `${projectedIdle.length} gap${projectedIdle.length === 1 ? "" : "s"}${removed >= 1_000 ? ` · ${formatDuration(removed)} ${projectedIdle[0]!.mode === "fast_forward" ? "compressed" : "skipped"}` : ""}`
+    : "No idle gaps";
   document.querySelector<HTMLElement>("#timeline-markers")!.innerHTML = markers.map((marker, index) => `<button data-marker="${marker.t_ms}" data-marker-index="${index}"${marker.color === "yellow" ? " data-marker-color=\"yellow\"" : ""} data-timeline-tooltip="${escape(marker.label)}" aria-label="Jump to marker: ${escape(marker.label)}" aria-current="false" style="left:${clamp(marker.t_ms / duration * 100, 1, 99)}%"><span class="marker-dot"></span></button>`).join("");
 }
 
@@ -733,6 +747,23 @@ function dismissIntro() {
 }
 function setEndCard(visible: boolean) {
   document.querySelector("#end-card")?.classList.toggle("is-visible", visible);
+}
+function wireDeckMenus() {
+  document.querySelectorAll<HTMLElement>(".deck-menu").forEach((menu) => {
+    const button = menu.querySelector<HTMLButtonElement>(".menu-button");
+    const pop = menu.querySelector<HTMLElement>(".menu-pop");
+    if (!button || !pop) return;
+    button.onclick = () => {
+      const willOpen = pop.hidden;
+      closeDeckMenus();
+      pop.hidden = !willOpen;
+      button.setAttribute("aria-expanded", String(willOpen));
+    };
+  });
+}
+function closeDeckMenus() {
+  document.querySelectorAll<HTMLElement>(".deck-menu .menu-pop:not([hidden])").forEach((pop) => { pop.hidden = true; });
+  document.querySelectorAll<HTMLElement>(".deck-menu .menu-button[aria-expanded='true']").forEach((button) => button.setAttribute("aria-expanded", "false"));
 }
 function wireChapters() {
   const toggle = document.querySelector<HTMLButtonElement>("#chapters-toggle");
@@ -949,6 +980,10 @@ function humanizeEvents(events: ReplayEvent[]) {
   let addedDelay = 0;
   let lastEmittedAt = -Infinity;
   let cursor: { x: number; y: number; t: number } | undefined;
+  // rrweb stores an input's full cumulative value on every keystroke. Remember
+  // the last value per field so a stream of per-keystroke events can be paced
+  // in place instead of re-dramatized from the first character.
+  const lastInput = new Map<number, { text: string; nextSlot: number }>();
   for (const event of events) {
     // Playwright's raw move stream often represents instantaneous driver jumps,
     // not a useful human gesture. Reconstruct that gesture from actual targets.
@@ -982,15 +1017,45 @@ function humanizeEvents(events: ReplayEvent[]) {
         cursor = { ...pointer, t: adjusted.timestamp };
       }
     }
-    if (isVisibleShortFill(adjusted)) {
-      const text = adjusted.data!.text!;
-      const characters = Array.from(text);
-      for (let index = 0; index < characters.length; index += 1) {
-        const typed = characters.slice(0, index + 1).join("");
-        output.push({ ...adjusted, timestamp: adjusted.timestamp + (index + 1) * 85, data: { ...adjusted.data, text: typed } });
+    const typedText = typeableFill(adjusted);
+    if (typedText !== undefined) {
+      const id = adjusted.data!.id;
+      const prior = typeof id === "number" ? lastInput.get(id) : undefined;
+      // Incremental typing: this event is the previous value plus one or more
+      // characters. rrweb already has the right cumulative value, so just pace
+      // it onto the keystroke cadence. Splitting from the first character here
+      // is what visibly deletes and retypes the field on every keystroke.
+      const added = prior && typedText.startsWith(prior.text) ? Array.from(typedText).length - Array.from(prior.text).length : 0;
+      if (prior && added > 0) {
+        const stepAt = Math.max(adjusted.timestamp, prior.nextSlot);
+        addedDelay += Math.max(0, stepAt - adjusted.timestamp);
+        output.push({ ...adjusted, timestamp: stepAt });
+        lastEmittedAt = stepAt;
+        prior.text = typedText;
+        prior.nextSlot = stepAt + added * KEYSTROKE_PACE_MS;
+        continue;
       }
-      addedDelay += characters.length * 85;
-      lastEmittedAt = output.at(-1)!.timestamp;
+      if (isVisibleShortFill(adjusted)) {
+        // A batch fill (paste or a single insertText) arrives with the whole
+        // value at once; dramatize it character by character from an empty field.
+        const characters = Array.from(typedText);
+        let slot = adjusted.timestamp;
+        for (let index = 0; index < characters.length; index += 1) {
+          const typed = characters.slice(0, index + 1).join("");
+          slot = adjusted.timestamp + (index + 1) * KEYSTROKE_PACE_MS;
+          output.push({ ...adjusted, timestamp: slot, data: { ...adjusted.data, text: typed } });
+        }
+        addedDelay += characters.length * KEYSTROKE_PACE_MS;
+        lastEmittedAt = slot;
+        if (typeof id === "number") lastInput.set(id, { text: typedText, nextSlot: slot + KEYSTROKE_PACE_MS });
+        continue;
+      }
+      // Lone keystrokes (one or two characters) and checkbox "on" values pass
+      // through unchanged, but the value is still remembered so the next
+      // keystroke is recognized as incremental.
+      output.push(adjusted);
+      lastEmittedAt = adjusted.timestamp;
+      if (typeof id === "number") lastInput.set(id, { text: typedText, nextSlot: adjusted.timestamp + KEYSTROKE_PACE_MS });
       continue;
     }
     output.push(adjusted);

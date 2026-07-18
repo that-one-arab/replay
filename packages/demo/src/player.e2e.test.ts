@@ -40,12 +40,12 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
     await page.waitForTimeout(175);
     assert.equal(await page.locator("#timeline-tooltip").textContent(), "Action confirmed", "a marker takes hover priority and shows only its title");
     assert.equal(await page.locator("[data-idle-range]").first().getAttribute("data-timeline-tooltip"), "Idle time — reduced from 6.2s to 2.0s");
-    assert.equal(await page.locator("#idle-summary").textContent(), "2 gaps");
+    assert.match(await page.locator("#idle-summary").textContent() ?? "", /^2 gaps · .+ skipped$/);
     assert.equal(await page.locator("[data-idle-mode='cut']").evaluate((element) => element.classList.contains("selected")), true);
-    await page.locator("[data-idle-mode='fast_forward']").click();
+    await selectIdleMode(page, "fast_forward");
     await page.waitForFunction(() => document.querySelector("[data-idle-mode='fast_forward']")?.classList.contains("selected") === true);
     assert.equal(await page.locator("[data-idle-range]").first().getAttribute("data-timeline-tooltip"), "Idle time — played at 8× (6.2s recorded)");
-    await page.locator("[data-idle-mode='cut']").click();
+    await selectIdleMode(page, "cut");
     await page.waitForFunction(() => document.querySelector("[data-idle-mode='cut']")?.classList.contains("selected") === true);
 
     const play = page.getByRole("button", { name: "Play replay" });
@@ -92,7 +92,7 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
     await page.keyboard.press("Enter");
     assert.equal(await playbackState(page), "Playing");
 
-    await page.locator("[data-speed='8']").click();
+    await selectSpeed(page, "8");
     await waitForPaused(page, 2_000);
     assert.equal(await page.locator("#current-time").textContent(), "0:07");
     await play.click();
@@ -101,8 +101,8 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
     assert.notEqual(await page.locator("#current-time").textContent(), "0:07");
 
     await page.reload({ waitUntil: "networkidle" });
-    await page.locator("[data-idle-mode='preserve']").click();
-    await page.locator("[data-speed='8']").click();
+    await selectIdleMode(page, "preserve");
+    await selectSpeed(page, "8");
     await page.getByRole("button", { name: "Play replay" }).click();
     await page.waitForTimeout(900);
     assert.equal(await playbackState(page), "Playing", "Keep idle should retain the long inactive gap");
@@ -125,7 +125,7 @@ test("paused seeks show a recorded navigation only inside its transition interva
     browser = await chromium.launch({ headless: true, executablePath: chrome });
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
     await page.goto(`http://127.0.0.1:${address.port}/replay?id=navigation-window`, { waitUntil: "networkidle" });
-    await page.locator("[data-idle-mode='preserve']").click();
+    await selectIdleMode(page, "preserve");
     await page.waitForFunction(() => document.querySelector("[data-idle-mode='preserve']")?.classList.contains("selected") === true);
     const seek = async (time: number) => page.locator("#scrubber").evaluate((node, value) => {
       const scrubber = node as HTMLInputElement;
@@ -172,7 +172,7 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
     assert.equal(await page.locator(".segment-picker button").count(), 0, "tab state is not manually selectable");
     assert.equal(await page.locator("[data-segment='seg_1']").getAttribute("aria-current"), "page");
     assert.equal(await page.locator("[data-segment='seg_2']").isHidden(), true);
-    await page.locator("[data-speed='1.15']").click();
+    await selectSpeed(page, "1.15");
     await page.getByRole("button", { name: "Play replay" }).click();
     await page.locator("[data-segment='seg_2']").waitFor({ state: "visible" });
     assert.equal(await page.locator("[data-segment='seg_1']").getAttribute("aria-current"), "page");
@@ -186,7 +186,7 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
     assert.match(await page.locator("#current-time").textContent() ?? "", /^0:0[23]$/, "the focus transition follows the compacted timeline");
     assert.equal(await page.locator("#total-time").textContent(), "0:04");
 
-    await page.locator("[data-speed='1.15']").click();
+    await selectSpeed(page, "1.15");
     await page.locator("#scrubber").evaluate((node) => {
       const scrubber = node as HTMLInputElement;
       scrubber.value = "1000";
@@ -224,7 +224,7 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
     });
     assert.match((await playbackState(page)) ?? "", /^(Playing|Skipping idle)$/);
 
-    await page.locator("[data-speed='8']").click();
+    await selectSpeed(page, "8");
     await waitForPaused(page, 2_500);
     assert.equal(await page.locator("#current-time").textContent(), "0:04");
     await page.getByRole("button", { name: "Play replay" }).click();
@@ -249,7 +249,7 @@ test("browser replay follows recorded focus returns and hides closed tabs", { sk
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
     await page.goto(`http://127.0.0.1:${address.port}/replay?id=focus-cycle`, { waitUntil: "networkidle" });
 
-    await page.locator("[data-speed='8']").click();
+    await selectSpeed(page, "8");
     await page.getByRole("button", { name: "Play replay" }).click();
     await waitForSelectedTab(page, "seg_2", 2_500);
     assert.equal(await page.locator("[data-segment='seg_2']").isHidden(), false);
@@ -287,6 +287,15 @@ function json(response: import("node:http").ServerResponse, body: unknown) {
 }
 
 async function playbackState(page: Page) { return page.locator("#stage-status").textContent(); }
+// Speed and idle options live inside deck menus; open the menu before picking.
+async function selectSpeed(page: Page, value: string) {
+  await page.locator("#speed-button").click();
+  await page.locator(`[data-speed='${value}']`).click();
+}
+async function selectIdleMode(page: Page, mode: string) {
+  await page.locator("#settings-button").click();
+  await page.locator(`[data-idle-mode='${mode}']`).click();
+}
 async function waitForPaused(page: Page, timeoutMs: number) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
