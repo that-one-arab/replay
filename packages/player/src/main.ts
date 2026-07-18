@@ -119,6 +119,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     document.querySelector<HTMLElement>("#timeline-progress")!.style.width = `${position}%`;
     document.querySelector<HTMLElement>("#timeline-playhead")!.style.left = `${position}%`;
     document.querySelector<HTMLElement>("#current-time")!.textContent = format(time);
+    updateActiveMarker(time);
   };
   const playFrom = (time: number) => {
     const start = tabEnd >= duration - 10 && time >= duration - 10 ? tabStart : clamp(time, tabStart, tabEnd);
@@ -254,7 +255,10 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     const time = Number(button.dataset.marker);
     const target = segmentAtTime(manifest, eventSets, time);
     if (target && target.id !== segment.id) void replay(manifest, eventSets, duration, target, time, false, onCutIdleChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
-    else playFrom(time);
+    else {
+      playFrom(time);
+      syncNarration(manifest.markers, time);
+    }
   });
   document.querySelectorAll<HTMLElement>("[data-segment]").forEach((button) => {
     const selected = button.dataset.segment === segment.id;
@@ -461,7 +465,17 @@ function prepareTimeline(markers: Marker[], navigationEvents: NavigationEvent[],
     return `<i data-navigation-event data-timeline-start="${event.started_at_ms}" data-timeline-end="${presentationEnd}" data-timeline-tooltip="${escape(label)}" style="left:${start}%;width:${Math.max(.45, end - start)}%"></i>`;
   }).join("");
   document.querySelector<HTMLElement>("#idle-summary")!.textContent = projectedIdle.length ? `${projectedIdle.length} gap${projectedIdle.length === 1 ? "" : "s"}` : "";
-  document.querySelector<HTMLElement>("#timeline-markers")!.innerHTML = markers.map((marker) => `<button data-marker="${marker.t_ms}" data-timeline-tooltip="${escape(`Marker — ${marker.label}${marker.note ? `: ${marker.note}` : ""}`)}" style="left:${clamp(marker.t_ms / duration * 100, 1, 99)}%"><span></span></button>`).join("");
+  document.querySelector<HTMLElement>("#timeline-markers")!.innerHTML = markers.map((marker, index) => `<button data-marker="${marker.t_ms}" data-marker-index="${index}" data-timeline-tooltip="${escape(`Marker — ${marker.label}${marker.note ? `: ${marker.note}` : ""}`)}" aria-label="Jump to marker: ${escape(marker.label)}" aria-current="false" style="left:${clamp(marker.t_ms / duration * 100, 1, 99)}%"><span class="marker-label">${escape(marker.label)}</span><span class="marker-stem"></span></button>`).join("");
+}
+
+function updateActiveMarker(time: number) {
+  const markers = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-marker]"));
+  const active = markers.filter((marker) => Number(marker.dataset.marker) <= time + 450).at(-1);
+  markers.forEach((marker) => {
+    const selected = marker === active;
+    marker.classList.toggle("is-active", selected);
+    marker.setAttribute("aria-current", selected ? "step" : "false");
+  });
 }
 
 function installTimelineTooltips() {

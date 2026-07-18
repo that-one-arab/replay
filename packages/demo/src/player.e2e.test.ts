@@ -27,6 +27,8 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
     await page.goto(`${origin}/replay?id=fixture`, { waitUntil: "networkidle" });
     assert.equal(await page.locator("[data-idle-range]").count(), 2);
     assert.equal(await page.locator("[data-navigation-event]").count(), 1);
+    assert.equal(await page.locator("[data-marker]").count(), 3, "markers are persistent timeline chapters");
+    assert.equal(await page.locator("[data-marker]").first().locator(".marker-label").textContent(), "Action begins");
     assert.match(await page.locator("[data-navigation-event]").getAttribute("data-timeline-tooltip") ?? "", /^Page refreshed — 0\.1s transition$/);
     const timelineBox = await page.locator("#scrubber").boundingBox();
     if (!timelineBox) throw new Error("Timeline scrubber is not visible.");
@@ -35,7 +37,7 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
     await page.waitForTimeout(425);
     assert.equal(await page.locator("#timeline-tooltip").evaluate((element) => element.classList.contains("is-visible")), false, "timeline descriptions wait before appearing");
     await page.waitForTimeout(175);
-    assert.match(await page.locator("#timeline-tooltip").textContent() ?? "", /^Page refreshed — 0\.1s transition$/);
+    assert.match(await page.locator("#timeline-tooltip").textContent() ?? "", /^Marker — /, "a marker takes hover priority over lower-level timeline context");
     assert.equal(await page.locator("[data-idle-range]").first().getAttribute("data-timeline-tooltip"), "Idle time — reduced from 6.2s to 2.0s");
     assert.equal(await page.locator("#idle-summary").textContent(), "2 gaps");
     assert.equal(await page.locator("#skip").getAttribute("aria-pressed"), "true");
@@ -99,6 +101,9 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
     await page.getByRole("button", { name: "Play replay" }).click();
     await page.waitForTimeout(900);
     assert.equal(await playbackState(page), "Playing", "disabling Cut idle should retain the long inactive gap");
+    await page.locator("[data-marker]").first().click();
+    assert.equal(await page.locator("[data-marker]").first().getAttribute("aria-current"), "step", "the selected marker stays visually active");
+    assert.equal(await page.locator("#caption strong").textContent(), "Action begins", "selecting a marker updates the narrated chapter");
   } finally {
     await browser?.close();
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
@@ -252,7 +257,7 @@ test("browser replay follows recorded focus returns and hides closed tabs", { sk
 function createFixtureServer() {
   return createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://fixture");
-    if (url.pathname === "/api/sessions/fixture/manifest") return json(response, { id: "fixture", title: "Replay control fixture", raw_duration_ms: 16_000, markers: [], navigation_events: [{ segment_id: "seg_1", kind: "reload", started_at_ms: 7_950, committed_at_ms: 8_000, ready_at_ms: 8_010, from_url: "http://fixture/", to_url: "http://fixture/" }], segments: [{ id: "seg_1", page_url: "http://fixture/", clock_offset_ms: 0 }] });
+    if (url.pathname === "/api/sessions/fixture/manifest") return json(response, { id: "fixture", title: "Replay control fixture", raw_duration_ms: 16_000, markers: [{ t_ms: 900, label: "Action begins", note: "The fixture button is activated.", placement: "after_previous" }, { t_ms: 7_900, label: "Page refreshes", note: "The replay rebuilds after the recorded reload.", placement: "after_previous" }, { t_ms: 15_900, label: "Action confirmed", note: "The final fixture interaction is visible.", placement: "after_previous" }], navigation_events: [{ segment_id: "seg_1", kind: "reload", started_at_ms: 7_950, committed_at_ms: 8_000, ready_at_ms: 8_010, from_url: "http://fixture/", to_url: "http://fixture/" }], segments: [{ id: "seg_1", page_url: "http://fixture/", clock_offset_ms: 0 }] });
     if (url.pathname === "/api/sessions/navigation-window/manifest") return json(response, { id: "navigation-window", title: "Navigation interval fixture", raw_duration_ms: 16_000, markers: [], navigation_events: [{ segment_id: "seg_1", kind: "reload", started_at_ms: 3_000, committed_at_ms: 3_050, ready_at_ms: 3_100, from_url: "http://fixture/", to_url: "http://fixture/" }], segments: [{ id: "seg_1", page_url: "http://fixture/", clock_offset_ms: 0 }] });
     if (url.pathname === "/api/sessions/multi-page/manifest") return json(response, { id: "multi-page", title: "Multi-page fixture", raw_duration_ms: 6_500, markers: [], tab_events: [{ type: "opened", segment_id: "seg_1", t_ms: 0 }, { type: "focused", segment_id: "seg_1", t_ms: 0 }, { type: "opened", segment_id: "seg_2", t_ms: 3_000 }, { type: "focused", segment_id: "seg_2", t_ms: 3_300 }], segments: [{ id: "seg_1", page_url: "http://fixture/onboarding", clock_offset_ms: 0 }, { id: "seg_2", page_url: "http://fixture/invite-preview", clock_offset_ms: 3_000 }] });
     if (url.pathname === "/api/sessions/focus-cycle/manifest") return json(response, { id: "focus-cycle", title: "Focus lifecycle fixture", raw_duration_ms: 6_500, markers: [], tab_events: [{ type: "opened", segment_id: "seg_1", t_ms: 0 }, { type: "focused", segment_id: "seg_1", t_ms: 0 }, { type: "opened", segment_id: "seg_2", t_ms: 3_000 }, { type: "focused", segment_id: "seg_2", t_ms: 3_300 }, { type: "focused", segment_id: "seg_1", t_ms: 5_000 }, { type: "closed", segment_id: "seg_2", t_ms: 5_600 }], segments: [{ id: "seg_1", page_url: "http://fixture/onboarding", clock_offset_ms: 0 }, { id: "seg_2", page_url: "http://fixture/invite-preview", clock_offset_ms: 3_000 }] });
