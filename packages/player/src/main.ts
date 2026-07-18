@@ -34,6 +34,7 @@ let activePlayback: AbortController | undefined;
 let currentSessionTime = 0;
 let lastNarrationKey: string | undefined;
 let captionTimer: number | undefined;
+let chaptersOpen: boolean | undefined;
 let shareAvailable = false;
 let shareUrl: string | undefined;
 if (!id) renderError("Choose a recording with `rec open <id>`.");
@@ -101,6 +102,7 @@ async function load(recordingId: string) {
       prepareTimeline(projection.manifest.markers, projection.manifest.navigation_events ?? [], projection.duration, projection.activities, projection.playbackEnd, projection.idleRanges);
       installTimelineTooltips();
       wireShareControl(resolvedManifest.id);
+      wireChapters();
       await replay(projection.manifest, projection.eventSets, projection.duration, projection.manifest.segments[0], projection.toPlayback(rawTime), autoplay, (nextMode, requestedTime, shouldAutoplay) => {
         idleMode = nextMode;
         void present(projection.toRaw(requestedTime), shouldAutoplay).catch(renderError);
@@ -111,6 +113,7 @@ async function load(recordingId: string) {
 }
 
 function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDefaults, playbackSpeed: number) {
+  chaptersOpen ??= manifest.markers.length > 1 && window.matchMedia("(min-width: 1100px)").matches;
   const segmentPicker = manifest.segments.length > 1
     ? `<nav class="segment-picker" aria-label="Recorded browser tabs">${manifest.segments.map((segment, index) => `<div class="segment-tab" data-segment="${escape(segment.id)}" title="Opened at ${format(segment.clock_offset_ms)} — ${escape(segment.page_url)}"${index === 0 ? "" : " hidden"}><span>Tab ${index + 1}</span>${escape(segmentLabel(segment.page_url))}</div>`).join("")}</nav>`
     : "";
@@ -125,7 +128,13 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
   const shareControl = shareAvailable
     ? `<div class="share-control" id="share-control">${shareUrl ? shareResultMarkup(shareUrl) : `<button class="share-button" id="share" type="button">Share</button>`}</div>`
     : "";
-  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div><section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div><div class="idle-control" role="group" aria-label="Idle handling"><span>Idle</span>${idleControls}</div><b id="idle-summary"></b>${shareControl}</div><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section><div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
+  const chaptersToggle = manifest.markers.length
+    ? `<button class="chapters-toggle" id="chapters-toggle" type="button" aria-controls="chapters-panel" aria-expanded="false">Chapters<b>${manifest.markers.length}</b></button>`
+    : "";
+  const chaptersPanel = manifest.markers.length
+    ? `<aside class="chapters-panel" id="chapters-panel" aria-label="Recording chapters"><header>Chapters<span>${manifest.markers.length}</span></header><ol>${manifest.markers.map((marker) => `<li><button type="button" data-chapter="${marker.t_ms}"${marker.color === "yellow" ? " data-chapter-color=\"yellow\"" : ""} aria-current="false"><b>${format(marker.t_ms)}</b><span><strong>${escape(marker.label)}</strong>${marker.note ? `<p>${escape(marker.note)}</p>` : ""}</span></button></li>`).join("")}</ol></aside>`
+    : "";
+  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div><section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div><div class="idle-control" role="group" aria-label="Idle handling"><span>Idle</span>${idleControls}</div><b id="idle-summary"></b>${shareControl}${chaptersToggle}</div><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section>${chaptersPanel}<div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
 }
 
 async function detectShareAvailability() {
@@ -352,8 +361,8 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     onPlaybackSpeedChange?.(speed);
     if (visibleNavigation) showRefresh(visibleNavigation, refreshPinned);
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-marker]").forEach((button) => button.onclick = () => {
-    const time = Number(button.dataset.marker);
+  document.querySelectorAll<HTMLButtonElement>("[data-marker], [data-chapter]").forEach((button) => button.onclick = () => {
+    const time = Number(button.dataset.marker ?? button.dataset.chapter);
     const target = segmentAtTime(manifest, eventSets, time);
     if (target && target.id !== segment.id) void replay(manifest, eventSets, duration, target, time, false, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
     else {
@@ -596,13 +605,28 @@ function prepareTimeline(markers: Marker[], navigationEvents: NavigationEvent[],
 }
 
 function updateActiveMarker(time: number) {
-  const markers = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-marker]"));
-  const active = markers.filter((marker) => Number(marker.dataset.marker) <= time + 450).at(-1);
-  markers.forEach((marker) => {
-    const selected = marker === active;
-    marker.classList.toggle("is-active", selected);
-    marker.setAttribute("aria-current", selected ? "step" : "false");
+  const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-marker], [data-chapter]"));
+  const times = buttons.map((button) => Number(button.dataset.marker ?? button.dataset.chapter));
+  const active = [...new Set(times)].sort((left, right) => left - right).filter((value) => value <= time + 450).at(-1);
+  buttons.forEach((button, index) => {
+    const selected = times[index] === active;
+    if (selected && button.dataset.chapter !== undefined && !button.classList.contains("is-active")) button.scrollIntoView({ block: "nearest" });
+    button.classList.toggle("is-active", selected);
+    button.setAttribute("aria-current", selected ? "step" : "false");
   });
+}
+
+function wireChapters() {
+  const toggle = document.querySelector<HTMLButtonElement>("#chapters-toggle");
+  const panel = document.querySelector<HTMLElement>("#chapters-panel");
+  if (!toggle || !panel) return;
+  const apply = () => {
+    panel.classList.toggle("is-open", chaptersOpen === true);
+    toggle.classList.toggle("is-open", chaptersOpen === true);
+    toggle.setAttribute("aria-expanded", chaptersOpen === true ? "true" : "false");
+  };
+  toggle.onclick = () => { chaptersOpen = chaptersOpen !== true; apply(); };
+  apply();
 }
 
 function installTimelineTooltips() {
