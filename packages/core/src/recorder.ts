@@ -117,9 +117,9 @@ export class Recorder {
     return { sessionId: id };
   }
 
-  async marker(label: string, note?: string, placement: Marker["placement"] = "after_previous") {
+  async marker(label: string, note?: string, placement: Marker["placement"] = "after_previous", color?: Marker["color"]) {
     if (!this.store) throw new Error("No recording is active");
-    const marker: Marker = { t_ms: Date.now() - this.startedAt, label, note, placement };
+    const marker: Marker = { t_ms: Date.now() - this.startedAt, label, note, placement, ...(color ? { color } : {}) };
     this.store.addMarker(marker);
     await Promise.all([...this.pages.values()].map(async ({ page }) => {
       await page.evaluate(({ label, note, placement }) => {

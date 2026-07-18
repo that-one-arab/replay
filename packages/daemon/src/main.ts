@@ -47,7 +47,7 @@ async function route(request: IncomingMessage, response: ServerResponse) {
     return reply(response, 201, await recorder.start({ ...(body as StartOptions), replayDefaults: config.replay }));
   }
   if (request.method === "POST" && url.pathname === "/api/sessions/marker") {
-    await recorder.marker(String(body?.label ?? ""), optionalString(body?.note), markerPlacement(body?.placement));
+    await recorder.marker(String(body?.label ?? ""), optionalString(body?.note), markerPlacement(body?.placement), markerColor(body?.color));
     return reply(response, 204);
   }
   if (request.method === "POST" && url.pathname === "/api/sessions/stop") {
@@ -57,6 +57,8 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   }
   if (request.method === "GET" && url.pathname === "/api/sessions/status") return reply(response, 200, recorder.status());
   if (request.method === "GET" && url.pathname === "/api/sessions") return reply(response, 200, await listSessions());
+  const shareSession = /^\/api\/sessions\/([^/]+)\/share$/.exec(url.pathname);
+  if (request.method === "POST" && shareSession) return reply(response, 200, await shareRecording(decodeURIComponent(shareSession[1]!)));
   const replay = /^\/api\/sessions\/([^/]+)\/(manifest|events)$/.exec(url.pathname);
   if (request.method === "GET" && replay) return serveRecording(response, decodeURIComponent(replay[1]), replay[2], url.searchParams.get("segment"));
   const recordedAsset = /^\/api\/sessions\/([^/]+)\/assets\/([a-f0-9]{64})$/.exec(url.pathname);
@@ -151,6 +153,7 @@ async function health() {
   const config = await configDiagnostics();
   return {
     ok: true,
+    share_available: Boolean(shareEndpoint()),
     cdp_endpoint: cdpEndpoint,
     managed_browser: managedBrowser,
     browser_state: browser.attached ? "ready" : "unavailable",
@@ -318,6 +321,24 @@ async function browserAvailable(endpoint: string) {
   try { return (await fetch(`${endpoint}/json/version`)).ok; } catch { return false; }
 }
 
+async function shareRecording(id: string) {
+  const endpoint = shareEndpoint();
+  if (!endpoint) throw new Error("Sharing is not configured. Set REC_SHARE_URL for this Rec home.");
+  if (!existsSync(sessionPath(id))) throw new Error(`Recording ${id} was not found.`);
+  const artifact = await exportSession(id);
+  const response = await fetch(`${endpoint}/v1/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/vnd.rec" },
+    body: await readFile(artifact.path),
+  });
+  const result = await response.json().catch(() => ({})) as { error?: string; shareUrl?: string };
+  if (!response.ok) throw new Error(result.error ?? response.statusText);
+  if (!result.shareUrl) throw new Error("Share service did not return a share URL.");
+  return { sessionId: id, shareUrl: result.shareUrl };
+}
+
+function shareEndpoint() { return process.env.REC_SHARE_URL?.replace(/\/$/, "") || undefined; }
+
 async function listSessions() {
   if (!existsSync(sessionsDir())) return [];
   const entries = await readdir(sessionsDir(), { withFileTypes: true });
@@ -389,6 +410,7 @@ function configuredDuration(name: string, fallback: number) {
 }
 function outcomeOf(value: unknown): Outcome | undefined { return value === "reproduced" || value === "verified" || value === "other" ? value : undefined; }
 function markerPlacement(value: unknown) { if (value === undefined || value === "after_previous" || value === "before_next") return value ?? "after_previous"; throw new Error("Marker placement must be after_previous or before_next."); }
+function markerColor(value: unknown): "yellow" | undefined { if (value === undefined || value === "default") return undefined; if (value === "yellow") return value; throw new Error("Marker color must be yellow."); }
 function isLoopbackEndpoint(value: string) {
   try { const url = new URL(value); return url.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(url.hostname); } catch { return false; }
 }

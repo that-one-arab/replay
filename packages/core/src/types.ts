@@ -9,6 +9,8 @@ export interface Marker {
    * It is deliberately not a cross-server Playwright action identifier.
    */
   placement?: "after_previous" | "before_next";
+  /** Optional visual emphasis. A yellow marker stands out from the default checkpoints. */
+  color?: "yellow";
 }
 
 export interface Segment {

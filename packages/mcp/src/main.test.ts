@@ -81,8 +81,13 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
     const stopped = await client.request("tools/call", { name: "recording_stop", arguments: { outcome: "reproduced" } });
     assert.match(stopped.result.content[0].text, /replayUrl/);
     assert.match(stopped.result.content[0].text, /portableArtifactPath/);
-    assert.match(stopped.result.content[0].text, /shareUrl/);
+    // Stopping saves locally and does not upload. Sharing is a separate, explicit step.
+    assert.doesNotMatch(stopped.result.content[0].text, /shareUrl/);
+    assert.equal(calls.some((call) => call.path === "/v1/recordings"), false);
     assert.equal(existsSync(join(recHome, "exports", "rec_test.rec")), true);
+    const shared = await client.request("tools/call", { name: "recording_share", arguments: { sessionId: "rec_test" } });
+    assert.match(shared.result.content[0].text, /https:\/\/share\.fixture\/r\/abc123/);
+    assert.equal(calls.filter((call) => call.path === "/v1/recordings").length, 1);
     const status = await client.request("tools/call", { name: "recording_status", arguments: {} });
     assert.match(status.result.content[0].text, /page_ready/);
     const external = await client.request("tools/call", { name: "recording_attach_browser", arguments: { cdpEndpoint: "http://127.0.0.1:9222" } });

@@ -22,7 +22,8 @@
       "cwd": ".",
       "env": {
         "REC_RELEASE_URL": "https://stitch-production-2492.up.railway.app/v1/releases",
-        "REC_RUNTIME_VERSION": "0.2.2"
+        "REC_RUNTIME_VERSION": "0.2.2",
+        "REC_SHARE_URL": "https://stitch-production-2492.up.railway.app"
       }
     }
   }

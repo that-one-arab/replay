@@ -17,8 +17,13 @@ recording lifecycle, useful checkpoints, and handoff.
    typing or key presses for short visible values when available.
 4. Add `recording_marker` only for visible milestones. Markers are optional;
    never send a marker and a Playwright action in parallel.
-5. After confirming the requested outcome, call `recording_stop`. Return its
-   `shareUrl` when present; otherwise return the local replay URL.
+5. After confirming the requested outcome, call `recording_stop`. It saves the
+   recording locally and returns a local replay URL for immediate preview; it
+   does not upload. Return that replay URL.
+6. Share only when the user asks. Call `recording_share` with the stopped
+   `sessionId` to upload it and return the resulting share URL, or point the
+   user at the Share button inside the player. Sharing requires `REC_SHARE_URL`
+   to be configured.
 
 Record the final verified flow by default. Capture a broken reproduction only
 when the user explicitly requests evidence of the failure.

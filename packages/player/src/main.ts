@@ -2,7 +2,7 @@ import { Replayer } from "@rrweb/replay";
 import "rrweb/dist/style.css";
 import "./style.css";
 
-type Marker = { t_ms: number; label: string; note?: string; placement?: "after_previous" | "before_next" };
+type Marker = { t_ms: number; label: string; note?: string; placement?: "after_previous" | "before_next"; color?: "yellow" };
 type Segment = { id: string; page_url: string; clock_offset_ms: number };
 type TabEvent = { t_ms: number; segment_id: string; type: "opened" | "focused" | "closed" };
 type NavigationEvent = { segment_id: string; kind: "reload" | "navigate"; started_at_ms: number; committed_at_ms: number; ready_at_ms: number; from_url: string; to_url: string };
@@ -31,6 +31,8 @@ const app = document.querySelector<HTMLDivElement>("#app")!;
 const id = new URLSearchParams(location.search).get("id");
 let activePlayback: AbortController | undefined;
 let currentSessionTime = 0;
+let shareAvailable = false;
+let shareUrl: string | undefined;
 if (!id) renderError("Choose a recording with `rec open <id>`.");
 else {
   maintainReplayLease();
@@ -77,6 +79,8 @@ function maintainReplayLease() {
 async function load(recordingId: string) {
   try {
     currentSessionTime = 0;
+    shareUrl = undefined;
+    shareAvailable = await detectShareAvailability();
     const manifest = await request<Manifest>(`/api/sessions/${encodeURIComponent(recordingId)}/manifest`);
     const eventSets = new Map(await Promise.all(manifest.segments.map(async (segment) => [
       segment.id,
@@ -92,6 +96,7 @@ async function load(recordingId: string) {
       renderShell(projection.manifest, idleMode, replayDefaults, playbackSpeed);
       prepareTimeline(projection.manifest.markers, projection.manifest.navigation_events ?? [], projection.duration, projection.activities, projection.playbackEnd, projection.idleRanges);
       installTimelineTooltips();
+      wireShareControl(resolvedManifest.id);
       await replay(projection.manifest, projection.eventSets, projection.duration, projection.manifest.segments[0], projection.toPlayback(rawTime), autoplay, (nextMode, requestedTime, shouldAutoplay) => {
         idleMode = nextMode;
         void present(projection.toRaw(requestedTime), shouldAutoplay).catch(renderError);
@@ -113,7 +118,44 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
     ["fast_forward", `${defaults.idle_fast_forward_speed}×`],
     ["preserve", "Keep"],
   ] as const).map(([mode, label]) => `<button data-idle-mode="${mode}"${mode === idleMode ? " class=\"selected\"" : ""}>${label}</button>`).join("");
-  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption"><span class="caption-kicker">SESSION REPLAY</span><strong>Press play to begin</strong><p>The timeline follows the full browser recording.</p></div><section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div><div class="idle-control" role="group" aria-label="Idle handling"><span>Idle</span>${idleControls}</div><b id="idle-summary"></b></div><div class="timeline-wrap"><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section><div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
+  const shareControl = shareAvailable
+    ? `<div class="share-control" id="share-control">${shareUrl ? shareResultMarkup(shareUrl) : `<button class="share-button" id="share" type="button">Share</button>`}</div>`
+    : "";
+  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption"><strong>Press play to begin</strong><p>The timeline follows the full browser recording.</p></div><section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div><div class="idle-control" role="group" aria-label="Idle handling"><span>Idle</span>${idleControls}</div><b id="idle-summary"></b>${shareControl}</div><div class="timeline-wrap"><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section><div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
+}
+
+async function detectShareAvailability() {
+  try {
+    const health = await request<{ share_available?: boolean }>("/health");
+    return health.share_available === true;
+  } catch { return false; }
+}
+
+function wireShareControl(recordingId: string) {
+  const button = document.querySelector<HTMLButtonElement>("#share");
+  if (button) button.onclick = () => void shareRecording(recordingId, button);
+  const copy = document.querySelector<HTMLButtonElement>("#share-copy");
+  if (copy) copy.onclick = () => { if (shareUrl) void navigator.clipboard?.writeText(shareUrl); };
+}
+
+async function shareRecording(recordingId: string, button: HTMLButtonElement) {
+  button.disabled = true;
+  button.textContent = "Sharing…";
+  try {
+    const result = await request<{ shareUrl: string }>(`/api/sessions/${encodeURIComponent(recordingId)}/share`, { method: "POST" });
+    shareUrl = result.shareUrl;
+    const control = document.querySelector<HTMLElement>("#share-control");
+    if (control) control.innerHTML = shareResultMarkup(shareUrl);
+    wireShareControl(recordingId);
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "Share";
+    setActionCaption("Share failed", error instanceof Error ? error.message : String(error));
+  }
+}
+
+function shareResultMarkup(url: string) {
+  return `<a class="share-link" href="${escape(url)}" target="_blank" rel="noopener" title="${escape(url)}">${escape(url)}</a><button class="share-button" id="share-copy" type="button">Copy</button>`;
 }
 
 async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>, duration: number, segment: Segment | undefined, requestedSessionTime: number, autoplay = false, onIdleModeChange?: (mode: IdleMode, requestedTime: number, autoplay: boolean) => void, playbackSpeed = DEFAULT_PLAYBACK_SPEED, onPlaybackSpeedChange?: (speed: number) => void) {
@@ -533,7 +575,7 @@ function prepareTimeline(markers: Marker[], navigationEvents: NavigationEvent[],
     return `<i data-navigation-event data-timeline-start="${event.started_at_ms}" data-timeline-end="${presentationEnd}" data-timeline-tooltip="${escape(label)}" style="left:${start}%;width:${Math.max(.45, end - start)}%"></i>`;
   }).join("");
   document.querySelector<HTMLElement>("#idle-summary")!.textContent = projectedIdle.length ? `${projectedIdle.length} gap${projectedIdle.length === 1 ? "" : "s"}` : "";
-  document.querySelector<HTMLElement>("#timeline-markers")!.innerHTML = markers.map((marker, index) => `<button data-marker="${marker.t_ms}" data-marker-index="${index}" data-timeline-tooltip="${escape(marker.label)}" aria-label="Jump to marker: ${escape(marker.label)}" aria-current="false" style="left:${clamp(marker.t_ms / duration * 100, 1, 99)}%"><span class="marker-dot"></span></button>`).join("");
+  document.querySelector<HTMLElement>("#timeline-markers")!.innerHTML = markers.map((marker, index) => `<button data-marker="${marker.t_ms}" data-marker-index="${index}"${marker.color === "yellow" ? " data-marker-color=\"yellow\"" : ""} data-timeline-tooltip="${escape(marker.label)}" aria-label="Jump to marker: ${escape(marker.label)}" aria-current="false" style="left:${clamp(marker.t_ms / duration * 100, 1, 99)}%"><span class="marker-dot"></span></button>`).join("");
 }
 
 function updateActiveMarker(time: number) {
@@ -804,7 +846,7 @@ function isTextEntryTarget(target: EventTarget | null) {
 type ElementLike = { nodeType: number; classList: DOMTokenList; getAttribute(name: string): string | null; textContent: string | null; tagName: string };
 function isElementLike(value: unknown): value is ElementLike { return typeof value === "object" && value !== null && (value as { nodeType?: number }).nodeType === 1 && "classList" in value; }
 function readableTarget(target: ElementLike) { const text = target.getAttribute("aria-label") || target.textContent?.trim() || target.tagName.toLowerCase(); return `“${text.replace(/\s+/g, " ").slice(0, 64)}”`; }
-async function request<T>(url: string) { const response = await fetch(url); if (!response.ok) throw new Error((await response.json().catch(() => ({ error: response.statusText }))).error); return response.json() as Promise<T>; }
+async function request<T>(url: string, init?: RequestInit) { const response = await fetch(url, init); if (!response.ok) throw new Error((await response.json().catch(() => ({ error: response.statusText }))).error); return response.json() as Promise<T>; }
 function format(ms?: number) { if (!ms) return "0:00"; const seconds = Math.round(ms / 1000); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`; }
 function formatDuration(ms: number) { return `${(ms / 1_000).toFixed(ms >= 10_000 ? 0 : 1)}s`; }
 function clamp(value: number, min: number, max: number) { return Math.min(max, Math.max(min, value)); }

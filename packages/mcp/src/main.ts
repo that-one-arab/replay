@@ -62,6 +62,7 @@ const tools: JsonObject[] = [
         label: { type: "string", description: "Short checkpoint label." },
         note: { type: "string", description: "Optional context for the checkpoint." },
         placement: { type: "string", enum: ["after_previous", "before_next"], description: "Narrative placement relative to ordered Playwright actions. Defaults to after_previous." },
+        color: { type: "string", enum: ["default", "yellow"], description: "Set to yellow for a distinct, highlighted checkpoint. Defaults to a standard checkpoint." },
       },
       additionalProperties: false,
     },
@@ -73,7 +74,7 @@ const tools: JsonObject[] = [
   },
   {
     name: "recording_stop",
-    description: "Stop the active recording and return its local replay handoff. When REC_SHARE_URL is configured, automatically publish its portable artifact and return the share URL.",
+    description: "Stop the active recording, save it locally, and return its local replay URL and portable artifact path. Sharing is a separate, explicit step: call recording_share or use the Share button in the player.",
     inputSchema: {
       type: "object",
       properties: {
@@ -209,8 +210,9 @@ async function attachBrowser(argumentsValue: JsonObject) {
 async function addMarker(argumentsValue: JsonObject) {
   const label = requiredString(argumentsValue.label, "Marker label");
   const placement = optionalPlacement(argumentsValue.placement) ?? "after_previous";
-  await api("POST", "/api/sessions/marker", { label, note: optionalString(argumentsValue.note), placement });
-  return { ok: true, label, placement };
+  const color = optionalColor(argumentsValue.color);
+  await api("POST", "/api/sessions/marker", { label, note: optionalString(argumentsValue.note), placement, ...(color ? { color } : {}) });
+  return { ok: true, label, placement, ...(color ? { color } : {}) };
 }
 
 async function recordingStatus() {
@@ -249,19 +251,13 @@ async function stopRecording(argumentsValue: JsonObject) {
   // Older already-running daemons predate portable_bundle. Export in the MCP as
   // a compatibility fallback so an updated MCP can still publish their session.
   const portableArtifactPath = optionalString(result.portable_bundle) ?? (await exportSession(sessionId)).path;
-  let shareUrl: string | undefined;
-  let shareError: string | undefined;
-  const shareEndpoint = configuredShareEndpoint();
-  if (portableArtifactPath && shareEndpoint) {
-    try { shareUrl = await uploadArtifact(sessionId, portableArtifactPath, shareEndpoint); }
-    catch (error) { shareError = messageOf(error); }
-  }
+  // Stopping only saves and previews locally. Sharing is an explicit follow-up
+  // through recording_share or the player's Share button.
   return {
     ...result,
     ...(portableArtifactPath ? { portableArtifactPath } : {}),
-    ...(shareUrl ? { shareUrl } : {}),
-    ...(shareError ? { shareError } : {}),
     replayUrl: replayUrl(sessionId),
+    shareAvailable: Boolean(configuredShareEndpoint()),
   };
 }
 
@@ -377,6 +373,7 @@ function optionalBoolean(value: Json | undefined) { if (value !== undefined && t
 function optionalStringArray(value: Json | undefined) { if (value === undefined) return undefined; if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error("Origins must be an array of strings."); return value; }
 function optionalOutcome(value: Json | undefined) { if (value === undefined) return undefined; if (value === "reproduced" || value === "verified" || value === "other") return value; throw new Error("Outcome must be reproduced, verified, or other."); }
 function optionalPlacement(value: Json | undefined) { if (value === undefined || value === "after_previous" || value === "before_next") return value; throw new Error("Marker placement must be after_previous or before_next."); }
+function optionalColor(value: Json | undefined) { if (value === undefined || value === "default") return undefined; if (value === "yellow") return value; throw new Error("Marker color must be yellow."); }
 function numberOrZero(value: Json | undefined) { return typeof value === "number" ? value : 0; }
 function messageOf(error: unknown) { return error instanceof Error ? error.message : String(error); }
 function delay(ms: number) { return new Promise((resolveDelay) => setTimeout(resolveDelay, ms)); }
