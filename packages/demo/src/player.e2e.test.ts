@@ -27,7 +27,7 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
     await page.goto(`${origin}/replay?id=fixture`, { waitUntil: "networkidle" });
     assert.equal(await page.locator("[data-idle-range]").count(), 2);
     assert.equal(await page.locator("[data-navigation-event]").count(), 1);
-    assert.equal(await page.locator("[data-navigation-event]").getAttribute("title"), "Page refreshed");
+    assert.match(await page.locator("[data-navigation-event]").getAttribute("title") ?? "", /^Page refreshed — 0\.1s transition$/);
     assert.equal(await page.locator("[data-idle-range]").first().getAttribute("title"), "Idle reduced from 6.2s to 2.0s");
     assert.equal(await page.locator("#idle-summary").textContent(), "2 gaps");
     assert.equal(await page.locator("#skip").getAttribute("aria-pressed"), "true");
@@ -116,7 +116,7 @@ test("paused seeks show a recorded navigation only inside its transition interva
       scrubber.dispatchEvent(new Event("change", { bubbles: true }));
     }, time);
 
-    await seek(4_500);
+    await seek(3_050);
     await waitForRefresh(page, 1_000);
     assert.equal(await playbackState(page), "Paused");
     assert.equal(await page.locator("#refresh-label").textContent(), "Page is refreshing");
@@ -124,6 +124,14 @@ test("paused seeks show a recorded navigation only inside its transition interva
     await seek(7_000);
     await page.waitForTimeout(75);
     assert.equal(await page.locator("#refresh-indicator").evaluate((element) => element.classList.contains("is-visible")), false, "seeking outside the recorded navigation interval clears the indicator");
+
+    await seek(3_700);
+    await waitForRefresh(page, 1_000);
+    assert.equal(await page.locator("#refresh-indicator").evaluate((element) => element.classList.contains("is-visible")), true, "the refresh cue retains its recorded post-ready context for a seekable timeline interval");
+
+    await seek(3_900);
+    await page.waitForTimeout(75);
+    assert.equal(await page.locator("#refresh-indicator").evaluate((element) => element.classList.contains("is-visible")), false, "the refresh cue ends at its declared context boundary");
   } finally {
     await browser?.close();
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
@@ -237,7 +245,7 @@ function createFixtureServer() {
   return createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://fixture");
     if (url.pathname === "/api/sessions/fixture/manifest") return json(response, { id: "fixture", title: "Replay control fixture", raw_duration_ms: 16_000, markers: [], navigation_events: [{ segment_id: "seg_1", kind: "reload", started_at_ms: 7_950, committed_at_ms: 8_000, ready_at_ms: 8_010, from_url: "http://fixture/", to_url: "http://fixture/" }], segments: [{ id: "seg_1", page_url: "http://fixture/", clock_offset_ms: 0 }] });
-    if (url.pathname === "/api/sessions/navigation-window/manifest") return json(response, { id: "navigation-window", title: "Navigation interval fixture", raw_duration_ms: 16_000, markers: [], navigation_events: [{ segment_id: "seg_1", kind: "reload", started_at_ms: 3_000, committed_at_ms: 3_100, ready_at_ms: 6_000, from_url: "http://fixture/", to_url: "http://fixture/" }], segments: [{ id: "seg_1", page_url: "http://fixture/", clock_offset_ms: 0 }] });
+    if (url.pathname === "/api/sessions/navigation-window/manifest") return json(response, { id: "navigation-window", title: "Navigation interval fixture", raw_duration_ms: 16_000, markers: [], navigation_events: [{ segment_id: "seg_1", kind: "reload", started_at_ms: 3_000, committed_at_ms: 3_050, ready_at_ms: 3_100, from_url: "http://fixture/", to_url: "http://fixture/" }], segments: [{ id: "seg_1", page_url: "http://fixture/", clock_offset_ms: 0 }] });
     if (url.pathname === "/api/sessions/multi-page/manifest") return json(response, { id: "multi-page", title: "Multi-page fixture", raw_duration_ms: 6_500, markers: [], tab_events: [{ type: "opened", segment_id: "seg_1", t_ms: 0 }, { type: "focused", segment_id: "seg_1", t_ms: 0 }, { type: "opened", segment_id: "seg_2", t_ms: 3_000 }, { type: "focused", segment_id: "seg_2", t_ms: 3_300 }], segments: [{ id: "seg_1", page_url: "http://fixture/onboarding", clock_offset_ms: 0 }, { id: "seg_2", page_url: "http://fixture/invite-preview", clock_offset_ms: 3_000 }] });
     if (url.pathname === "/api/sessions/focus-cycle/manifest") return json(response, { id: "focus-cycle", title: "Focus lifecycle fixture", raw_duration_ms: 6_500, markers: [], tab_events: [{ type: "opened", segment_id: "seg_1", t_ms: 0 }, { type: "focused", segment_id: "seg_1", t_ms: 0 }, { type: "opened", segment_id: "seg_2", t_ms: 3_000 }, { type: "focused", segment_id: "seg_2", t_ms: 3_300 }, { type: "focused", segment_id: "seg_1", t_ms: 5_000 }, { type: "closed", segment_id: "seg_2", t_ms: 5_600 }], segments: [{ id: "seg_1", page_url: "http://fixture/onboarding", clock_offset_ms: 0 }, { id: "seg_2", page_url: "http://fixture/invite-preview", clock_offset_ms: 3_000 }] });
     if (url.pathname === "/api/sessions/fixture/events") return json(response, fixtureEvents);

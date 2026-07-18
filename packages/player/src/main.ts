@@ -178,7 +178,13 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
       hideRefresh();
     }, duration);
   };
-  const activeNavigationAt = (time: number) => navigationEvents.find((event) => event.started_at_ms <= time && time <= event.ready_at_ms);
+  // A local reload commonly finishes in a few milliseconds. Preserve that
+  // exact span in the manifest, but give it a short, explicit presentation
+  // tail so viewers can seek to the transition and understand what happened.
+  // Idle projection retains this same context, keeping the timeline and the
+  // overlay on one shared interval.
+  const navigationPresentationEnd = (event: NavigationEvent) => Math.min(duration, event.ready_at_ms + RELOAD_CONTEXT_MS);
+  const activeNavigationAt = (time: number) => navigationEvents.find((event) => event.started_at_ms <= time && time <= navigationPresentationEnd(event));
   const syncNavigationAt = (time: number, pinned: boolean) => {
     const active = activeNavigationAt(time);
     if (active) showRefresh(active, pinned);
@@ -188,7 +194,8 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     const active = activeNavigationAt(time);
     if (active) showRefresh(active);
     else {
-      const crossed = navigationEvents.filter((event) => event.started_at_ms > lastNavigationCheck && event.started_at_ms <= time);
+      if (visibleNavigation) hideRefresh();
+      const crossed = navigationEvents.filter((event) => event.started_at_ms > lastNavigationCheck && event.started_at_ms <= time && time <= navigationPresentationEnd(event));
       for (const navigation of crossed) showRefresh(navigation);
     }
     lastNavigationCheck = Math.max(lastNavigationCheck, time);
@@ -441,8 +448,11 @@ function prepareTimeline(markers: Marker[], navigationEvents: NavigationEvent[],
   document.querySelector<HTMLElement>("#idle-ranges")!.innerHTML = projectedIdle.map((range) => `<i data-idle-range title="${nearlyEqual(range.originalDuration, range.end - range.start) ? `Idle for ${formatDuration(range.originalDuration)}` : `Idle reduced from ${formatDuration(range.originalDuration)} to ${formatDuration(range.end - range.start)}`}" style="left:${clamp(range.start / duration * 100, 0, 100)}%;width:${clamp((range.end - range.start) / duration * 100, 0, 100)}%"></i>`).join("");
   document.querySelector<HTMLElement>("#navigation-events")!.innerHTML = navigationEvents.map((event) => {
     const start = clamp(event.started_at_ms / duration * 100, 0, 100);
-    const end = clamp(event.ready_at_ms / duration * 100, start, 100);
-    const label = event.kind === "reload" ? "Page refreshed" : "Page navigated";
+    const presentationEnd = Math.min(duration, event.ready_at_ms + RELOAD_CONTEXT_MS);
+    const end = clamp(presentationEnd / duration * 100, start, 100);
+    const action = event.kind === "reload" ? "Page refreshed" : "Page navigated";
+    const exactDuration = Math.max(0, event.ready_at_ms - event.started_at_ms);
+    const label = `${action} — ${formatDuration(exactDuration)} transition`;
     return `<i data-navigation-event title="${label}" style="left:${start}%;width:${Math.max(.45, end - start)}%"></i>`;
   }).join("");
   document.querySelector<HTMLElement>("#idle-summary")!.textContent = projectedIdle.length ? `${projectedIdle.length} gap${projectedIdle.length === 1 ? "" : "s"}` : "";
