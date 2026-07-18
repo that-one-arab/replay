@@ -6,10 +6,8 @@ import test from "node:test";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-test("launcher ensures Rec's browser before transparently starting Playwright MCP", async () => {
+test("launcher forwards stdio transparently and provisions Rec's browser only on the first tool call", async () => {
   const calls: { path: string; body?: Record<string, unknown> }[] = [];
-  let markEnsured!: () => void;
-  const ensured = new Promise<void>((resolveEnsured) => { markEnsured = resolveEnsured; });
   const daemon = createServer(async (request, response) => {
     let raw = "";
     for await (const chunk of request) raw += chunk;
@@ -18,7 +16,7 @@ test("launcher ensures Rec's browser before transparently starting Playwright MC
     if (request.method === "GET" && request.url === "/health") return json(response, { ok: true });
     if (request.method === "POST" && request.url === "/api/leases/acquire") return json(response, { lease_id: "launcher-lease" }, 201);
     if (request.method === "POST" && request.url === "/api/leases/release") return json(response, { released: true });
-    if (request.method === "POST" && request.url === "/api/browser/ensure") { markEnsured(); return json(response, { cdp_endpoint: "http://127.0.0.1:9333" }); }
+    if (request.method === "POST" && request.url === "/api/browser/ensure") return json(response, { cdp_endpoint: "http://127.0.0.1:9333" });
     return json(response, { error: "not found" }, 404);
   });
   daemon.listen(0, "127.0.0.1");
@@ -33,16 +31,23 @@ test("launcher ensures Rec's browser before transparently starting Playwright MC
       REC_PLAYWRIGHT_MCP_ARGS: JSON.stringify(["-e", "process.stdin.pipe(process.stdout)", "--"]),
     },
   });
+  let output = "";
+  launcher.stdout.on("data", (chunk: Buffer) => { output += chunk.toString(); });
+  const waitFor = async (predicate: () => boolean, message: string) => {
+    const deadline = Date.now() + 3_000;
+    while (Date.now() < deadline) { if (predicate()) return; await new Promise((r) => setTimeout(r, 20)); }
+    throw new Error(message);
+  };
   try {
-    const echoed = once(launcher.stdout, "data") as Promise<[Buffer]>;
-    await ensured;
-    await new Promise((resolveWait) => setTimeout(resolveWait, 25));
-    launcher.stdin.write("playwright-mcp-stdio\n");
-    const result = await Promise.race([
-      echoed,
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Launcher did not forward stdio to Playwright MCP.")), 2_000)),
-    ]);
-    assert.equal(result[0].toString(), "playwright-mcp-stdio\n");
+    // The MCP handshake is forwarded untouched and must not launch Chrome.
+    launcher.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })}\n`);
+    await waitFor(() => output.includes("\"method\":\"initialize\""), "Launcher did not forward the handshake to Playwright MCP.");
+    assert.equal(calls.some((call) => call.path === "/api/browser/ensure"), false, "startup and handshake must not provision the browser");
+
+    // The first tools/call provisions the managed browser before it is forwarded.
+    launcher.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })}\n`);
+    await waitFor(() => calls.some((call) => call.path === "/api/browser/ensure"), "First tool call did not provision Rec's browser.");
+    await waitFor(() => output.includes("\"method\":\"tools/call\""), "Launcher did not forward the tool call after provisioning.");
     assert.deepEqual(calls.map((call) => call.path), ["/health", "/api/leases/acquire", "/api/browser/ensure"]);
   } finally {
     launcher.kill();

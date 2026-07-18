@@ -70,9 +70,14 @@ workflow is the optional upload performed after a recording has been finalized.
 ### Browser rendezvous
 
 The browser is the shared boundary between Playwright and Rec. A coding agent
-can use Playwright before it decides to record. The launcher starts the Rec
-daemon on demand, asks it to ensure its dedicated Chrome, obtains the local CDP
-endpoint, and starts stock `@playwright/mcp` with that endpoint.
+can use Playwright before it decides to record. Chrome is provisioned lazily:
+the launcher starts the Rec daemon, then starts stock `@playwright/mcp` against
+Rec's fixed loopback CDP endpoint without launching Chrome. Because Playwright
+MCP connects to that endpoint only on its first browser tool, the launcher
+watches the forwarded stdio stream and asks the daemon to ensure Rec's Chrome
+just before the first `tools/call` reaches Playwright MCP. Chrome therefore
+stays closed until the browser is actually used, not merely because an MCP
+client started.
 
 ```mermaid
 sequenceDiagram
@@ -84,12 +89,13 @@ sequenceDiagram
 
   Agent->>Launcher: Codex starts playwright MCP
   Launcher->>Daemon: GET /health, start if absent
+  Launcher->>PW: start with fixed --cdp-endpoint (Chrome not launched)
+  Agent->>Launcher: first tools/call (a browser action)
   Launcher->>Daemon: POST /api/browser/ensure
   Daemon->>Chrome: launch or reuse local Chrome with CDP
   Daemon-->>Launcher: loopback CDP endpoint
-  Launcher->>PW: start with --cdp-endpoint
-  Agent->>PW: navigate, click, fill, wait
-  PW->>Chrome: automate browser
+  Launcher->>PW: forward the tool call
+  PW->>Chrome: connect over CDP and automate
 ```
 
 Rec owns a Chrome it launches itself. It can alternatively attach to a supplied
@@ -261,9 +267,10 @@ The normal agent sequence is:
 4. Add markers only where they make a reviewer understand the journey better.
 5. Stop Rec and return the resulting replay/share URL.
 
-The Playwright launcher is deliberately stdio-transparent after the browser
-rendezvous. It does not inspect calls, issue synthetic markers, or try to
-associate a Playwright action with a Rec marker by ID.
+The Playwright launcher forwards stdio to stock Playwright MCP untouched, with
+one exception: it detects the first `tools/call` in order to provision Rec's
+Chrome just in time. It does not otherwise inspect calls, issue synthetic
+markers, or try to associate a Playwright action with a Rec marker by ID.
 
 ## Hosted sharing
 

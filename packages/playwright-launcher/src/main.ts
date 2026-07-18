@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -9,6 +9,10 @@ type JsonObject = Record<string, unknown>;
 const endpoint = process.env.REC_DAEMON_URL ?? "http://127.0.0.1:7717";
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 const daemonEntry = process.env.REC_DAEMON_ENTRY ?? resolve(moduleDirectory, "../../daemon/dist/main.js");
+// Rec's managed Chrome always exposes this fixed loopback CDP endpoint (see the
+// daemon's browser launch). It is known before Chrome exists, so it can be handed
+// to Playwright MCP up front and the actual launch deferred until first use.
+const MANAGED_CDP_ENDPOINT = "http://127.0.0.1:9333";
 
 void main().catch((error: unknown) => {
   process.stderr.write(`rec-playwright-launcher: ${messageOf(error)}\n`);
@@ -16,27 +20,89 @@ void main().catch((error: unknown) => {
 });
 
 /**
- * A stdio-transparent rendezvous launcher. It never handles MCP messages: once
- * Rec has provisioned its Chrome, stock Playwright MCP owns stdin/stdout.
+ * A near-transparent rendezvous launcher. It forwards MCP stdio to stock
+ * Playwright MCP untouched, except that it watches for the first `tools/call`
+ * and provisions Rec's managed Chrome just-in-time before forwarding it. Chrome
+ * therefore stays closed until the browser is actually used, while Playwright
+ * and Rec still share one browser over the fixed loopback CDP endpoint.
  */
 async function main() {
   await ensureDaemon();
   const daemonLease = await acquireDaemonLease();
-  const ensured = object(await api("POST", "/api/browser/ensure", { executable: process.env.REC_BROWSER_EXECUTABLE }, false));
-  if (ensured.browser_state === "restart_required") throw new Error("Rec browser settings changed. Stop the managed browser with `rec browser stop`, then start this task again.");
-  const cdpEndpoint = requiredString(ensured.cdp_endpoint, "Rec browser CDP endpoint");
   const command = process.env.REC_PLAYWRIGHT_MCP_COMMAND ?? "npx";
   const args = playwrightArgs();
   if (args.includes("--cdp-endpoint")) throw new Error("REC_PLAYWRIGHT_MCP_ARGS must not set --cdp-endpoint; Rec supplies the shared endpoint.");
-  const child = spawn(command, [...args, "--cdp-endpoint", cdpEndpoint], { stdio: "inherit", env: process.env });
+  // Playwright MCP connects to the CDP endpoint lazily on its first browser tool,
+  // so Chrome is not launched here. It is provisioned on the first tools/call.
+  const child = spawn(command, [...args, "--cdp-endpoint", MANAGED_CDP_ENDPOINT], { stdio: ["pipe", "pipe", "inherit"], env: process.env });
+  child.stdout?.pipe(process.stdout);
+  child.stdin?.on("error", () => { /* Playwright MCP closed its input; nothing left to forward. */ });
   child.once("error", (error) => {
     process.stderr.write(`rec-playwright-launcher: could not start Playwright MCP: ${messageOf(error)}\n`);
     process.exitCode = 1;
   });
   child.once("exit", async (code) => {
     await releaseDaemonLease(daemonLease);
-    process.exitCode = code ?? 1;
+    process.exit(code ?? 1);
   });
+  forwardStdinEnsuringBrowser(child);
+}
+
+/**
+ * Forward the client's stdin to Playwright MCP line by line, launching Rec's
+ * managed Chrome exactly once — just before the first `tools/call` reaches
+ * Playwright MCP, which is the first moment a browser is actually needed.
+ */
+function forwardStdinEnsuringBrowser(child: ChildProcess) {
+  let browserReady = false;
+  let ensuring: Promise<void> | undefined;
+  const ensureBrowserOnce = () => (ensuring ??= ensureManagedBrowser().then(() => { browserReady = true; }));
+  let buffered = "";
+  let queue = Promise.resolve();
+  const handleLine = async (line: string) => {
+    if (!browserReady && isToolCall(line)) {
+      try {
+        await ensureBrowserOnce();
+      } catch (error) {
+        ensuring = undefined; // A later tool call may retry after the user resolves the browser issue.
+        const id = requestId(line);
+        if (id !== undefined) {
+          process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32001, message: messageOf(error) } })}\n`);
+          return;
+        }
+      }
+    }
+    child.stdin?.write(`${line}\n`);
+  };
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk: string) => {
+    buffered += chunk;
+    const lines = buffered.split("\n");
+    buffered = lines.pop() ?? "";
+    for (const line of lines) queue = queue.then(() => handleLine(line));
+  });
+  process.stdin.on("end", () => {
+    queue = queue.then(async () => { if (buffered) await handleLine(buffered); child.stdin?.end(); });
+  });
+}
+
+async function ensureManagedBrowser() {
+  const result = object(await api("POST", "/api/browser/ensure", { executable: process.env.REC_BROWSER_EXECUTABLE }, false));
+  if (result.browser_state === "restart_required") throw new Error("Rec browser settings changed. Stop the managed browser with `rec browser stop`, then start this task again.");
+  requiredString(result.cdp_endpoint, "Rec browser CDP endpoint");
+}
+
+function isToolCall(line: string) {
+  return parseMessage(line)?.method === "tools/call";
+}
+function requestId(line: string): string | number | undefined {
+  const id = parseMessage(line)?.id;
+  return typeof id === "string" || typeof id === "number" ? id : undefined;
+}
+function parseMessage(line: string): { method?: string; id?: unknown } | undefined {
+  const trimmed = line.trim();
+  if (!trimmed) return undefined;
+  try { return JSON.parse(trimmed) as { method?: string; id?: unknown }; } catch { return undefined; }
 }
 
 function playwrightArgs() {
