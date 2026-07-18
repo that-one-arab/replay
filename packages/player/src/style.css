@@ -267,40 +267,39 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
 }
 .share-link:hover { text-decoration: underline; }
 
-/* Timeline */
-.timeline-wrap { position: relative; height: 54px; margin: 16px 2px 0; display: flex; align-items: end; }
-.timeline-wrap:after {
-  content: "";
+/* Timeline. Visual hierarchy, most prominent first: markers, the chaptered
+   baseline and progress, activity density, then idle and navigation hints. */
+.timeline-wrap { position: relative; height: 44px; margin: 16px 2px 0; display: flex; align-items: end; }
+.timeline-chapters { position: absolute; z-index: 1; inset: 0; pointer-events: none; }
+.timeline-chapters i {
   position: absolute;
-  z-index: 1;
-  left: 0;
-  right: 0;
   bottom: 0;
-  height: 2px;
-  background: rgba(255, 255, 255, .34);
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, .28);
 }
-.timeline-idle { position: absolute; z-index: 0; inset: 27px 0 0; overflow: hidden; border-radius: 3px 3px 0 0; pointer-events: none; }
+.timeline-idle { position: absolute; z-index: 0; inset: 0 0 8px; overflow: hidden; pointer-events: none; }
 .timeline-idle i {
   position: absolute;
   top: 0;
   bottom: 0;
   min-width: 3px;
-  opacity: .9;
-  background: repeating-linear-gradient(-45deg, rgba(255, 196, 111, .82) 0 3px, rgba(255, 196, 111, .22) 3px 7px);
-  box-shadow: inset 1px 0 rgba(255, 224, 170, .84), inset -1px 0 rgba(255, 224, 170, .84);
+  border-radius: 3px;
+  background: rgba(255, 196, 111, .09);
+  border-inline: 1px dashed rgba(255, 196, 111, .4);
 }
 .timeline-navigations { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
 .timeline-navigations i {
   position: absolute;
-  bottom: -2px;
-  height: 6px;
+  bottom: -1px;
+  height: 5px;
   min-width: 3px;
-  border-radius: 3px;
-  background: #ffca72;
-  box-shadow: 0 0 8px rgba(255, 202, 114, .7);
+  border-radius: 2px;
+  background: rgba(255, 202, 114, .85);
+  box-shadow: 0 0 5px rgba(255, 202, 114, .4);
 }
-.timeline-density { position: absolute; z-index: 1; inset: 27px 0 0; display: flex; align-items: end; gap: 2px; opacity: .96; }
-.timeline-density i { flex: 1; min-width: 1px; height: calc(var(--level) * 20px); border-radius: 2px 2px 0 0; background: linear-gradient(#c8c0ff, #7864f7); }
+.timeline-density { position: absolute; z-index: 1; inset: 0 0 8px; display: flex; align-items: end; gap: 2px; }
+.timeline-density i { flex: 1; min-width: 1px; height: calc(var(--level) * 16px); border-radius: 1px 1px 0 0; background: rgba(148, 134, 255, .35); }
 .timeline-progress { position: absolute; z-index: 2; left: 0; bottom: 0; height: 3px; border-radius: 3px; background: #fff; box-shadow: 0 0 9px #b9acff; }
 .timeline-playhead {
   position: absolute;
@@ -323,7 +322,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
   bottom: 0;
   transform: translateX(-50%);
   width: 22px;
-  height: 59px;
+  height: 44px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -333,7 +332,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
 .timeline-markers .marker-dot {
   position: absolute;
   left: 50%;
-  bottom: 4px;
+  bottom: -4px;
   display: block;
   width: 11px;
   height: 11px;
@@ -346,7 +345,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
   transition: width .15s ease, height .15s ease, bottom .15s ease, background .15s ease, box-shadow .15s ease;
 }
 .timeline-markers button.is-active .marker-dot {
-  bottom: 2px;
+  bottom: -6px;
   width: 15px;
   height: 15px;
   background: #d9d2ff;
