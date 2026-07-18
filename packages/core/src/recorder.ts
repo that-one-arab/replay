@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import type { Browser, BrowserContext, Frame, Page, Response as PlaywrightResponse } from "playwright-core";
+import type { Browser, BrowserContext, Frame, Page, Request as PlaywrightRequest, Response as PlaywrightResponse } from "playwright-core";
 import { chromium } from "playwright-core";
 import { SessionStore } from "./storage.js";
-import type { BrowserStatus, Marker, RecordingManifest, StartOptions, StopResult } from "./types.js";
+import type { BrowserStatus, Marker, NavigationEvent, RecordingManifest, StartOptions, StopResult } from "./types.js";
 
 const require = createRequire(import.meta.url);
 const FLUSH_MS = 500;
@@ -22,6 +22,15 @@ interface PageState {
   flushTimer?: NodeJS.Timeout;
 }
 
+interface PendingNavigation {
+  state: PageState;
+  fromUrl: string;
+  toUrl: string;
+  startedAtMs: number;
+  committedAtMs?: number;
+  committedAtWallClockMs?: number;
+}
+
 /** One active recorder bound to an existing Chromium CDP endpoint. */
 export class Recorder {
   private browser?: Browser;
@@ -30,6 +39,7 @@ export class Recorder {
   private startedAt = 0;
   private readonly pages = new Map<Page, PageState>();
   private readonly knownPages = new Set<Page>();
+  private readonly pendingNavigations = new Map<Page, PendingNavigation>();
   private observedPages = new WeakSet<Page>();
   private readonly assetCaptures = new Map<string, Promise<void>>();
   private origins = new Set<string>();
@@ -48,6 +58,7 @@ export class Recorder {
     }
     if (this.browser) await this.browser.close();
     this.knownPages.clear();
+    this.pendingNavigations.clear();
     // Bindings belong to a single Playwright BrowserContext. Reattaching over
     // CDP creates a new context facade, so it must receive its own bridge.
     this.initialized = false;
@@ -73,6 +84,7 @@ export class Recorder {
     this.recordCanvas = Boolean(options.recordCanvas);
     this.startedAt = Date.now();
     this.observedPages = new WeakSet<Page>();
+    this.pendingNavigations.clear();
     this.assetCaptures.clear();
     const id = `rec_${randomUUID().slice(0, 8)}`;
     const manifest: RecordingManifest = {
@@ -85,6 +97,7 @@ export class Recorder {
       masking: { mask_all_inputs: Boolean(options.maskAllInputs), passwords: true },
       segments: [],
       tab_events: [],
+      navigation_events: [],
       markers: [],
       assets: [],
     };
@@ -178,6 +191,7 @@ export class Recorder {
       // object identity, then resolve the active page by its current URL.
       const state = page ? this.pages.get(page) ?? [...this.pages.values()].find((candidate) => candidate.page.url() === page.url()) : undefined;
       if (!state || !Array.isArray(payload)) return;
+      this.observeNavigationSnapshots(state, payload);
       this.observeTabEvents(state, payload);
       state.queue.push(...payload);
       if (!state.flushTimer) state.flushTimer = setTimeout(() => void this.flush(state), FLUSH_MS);
@@ -199,9 +213,13 @@ export class Recorder {
     if (this.observedPages.has(page)) return;
     this.observedPages.add(page);
     page.on("framenavigated", (frame) => {
-      if (frame === page.mainFrame()) void this.activatePage(page);
+      if (frame === page.mainFrame()) {
+        this.commitNavigation(page, frame.url());
+        void this.activatePage(page);
+      }
       else void this.activateFrame(frame);
     });
+    page.on("request", (request) => this.observeNavigationRequest(page, request));
     page.on("response", (response) => void this.captureResponse(response));
     void this.activatePage(page);
   }
@@ -226,6 +244,7 @@ export class Recorder {
     this.store?.segment(state.id, page.url(), clockOffsetMs);
     this.store?.addTabEvent({ type: "opened", segment_id: state.id, t_ms: clockOffsetMs });
     page.on("close", () => {
+      this.pendingNavigations.delete(page);
       this.store?.addTabEvent({ type: "closed", segment_id: state.id, t_ms: Date.now() - this.startedAt });
       void this.flush(state);
     });
@@ -255,6 +274,62 @@ export class Recorder {
       if (candidate.type !== 5 || candidate.data?.tag !== "rec-tab-focused" || timestamp === undefined || state.firstEventTimestamp === undefined) continue;
       this.store?.addTabEvent({ type: "focused", segment_id: state.id, t_ms: state.clockOffsetMs + Math.max(0, timestamp - state.firstEventTimestamp) });
     }
+  }
+
+  private observeNavigationRequest(page: Page, request: PlaywrightRequest) {
+    if (!this.store || !request.isNavigationRequest() || request.frame() !== page.mainFrame()) return;
+    const state = this.pages.get(page);
+    // The first load of a newly opened tab is represented by the tab lifecycle,
+    // not a refresh transition. Existing recorded pages can start a transition.
+    if (!state) return;
+    const pending = this.pendingNavigations.get(page);
+    if (pending) {
+      if (!pending.committedAtMs) pending.toUrl = request.url();
+      return;
+    }
+    this.pendingNavigations.set(page, {
+      state,
+      fromUrl: state.baseUrl,
+      toUrl: request.url(),
+      startedAtMs: Date.now() - this.startedAt,
+    });
+  }
+
+  private commitNavigation(page: Page, committedUrl: string) {
+    if (!this.store) return;
+    const state = this.pages.get(page);
+    if (!state) return;
+    const now = Date.now();
+    const pending = this.pendingNavigations.get(page) ?? {
+      state,
+      fromUrl: state.baseUrl,
+      toUrl: committedUrl,
+      startedAtMs: now - this.startedAt,
+    };
+    pending.toUrl = committedUrl;
+    pending.committedAtMs = now - this.startedAt;
+    pending.committedAtWallClockMs = now;
+    this.pendingNavigations.set(page, pending);
+  }
+
+  private observeNavigationSnapshots(state: PageState, events: unknown[]) {
+    const pending = this.pendingNavigations.get(state.page);
+    if (!pending?.committedAtMs || !pending.committedAtWallClockMs) return;
+    const snapshot = events.find((event) => isFullSnapshotAfter(event, pending.committedAtWallClockMs!));
+    if (!snapshot) return;
+    const timestamp = eventTimestamp(snapshot);
+    if (timestamp === undefined || !this.store) return;
+    const event: NavigationEvent = {
+      segment_id: state.id,
+      kind: sameDocument(pending.fromUrl, pending.toUrl) ? "reload" : "navigate",
+      started_at_ms: pending.startedAtMs,
+      committed_at_ms: pending.committedAtMs,
+      ready_at_ms: Math.max(pending.committedAtMs, timestamp - this.startedAt),
+      from_url: pending.fromUrl,
+      to_url: pending.toUrl,
+    };
+    this.store.addNavigationEvent(event);
+    this.pendingNavigations.delete(state.page);
   }
 
   private async captureResponse(response: PlaywrightResponse) {
@@ -345,6 +420,24 @@ function eventTimestamp(event: unknown) {
   if (!event || typeof event !== "object" || !("timestamp" in event)) return undefined;
   const value = Number((event as { timestamp: unknown }).timestamp);
   return Number.isFinite(value) ? value : undefined;
+}
+
+function isFullSnapshotAfter(event: unknown, wallClockMs: number) {
+  const candidate = event as { type?: unknown };
+  const timestamp = eventTimestamp(event);
+  // rrweb timestamps share the browser machine's wall clock. A short tolerance
+  // covers CDP callback ordering while excluding an old buffered snapshot.
+  return candidate.type === 2 && timestamp !== undefined && timestamp >= wallClockMs - 100;
+}
+
+function sameDocument(left: string, right: string) {
+  try {
+    const from = new URL(left);
+    const to = new URL(right);
+    from.hash = "";
+    to.hash = "";
+    return from.href === to.href;
+  } catch { return left === right; }
 }
 
 function inScope(url: string, origins: Set<string>) {

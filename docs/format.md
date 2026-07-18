@@ -23,6 +23,13 @@ content-addressed under `assets/`; persisted replay events point to the local as
 endpoint. `manifest.json` is written on start and atomically replaced on stop with
 final durations, chunks, tab metadata, and assets.
 
+Top-level document transitions are stored in `manifest.json` as
+`navigation_events`. Each completed event records its segment, best-effort kind
+(`reload` or `navigate`), request start, document commit, ready timestamps, and
+source/destination URLs. The player uses this durable metadata for refresh and
+navigation transitions, so seeking does not mistake rrweb's historical document
+rebuild for a new refresh.
+
 The format is local only in this spike. Future server uploads should send the
 manifest and chunks unchanged. Markers have a timestamp, label, optional note, and
 optional `placement`: `after_previous` (the default) describes a confirmed result

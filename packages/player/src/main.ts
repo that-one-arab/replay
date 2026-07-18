@@ -5,8 +5,9 @@ import "./style.css";
 type Marker = { t_ms: number; label: string; note?: string; placement?: "after_previous" | "before_next" };
 type Segment = { id: string; page_url: string; clock_offset_ms: number };
 type TabEvent = { t_ms: number; segment_id: string; type: "opened" | "focused" | "closed" };
-type Manifest = { id: string; title: string; markers: Marker[]; segments: Segment[]; tab_events?: TabEvent[]; raw_duration_ms?: number };
-type ReplayEvent = { timestamp: number; type: number; data?: { source?: number; width?: number; height?: number; text?: string; id?: number; x?: number; y?: number; recSynthetic?: "approach"; positions?: { x: number; y: number; id?: number; timeOffset?: number }[] } };
+type NavigationEvent = { segment_id: string; kind: "reload" | "navigate"; started_at_ms: number; committed_at_ms: number; ready_at_ms: number; from_url: string; to_url: string };
+type Manifest = { id: string; title: string; markers: Marker[]; segments: Segment[]; tab_events?: TabEvent[]; navigation_events?: NavigationEvent[]; raw_duration_ms?: number };
+type ReplayEvent = { timestamp: number; type: number; data?: { source?: number; href?: string; width?: number; height?: number; text?: string; id?: number; x?: number; y?: number; recSynthetic?: "approach"; positions?: { x: number; y: number; id?: number; timeOffset?: number }[] } };
 type IdleRange = { start: number; end: number };
 type TimelineIdleRange = IdleRange & { originalDuration: number };
 type PlaybackProjection = { manifest: Manifest; eventSets: Map<string, ReplayEvent[]>; duration: number; activities: number[]; playbackEnd: number; idleRanges: TimelineIdleRange[]; toPlayback(time: number): number; toRaw(time: number): number };
@@ -45,7 +46,7 @@ async function load(recordingId: string) {
       const projection = projectPlayback(resolvedManifest, eventSets, cuttingIdle);
       activePlayback?.abort();
       renderShell(projection.manifest, cuttingIdle, playbackSpeed);
-      prepareTimeline(projection.manifest.markers, projection.duration, projection.activities, projection.playbackEnd, projection.idleRanges);
+      prepareTimeline(projection.manifest.markers, projection.manifest.navigation_events ?? [], projection.duration, projection.activities, projection.playbackEnd, projection.idleRanges);
       await replay(projection.manifest, projection.eventSets, projection.duration, projection.manifest.segments[0], projection.toPlayback(rawTime), autoplay, (enabled, requestedTime, shouldAutoplay) => {
         cuttingIdle = enabled;
         void present(projection.toRaw(requestedTime), shouldAutoplay).catch(renderError);
@@ -62,7 +63,7 @@ function renderShell(manifest: Manifest, cuttingIdle: boolean, playbackSpeed: nu
   const speedControls = [0.25, 0.5, DEFAULT_PLAYBACK_SPEED, 2, 4, 8]
     .map((speed) => `<button data-speed="${speed}"${speed === playbackSpeed ? " class=\"selected\"" : ""}>${speed}×</button>`)
     .join("");
-  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong>Page is refreshing</strong></div><div class="caption-card" id="caption"><span class="caption-kicker">SESSION REPLAY</span><strong>Press play to begin</strong><p>The timeline follows the full browser recording.</p></div><section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div><button class="skip-button${cuttingIdle ? " active" : ""}" id="skip" aria-label="${cuttingIdle ? "Cut idle time" : "Keep idle time"}" aria-pressed="${cuttingIdle}"><span>✂</span> Cut idle <b id="idle-summary"></b></button></div><div class="timeline-wrap"><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section></main>`;
+  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption"><span class="caption-kicker">SESSION REPLAY</span><strong>Press play to begin</strong><p>The timeline follows the full browser recording.</p></div><section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div><button class="skip-button${cuttingIdle ? " active" : ""}" id="skip" aria-label="${cuttingIdle ? "Cut idle time" : "Keep idle time"}" aria-pressed="${cuttingIdle}"><span>✂</span> Cut idle <b id="idle-summary"></b></button></div><div class="timeline-wrap"><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section></main>`;
 }
 
 async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>, duration: number, segment: Segment | undefined, requestedSessionTime: number, autoplay = false, onCutIdleChange?: (enabled: boolean, requestedTime: number, autoplay: boolean) => void, playbackSpeed = DEFAULT_PLAYBACK_SPEED, onPlaybackSpeedChange?: (speed: number) => void) {
@@ -102,10 +103,9 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   let tabFocusTimer: number | undefined;
   let refreshTimer: number | undefined;
   let frameKeyboardTimer: number | undefined;
-  // rrweb rebuilds the document from historical events whenever it seeks. A
-  // navigation meta event included in that reconstruction is not a refresh
-  // occurring now, so only announce one after the requested seek position.
-  const refreshCutoff = clamp(requestedSessionTime - tabStart, 0, tabDuration);
+  let visibleNavigation: NavigationEvent | undefined;
+  const navigationEvents = (manifest.navigation_events ?? []).filter((event) => event.segment_id === segment.id).sort((left, right) => left.started_at_ms - right.started_at_ms);
+  let lastNavigationCheck = requestedSessionTime;
   const scrubber = document.querySelector<HTMLInputElement>("#scrubber")!;
   const nextFocus = nextFocusForSegment(manifest, segment.id, requestedSessionTime);
   const updateTimelinePosition = (time: number) => {
@@ -119,6 +119,9 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   };
   const playFrom = (time: number) => {
     const start = tabEnd >= duration - 10 && time >= duration - 10 ? tabStart : clamp(time, tabStart, tabEnd);
+    // A direct marker/timeline jump is a new playback baseline. Do not announce
+    // navigation transitions that were crossed before the selected point.
+    lastNavigationCheck = start;
     updateTimelinePosition(start);
     replayer.play(start - tabStart);
   };
@@ -147,8 +150,10 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     document.querySelector<HTMLButtonElement>("#play")!.classList.toggle("is-playing", value);
     document.querySelector<HTMLElement>("#stage-status")!.textContent = value ? "Playing" : "Paused";
   };
-  const showRefresh = () => {
+  const showRefresh = (navigation: NavigationEvent) => {
     const indicator = document.querySelector<HTMLElement>("#refresh-indicator")!;
+    visibleNavigation = navigation;
+    document.querySelector<HTMLElement>("#refresh-label")!.textContent = navigation.kind === "reload" ? "Page is refreshing" : "Page is navigating";
     indicator.classList.add("is-visible");
     if (refreshTimer) window.clearTimeout(refreshTimer);
     const duration = clamp(
@@ -156,7 +161,15 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
       MIN_REFRESH_INDICATOR_MS,
       MAX_REFRESH_INDICATOR_MS,
     );
-    refreshTimer = window.setTimeout(() => indicator.classList.remove("is-visible"), duration);
+    refreshTimer = window.setTimeout(() => {
+      indicator.classList.remove("is-visible");
+      visibleNavigation = undefined;
+    }, duration);
+  };
+  const announceNavigations = (time: number) => {
+    const crossed = navigationEvents.filter((event) => event.started_at_ms > lastNavigationCheck && event.started_at_ms <= time);
+    for (const navigation of crossed) showRefresh(navigation);
+    lastNavigationCheck = Math.max(lastNavigationCheck, time);
   };
   const updateProgress = () => {
     if (lifetime.signal.aborted) return;
@@ -166,6 +179,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     if (!scrubbing && !bridgingTabs) {
       const time = clamp(tabStart + replayer.getCurrentTime(), tabStart, tabEnd);
       updateTimelinePosition(time);
+      announceNavigations(time);
       syncNarration(manifest.markers, time);
       if (playing && nextFocus && time >= nextFocus.t_ms) {
         announceAndFocusNewTab(nextFocus, time);
@@ -177,9 +191,6 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   replayer.on("start", () => { setPlaying(true); requestAnimationFrame(updateProgress); });
   replayer.on("resume", () => { setPlaying(true); requestAnimationFrame(updateProgress); });
   replayer.on("pause", () => setPlaying(false));
-  replayer.on("event-cast", (event: unknown) => {
-    if (isRefreshEvent(event, events) && event.timestamp - events[0]!.timestamp > refreshCutoff) showRefresh();
-  });
   replayer.on("finish", () => {
     if (nextFocus) void bridgeToNewTab(nextFocus);
     else { setPlaying(false); updateTimelinePosition(tabEnd); }
@@ -203,7 +214,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     selectedPlaybackSpeed = speed;
     replayer.setConfig({ speed });
     onPlaybackSpeedChange?.(speed);
-    if (document.querySelector<HTMLElement>("#refresh-indicator")!.classList.contains("is-visible")) showRefresh();
+    if (visibleNavigation) showRefresh(visibleNavigation);
   });
   document.querySelectorAll<HTMLButtonElement>("[data-marker]").forEach((button) => button.onclick = () => {
     const time = Number(button.dataset.marker);
@@ -275,6 +286,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     // navigation. Seeking replaces that instance, so it must not leak into the
     // newly requested point on the timeline.
     document.querySelector<HTMLElement>("#refresh-indicator")?.classList.remove("is-visible");
+    visibleNavigation = undefined;
     if (frameKeyboardTimer) window.clearTimeout(frameKeyboardTimer);
     replayDocumentKeyboardHandler = undefined;
     frameWindows.forEach((frameWindow) => frameWindow.removeEventListener("keydown", onPlaybackKey, true));
@@ -336,6 +348,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
 function projectPlayback(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>, cuttingIdle: boolean): PlaybackProjection {
   const playbackEnd = eventEndTime(manifest, eventSets);
   const activities = activityTimes(manifest, eventSets);
+  const navigationEvents = resolvedNavigationEvents(manifest, eventSets);
   const rawIdle = idleRanges(activities, playbackEnd);
   const ranges = cuttingIdle ? rawIdle : [];
   const toPlayback = (time: number) => {
@@ -363,6 +376,12 @@ function projectPlayback(manifest: Manifest, eventSets: Map<string, ReplayEvent[
     raw_duration_ms: toPlayback(playbackEnd),
     segments: manifest.segments.map((segment) => ({ ...segment, clock_offset_ms: toPlayback(segment.clock_offset_ms) })),
     tab_events: manifest.tab_events?.map((event) => ({ ...event, t_ms: toPlayback(event.t_ms) })),
+    navigation_events: navigationEvents.map((event) => ({
+      ...event,
+      started_at_ms: toPlayback(event.started_at_ms),
+      committed_at_ms: toPlayback(event.committed_at_ms),
+      ready_at_ms: toPlayback(event.ready_at_ms),
+    })),
     markers: manifest.markers.map((marker) => ({ ...marker, t_ms: toPlayback(marker.t_ms) })),
   };
   const projectedEvents = new Map(projectedManifest.segments.map((segment) => {
@@ -385,13 +404,19 @@ function projectPlayback(manifest: Manifest, eventSets: Map<string, ReplayEvent[
   };
 }
 
-function prepareTimeline(markers: Marker[], duration: number, interactions: number[], playbackEnd: number, projectedIdle: TimelineIdleRange[]) {
+function prepareTimeline(markers: Marker[], navigationEvents: NavigationEvent[], duration: number, interactions: number[], playbackEnd: number, projectedIdle: TimelineIdleRange[]) {
   const density = document.querySelector<HTMLElement>("#density")!;
   const buckets = Array.from({ length: 72 }, () => 0);
   interactions.forEach((time) => { buckets[Math.min(buckets.length - 1, Math.floor(time / duration * buckets.length))] += 1; });
   const max = Math.max(1, ...buckets);
   density.innerHTML = buckets.map((count) => `<i style="--level:${Math.max(.08, count / max)}"></i>`).join("");
   document.querySelector<HTMLElement>("#idle-ranges")!.innerHTML = projectedIdle.map((range) => `<i data-idle-range title="${nearlyEqual(range.originalDuration, range.end - range.start) ? `Idle for ${formatDuration(range.originalDuration)}` : `Idle reduced from ${formatDuration(range.originalDuration)} to ${formatDuration(range.end - range.start)}`}" style="left:${clamp(range.start / duration * 100, 0, 100)}%;width:${clamp((range.end - range.start) / duration * 100, 0, 100)}%"></i>`).join("");
+  document.querySelector<HTMLElement>("#navigation-events")!.innerHTML = navigationEvents.map((event) => {
+    const start = clamp(event.started_at_ms / duration * 100, 0, 100);
+    const end = clamp(event.ready_at_ms / duration * 100, start, 100);
+    const label = event.kind === "reload" ? "Page refreshed" : "Page navigated";
+    return `<i data-navigation-event title="${label}" style="left:${start}%;width:${Math.max(.45, end - start)}%"></i>`;
+  }).join("");
   document.querySelector<HTMLElement>("#idle-summary")!.textContent = projectedIdle.length ? `${projectedIdle.length} gap${projectedIdle.length === 1 ? "" : "s"}` : "";
   document.querySelector<HTMLElement>("#timeline-markers")!.innerHTML = markers.map((marker) => `<button data-marker="${marker.t_ms}" title="${escape(marker.label)}" style="left:${clamp(marker.t_ms / duration * 100, 1, 99)}%"><span></span></button>`).join("");
 }
@@ -408,17 +433,33 @@ function sessionDuration(manifest: Manifest, eventSets: Map<string, ReplayEvent[
   return Math.max(manifest.raw_duration_ms ?? 0, eventEnd);
 }
 function activityTimes(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>) {
-  return manifest.segments.flatMap((segment) => segmentActivityTimes(eventSets.get(segment.id) ?? [], segment.clock_offset_ms));
+  const interactions = manifest.segments.flatMap((segment) => segmentActivityTimes(eventSets.get(segment.id) ?? [], segment.clock_offset_ms));
+  const end = eventEndTime(manifest, eventSets);
+  const navigationContext = resolvedNavigationEvents(manifest, eventSets).flatMap((event) => [
+    clamp(event.started_at_ms - RELOAD_CONTEXT_MS, 0, end),
+    clamp(event.ready_at_ms + RELOAD_CONTEXT_MS, 0, end),
+  ]);
+  return [...interactions, ...navigationContext];
 }
 function segmentActivityTimes(events: ReplayEvent[], clockOffsetMs: number) {
   const started = events[0]?.timestamp ?? 0;
-  const end = clockOffsetMs + Math.max(0, (events.at(-1)?.timestamp ?? started) - started);
-  const reloadContext = events.flatMap((event, index) => {
-    if (index === 0 || event.type !== 4) return [];
-    const reloadAt = clockOffsetMs + event.timestamp - started;
-    return [clamp(reloadAt - RELOAD_CONTEXT_MS, clockOffsetMs, end), clamp(reloadAt + RELOAD_CONTEXT_MS, clockOffsetMs, end)];
+  return [clockOffsetMs, ...events.filter(isActivityEvent).map((event) => clockOffsetMs + event.timestamp - started)];
+}
+function resolvedNavigationEvents(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>): NavigationEvent[] {
+  if (manifest.navigation_events?.length) return manifest.navigation_events;
+  // Recordings made before first-class navigation capture retain the former
+  // meta-event fallback. It is converted once into timeline metadata so the
+  // player never reacts to rrweb's seek reconstruction events.
+  return manifest.segments.flatMap((segment) => {
+    const events = eventSets.get(segment.id) ?? [];
+    const started = events[0]?.timestamp ?? 0;
+    const firstNavigation = events.find((event) => event.type === 4)?.timestamp;
+    return events.filter((event) => event.type === 4 && event.timestamp > (firstNavigation ?? Infinity)).map((event) => {
+      const time = segment.clock_offset_ms + event.timestamp - started;
+      const href = typeof event.data?.href === "string" ? event.data.href : segment.page_url;
+      return { segment_id: segment.id, kind: "reload" as const, started_at_ms: time, committed_at_ms: time, ready_at_ms: time, from_url: href, to_url: href };
+    });
   });
-  return [clockOffsetMs, ...events.filter(isActivityEvent).map((event) => clockOffsetMs + event.timestamp - started), ...reloadContext];
 }
 function eventEndTime(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>) {
   return Math.max(0, ...manifest.segments.map((segment) => {
@@ -488,10 +529,6 @@ function isMarkerStep(event: ReplayEvent, index: number) {
   // input, navigation, and rebuilt documents are visible state transitions.
   if (event.type === 3) return event.data?.source === 2 || event.data?.source === 5 || event.data?.source === 0;
   return index > 0 && (event.type === 2 || event.type === 4);
-}
-function isRefreshEvent(event: unknown, events: ReplayEvent[]): event is ReplayEvent {
-  const initialNavigation = events.find((candidate) => candidate.type === 4);
-  return isReplayEvent(event) && event.type === 4 && event.timestamp > (initialNavigation?.timestamp ?? Infinity);
 }
 function humanizeEvents(events: ReplayEvent[]) {
   const output: ReplayEvent[] = [];

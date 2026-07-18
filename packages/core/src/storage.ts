@@ -5,7 +5,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { CaptureSummary, Marker, RecordedAsset, RecordingManifest, Segment, TabEvent } from "./types.js";
+import type { CaptureSummary, Marker, NavigationEvent, RecordedAsset, RecordingManifest, Segment, TabEvent } from "./types.js";
 
 export const recHome = () => process.env.REC_HOME ?? join(process.env.HOME ?? process.cwd(), ".rec");
 export const sessionsDir = () => join(recHome(), "sessions");
@@ -127,6 +127,15 @@ export class SessionStore {
     // meaningful lifecycle edge, not duplicate focus noise.
     if (previous?.type === event.type && previous.segment_id === event.segment_id && event.t_ms - previous.t_ms < 100) return;
     tabEvents.push(event);
+  }
+
+  addNavigationEvent(event: NavigationEvent) {
+    const transitions = this.manifest.navigation_events ?? (this.manifest.navigation_events = []);
+    // A redirect can surface more than one lifecycle callback for the same
+    // committed document. Keep the first durable transition instead of making
+    // the player render duplicate refresh cards.
+    if (transitions.some((item) => item.segment_id === event.segment_id && Math.abs(item.committed_at_ms - event.committed_at_ms) < 100)) return;
+    transitions.push(event);
   }
 
   async finalize(outcome?: RecordingManifest["outcome"], notes?: string) {

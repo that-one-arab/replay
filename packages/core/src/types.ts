@@ -33,6 +33,17 @@ export interface TabEvent {
   type: "opened" | "focused" | "closed";
 }
 
+/** A top-level document transition observed by Rec while recording. */
+export interface NavigationEvent {
+  segment_id: string;
+  kind: "reload" | "navigate";
+  started_at_ms: number;
+  committed_at_ms: number;
+  ready_at_ms: number;
+  from_url: string;
+  to_url: string;
+}
+
 export interface RecordingManifest {
   format_version: 1;
   id: string;
@@ -48,6 +59,8 @@ export interface RecordingManifest {
   active_duration_ms?: number;
   segments: Segment[];
   tab_events: TabEvent[];
+  /** Optional for compatibility with recordings created before navigation capture. */
+  navigation_events?: NavigationEvent[];
   markers: Marker[];
   assets: RecordedAsset[];
 }

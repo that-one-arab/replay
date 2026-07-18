@@ -3,6 +3,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import type { Page, Request as PlaywrightRequest } from "playwright-core";
+import { Recorder } from "./recorder.js";
 import { calculateActiveDuration, SessionStore } from "./storage.js";
 import { rewriteAssetUrls } from "./recorder.js";
 
@@ -52,10 +54,85 @@ test("persists marker placement and reports captured event counts", async () => 
     store.segment("seg_1", "http://example.test", 0);
     await store.append("seg_1", [{ type: 2, timestamp: 10 }, { type: 3, timestamp: 20 }], Date.now());
     store.addMarker({ t_ms: 25, label: "Ready to submit", placement: "before_next" });
+    store.addNavigationEvent({
+      segment_id: "seg_1",
+      kind: "reload",
+      started_at_ms: 30,
+      committed_at_ms: 80,
+      ready_at_ms: 120,
+      from_url: "http://example.test/todos",
+      to_url: "http://example.test/todos",
+    });
     await store.finalize();
     assert.deepEqual(store.captureSummary(), { segmentCount: 1, chunkCount: 1, eventCount: 2 });
-    const manifest = JSON.parse(await readFile(join(root, "sessions", "rec_marker_fixture", "manifest.json"), "utf8")) as { markers: { placement?: string }[] };
+    const manifest = JSON.parse(await readFile(join(root, "sessions", "rec_marker_fixture", "manifest.json"), "utf8")) as { markers: { placement?: string }[]; navigation_events?: { kind: string; ready_at_ms: number }[] };
     assert.equal(manifest.markers[0]?.placement, "before_next");
+    assert.deepEqual(manifest.navigation_events, [{
+      segment_id: "seg_1",
+      kind: "reload",
+      started_at_ms: 30,
+      committed_at_ms: 80,
+      ready_at_ms: 120,
+      from_url: "http://example.test/todos",
+      to_url: "http://example.test/todos",
+    }]);
+  } finally {
+    if (previousHome === undefined) delete process.env.REC_HOME;
+    else process.env.REC_HOME = previousHome;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("records a completed top-level reload as manifest navigation metadata", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rec-navigation-"));
+  const previousHome = process.env.REC_HOME;
+  process.env.REC_HOME = root;
+  try {
+    const store = await SessionStore.create({
+      format_version: 1,
+      id: "rec_navigation_fixture",
+      title: "Navigation fixture",
+      created_at: new Date().toISOString(),
+      recorder: { version: "test", rrweb: "test", record_canvas: false, record_cross_origin_iframes: false },
+      origins: ["http://example.test"],
+      masking: { mask_all_inputs: false, passwords: true },
+      segments: [],
+      tab_events: [],
+      navigation_events: [],
+      markers: [],
+      assets: [],
+    });
+    store.segment("seg_1", "http://example.test/todos", 0);
+    const frame = {};
+    const page = { mainFrame: () => frame } as unknown as Page;
+    const recorder = new Recorder();
+    const internals = recorder as unknown as {
+      store?: SessionStore;
+      startedAt: number;
+      pages: Map<Page, { id: string; page: Page; baseUrl: string }>;
+      pendingNavigations: Map<Page, { committedAtWallClockMs?: number }>;
+      observeNavigationRequest(page: Page, request: PlaywrightRequest): void;
+      commitNavigation(page: Page, url: string): void;
+      observeNavigationSnapshots(state: { id: string; page: Page }, events: unknown[]): void;
+    };
+    internals.store = store;
+    internals.startedAt = Date.now() - 100;
+    const state = { id: "seg_1", page, baseUrl: "http://example.test/todos" };
+    internals.pages.set(page, state);
+    const request = {
+      isNavigationRequest: () => true,
+      frame: () => frame,
+      url: () => "http://example.test/todos",
+    } as unknown as PlaywrightRequest;
+    internals.observeNavigationRequest(page, request);
+    internals.commitNavigation(page, "http://example.test/todos");
+    const committedAt = internals.pendingNavigations.get(page)?.committedAtWallClockMs;
+    if (!committedAt) throw new Error("Fixture navigation did not commit.");
+    internals.observeNavigationSnapshots(state, [{ type: 2, timestamp: committedAt + 20 }]);
+    assert.equal(store.manifest.navigation_events?.length, 1);
+    assert.equal(store.manifest.navigation_events?.[0]?.kind, "reload");
+    assert.equal(store.manifest.navigation_events?.[0]?.from_url, "http://example.test/todos");
+    assert.equal(store.manifest.navigation_events?.[0]?.to_url, "http://example.test/todos");
   } finally {
     if (previousHome === undefined) delete process.env.REC_HOME;
     else process.env.REC_HOME = previousHome;

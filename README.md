@@ -55,7 +55,8 @@ need to start Chrome, choose a port, or describe the recording workflow.
 
 ## What a replay includes
 
-- A single browser-session timeline, including recorded tabs and focus changes.
+- A single browser-session timeline, including recorded tabs, focus changes, and
+  page reload or navigation transitions.
 - Captured DOM events, markers, and static assets needed for local replay.
 - Idle time reduced by default, plus seeking, speed controls, and keyboard
   play/pause.
