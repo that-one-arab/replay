@@ -3,6 +3,9 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+// The CLI build runs immediately after core's build, including when this
+// workspace has not been linked by a package manager yet.
+import { exportPath, exportSession, importSession } from "../../core/dist/index.js";
 
 const endpoint = process.env.REC_DAEMON_URL ?? "http://127.0.0.1:7717";
 const [command, ...args] = process.argv.slice(2);
@@ -17,6 +20,8 @@ try {
     case "status": print(await api("GET", "/api/sessions/status")); break;
     case "list": await list(); break;
     case "open": await openReplay(args[0]); break;
+    case "export": await exportRecording(args); break;
+    case "import": await importRecording(args); break;
     case "doctor": await doctor(); break;
     default: usage(command ? `Unknown command: ${command}` : undefined);
   }
@@ -61,10 +66,11 @@ async function marker(values: string[]) {
 }
 
 async function stop(values: string[]) {
-  const result = await api("POST", "/api/sessions/stop", { outcome: option(values, "--outcome"), notes: option(values, "--notes") }) as { sessionId: string; path: string; rawDurationMs: number; activeDurationMs: number; markers: unknown[] };
+  const result = await api("POST", "/api/sessions/stop", { outcome: option(values, "--outcome"), notes: option(values, "--notes") }) as { sessionId: string; path: string; rawDurationMs: number; activeDurationMs: number; markers: unknown[]; portable_bundle?: string };
   console.log(`Stopped ${result.sessionId}`);
   console.log(`Active ${duration(result.activeDurationMs)} of ${duration(result.rawDurationMs)} wall clock`);
   console.log(`Bundle: ${result.path}`);
+  if (result.portable_bundle) console.log(`Portable: ${result.portable_bundle}`);
   console.log(`Replay: ${endpoint}/replay?id=${encodeURIComponent(result.sessionId)}`);
 }
 
@@ -78,6 +84,23 @@ async function openReplay(id: string | undefined) {
   if (!id) return usage("rec open requires a session id");
   await ensureDaemon();
   console.log(`${endpoint}/replay?id=${encodeURIComponent(id)}`);
+}
+
+async function exportRecording(values: string[]) {
+  const id = values.shift();
+  if (!id) return usage("rec export requires a session id");
+  const output = option(values, "--output") ?? exportPath(id);
+  const result = await exportSession(id, resolve(output));
+  console.log(`Exported ${result.sessionId} to ${result.path} (${result.fileCount} files, ${size(result.bytes)})`);
+}
+
+async function importRecording(values: string[]) {
+  const input = values.shift();
+  if (!input) return usage("rec import requires a .rec file");
+  const result = await importSession(resolve(input));
+  await ensureDaemon();
+  console.log(`Imported ${result.sessionId} (${result.fileCount} files)`);
+  console.log(`Replay: ${endpoint}/replay?id=${encodeURIComponent(result.sessionId)}`);
 }
 
 async function doctor() {
@@ -114,5 +137,6 @@ function option(values: string[], name: string) { const index = values.indexOf(n
 function options(values: string[], name: string) { const found: string[] = []; for (let value = option(values, name); value; value = option(values, name)) found.push(value); return found; }
 function flag(values: string[], name: string) { const index = values.indexOf(name); if (index < 0) return false; values.splice(index, 1); return true; }
 function duration(ms?: number) { if (!ms) return "0s"; const seconds = Math.round(ms / 1000); return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`; }
+function size(bytes: number) { return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`; }
 function print(value: unknown) { console.log(JSON.stringify(value, null, 2)); }
-function usage(message?: string): never { if (message) console.error(message); console.error("Usage: rec browser start|stop | attach --cdp <url> | start [--record-canvas] | marker <label> [--note <text>] [--placement after_previous|before_next] | stop | status | list | open <id> | doctor"); process.exit(2); }
+function usage(message?: string): never { if (message) console.error(message); console.error("Usage: rec browser start|stop | attach --cdp <url> | start [--record-canvas] | marker <label> [--note <text>] [--placement after_previous|before_next] | stop | status | list | open <id> | export <id> [--output <file.rec>] | import <file.rec> | doctor"); process.exit(2); }

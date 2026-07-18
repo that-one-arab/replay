@@ -1,8 +1,8 @@
 # rec
 
 Rec lets a coding agent record the browser session it uses to reproduce or verify
-a change, then hand back a local replay link. Recordings stay on the machine that
-created them; there is no hosted service or sharing layer yet.
+a change, then hand back a local replay link and a portable `.rec` artifact.
+There is no hosted service or sharing layer yet.
 
 ## Quick start: Codex
 
@@ -50,8 +50,9 @@ For a fix:
 > Fix the issue, verify it in the browser, and record a Rec replay of the verified result.
 
 Codex uses Playwright for every browser action and Rec for recording lifecycle
-and optional markers. It returns a local replay URL when finished. You do not
-need to start Chrome, choose a port, or describe the recording workflow.
+and optional markers. It returns a local replay URL and a portable artifact path
+when finished. You do not need to start Chrome, choose a port, or describe the
+recording workflow.
 
 ## What a replay includes
 
@@ -96,6 +97,22 @@ demo can also create single- or multi-tab recordings:
 pnpm demo:record
 pnpm demo:record:multi
 ```
+
+## Move a replay to another machine
+
+Stopping a recording automatically creates `~/.rec/exports/<session-id>.rec`.
+You can also export an earlier recording or import an artifact received from
+someone else:
+
+```sh
+pnpm rec export <session-id> --output ./bug-repro.rec
+pnpm rec import ./bug-repro.rec
+pnpm rec open <imported-session-id>
+```
+
+Import verifies the artifact’s contents before installing it and never overwrites
+an existing recording. The recipient needs Rec installed locally, but not access
+to the recording machine or browser.
 
 ## Documentation
 

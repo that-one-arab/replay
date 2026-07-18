@@ -20,7 +20,7 @@ capture protection, regression coverage, and fresh-agent acceptance checklist ar
 complete. Broader masking policy and production hardening remain intentionally
 deferred.
 
-## Phase 3 — portable recording artifacts
+## Phase 3 — portable recording artifacts (complete)
 
 Allow a completed session to be exported, imported, and replayed independently of
 the recording machine. Define a versioned bundle, integrity checks, and a static

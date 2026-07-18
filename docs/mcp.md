@@ -11,7 +11,7 @@ It never exposes the recorder beyond the local machine.
 | `recording_start` | Starts a recording on an attached browser, but only after a navigated in-scope page exists. |
 | `recording_marker` | Adds an optional labelled checkpoint to the active recording. |
 | `recording_status` | Returns browser ownership, endpoint, page readiness, and active capture counts. |
-| `recording_stop` | Stops capture and returns its ID, bundle details, and local replay URL only when event data was captured. |
+| `recording_stop` | Stops capture and returns its ID, local bundle details, a portable `.rec` artifact path, and local replay URL only when event data was captured. |
 
 ## Two-server workflow
 

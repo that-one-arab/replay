@@ -70,7 +70,7 @@ const tools: JsonObject[] = [
   },
   {
     name: "recording_stop",
-    description: "Stop the active recording and return its replay handoff.",
+    description: "Stop the active recording and return its local replay handoff plus a portable .rec artifact path.",
     inputSchema: {
       type: "object",
       properties: {
@@ -216,7 +216,8 @@ async function stopRecording(argumentsValue: JsonObject) {
     notes: optionalString(argumentsValue.notes),
   }));
   const sessionId = requiredString(result.sessionId, "Recorder session ID");
-  return { ...result, replayUrl: replayUrl(sessionId) };
+  const portableArtifactPath = optionalString(result.portable_bundle);
+  return { ...result, ...(portableArtifactPath ? { portableArtifactPath } : {}), replayUrl: replayUrl(sessionId) };
 }
 
 async function ensureDaemon(): Promise<JsonObject> {

@@ -29,7 +29,7 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
     if (request.method === "POST" && path === "/api/browser/attach") return json(response, { managed: false, cdp_endpoint: body?.cdp_endpoint, browser_state: "ready" });
     if (request.method === "POST" && path === "/api/sessions/start") return json(response, { sessionId: "rec_test" });
     if (request.method === "POST" && path === "/api/sessions/marker") return empty(response);
-    if (request.method === "POST" && path === "/api/sessions/stop") return json(response, { sessionId: "rec_test", path: "/tmp/rec_test", rawDurationMs: 1200, activeDurationMs: 900, markers: [] });
+    if (request.method === "POST" && path === "/api/sessions/stop") return json(response, { sessionId: "rec_test", path: "/tmp/rec_test", portable_bundle: "/tmp/rec_test.rec", rawDurationMs: 1200, activeDurationMs: 900, markers: [] });
     return json(response, { error: "not found" }, 404);
   });
   daemon.listen(0, "127.0.0.1");
@@ -54,6 +54,7 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
     await client.request("tools/call", { name: "recording_marker", arguments: { label: "Observed issue", placement: "before_next" } });
     const stopped = await client.request("tools/call", { name: "recording_stop", arguments: { outcome: "reproduced" } });
     assert.match(stopped.result.content[0].text, /replayUrl/);
+    assert.match(stopped.result.content[0].text, /portableArtifactPath/);
     const status = await client.request("tools/call", { name: "recording_status", arguments: {} });
     assert.match(status.result.content[0].text, /page_ready/);
     const external = await client.request("tools/call", { name: "recording_attach_browser", arguments: { cdpEndpoint: "http://127.0.0.1:9222" } });

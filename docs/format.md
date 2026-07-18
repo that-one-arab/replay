@@ -1,4 +1,4 @@
-# Recording bundle format (v1 spike)
+# Recording bundle format (v1)
 
 Each session is a self-contained directory:
 
@@ -30,8 +30,22 @@ source/destination URLs. The player uses this durable metadata for refresh and
 navigation transitions, so seeking does not mistake rrweb's historical document
 rebuild for a new refresh.
 
-The format is local only in this spike. Future server uploads should send the
-manifest and chunks unchanged. Markers have a timestamp, label, optional note, and
-optional `placement`: `after_previous` (the default) describes a confirmed result
-after the previous agent action, while `before_next` describes a precondition or
-chapter boundary. Placement is narrative ordered metadata, not a browser-action ID.
+Markers have a timestamp, label, optional note, and optional `placement`:
+`after_previous` (the default) describes a confirmed result after the previous
+agent action, while `before_next` describes a precondition or chapter boundary.
+Placement is narrative ordered metadata, not a browser-action ID.
+
+## Portable `.rec` artifact (v1)
+
+`rec export <session-id>` writes a gzip-compressed JSON artifact containing the
+session manifest and every referenced event chunk and captured asset. Each file
+has a SHA-256 checksum; import verifies the manifest checksum, file set, paths,
+sizes, and file checksums before making any local changes. These checks detect
+accidental corruption, not a signed or authenticated sender.
+
+`rec import <file.rec>` atomically installs a verified artifact into the local
+spool, refusing to overwrite an existing recording ID. The normal local viewer
+then replays it with `rec open <session-id>`. That means a recipient needs Rec,
+but does not need the original computer, browser, recording directory, or daemon
+state. The artifact carries the stored replay data; normal recording limitations
+for resources that were never captured still apply.

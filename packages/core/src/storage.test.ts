@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { Page, Request as PlaywrightRequest } from "playwright-core";
 import { Recorder } from "./recorder.js";
 import { calculateActiveDuration, SessionStore } from "./storage.js";
+import { exportSession, importSession } from "./bundle.js";
 import { rewriteAssetUrls } from "./recorder.js";
 
 test("caps inactive gaps while preserving active event spans", () => {
@@ -137,5 +138,38 @@ test("records a completed top-level reload as manifest navigation metadata", asy
     if (previousHome === undefined) delete process.env.REC_HOME;
     else process.env.REC_HOME = previousHome;
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("exports a complete recording and imports it with verified chunks and assets", async () => {
+  const source = await mkdtemp(join(tmpdir(), "rec-export-source-"));
+  const target = await mkdtemp(join(tmpdir(), "rec-export-target-"));
+  const artifact = join(source, "handoff.rec");
+  const previousHome = process.env.REC_HOME;
+  try {
+    process.env.REC_HOME = source;
+    const store = await SessionStore.create({
+      format_version: 1, id: "rec_portable_fixture", title: "Portable fixture", created_at: new Date().toISOString(),
+      recorder: { version: "test", rrweb: "test", record_canvas: false, record_cross_origin_iframes: false }, origins: ["http://example.test"], masking: { mask_all_inputs: false, passwords: true }, segments: [], tab_events: [], markers: [], assets: [],
+    });
+    store.segment("seg_1", "http://example.test", 0);
+    await store.append("seg_1", [{ type: 2, timestamp: 1 }, { type: 3, timestamp: 2 }], Date.now());
+    await store.addAsset("http://example.test/icon.svg", Buffer.from("asset"), "image/svg+xml");
+    await store.finalize();
+    const exported = await exportSession("rec_portable_fixture", artifact);
+    assert.equal(exported.fileCount, 3);
+    await assert.rejects(exportSession("rec_portable_fixture", artifact), /EEXIST/);
+    process.env.REC_HOME = target;
+    const imported = await importSession(artifact);
+    assert.equal(imported.sessionId, "rec_portable_fixture");
+    assert.equal(await readFile(join(target, "sessions", imported.sessionId, "assets", store.manifest.assets[0]!.id), "utf8"), "asset");
+    await assert.rejects(importSession(artifact), /already exists/);
+    await writeFile(artifact, Buffer.from("invalid"));
+    await assert.rejects(importSession(artifact), /Not a valid .rec bundle/);
+  } finally {
+    if (previousHome === undefined) delete process.env.REC_HOME;
+    else process.env.REC_HOME = previousHome;
+    await rm(source, { recursive: true, force: true });
+    await rm(target, { recursive: true, force: true });
   }
 });

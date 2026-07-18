@@ -4,7 +4,7 @@ import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
-import { Recorder, recHome, sessionsDir, sessionPath, type Outcome, type RecordingManifest, type StartOptions } from "@signit/rec-core";
+import { Recorder, exportSession, recHome, sessionsDir, sessionPath, type Outcome, type RecordingManifest, type StartOptions } from "@signit/rec-core";
 
 const port = Number(process.env.REC_PORT ?? 7717);
 const recorder = new Recorder();
@@ -29,7 +29,11 @@ async function route(request: IncomingMessage, response: ServerResponse) {
     await recorder.marker(String(body?.label ?? ""), optionalString(body?.note), markerPlacement(body?.placement));
     return reply(response, 204);
   }
-  if (request.method === "POST" && url.pathname === "/api/sessions/stop") return reply(response, 200, await recorder.stop(outcomeOf(body?.outcome), optionalString(body?.notes)));
+  if (request.method === "POST" && url.pathname === "/api/sessions/stop") {
+    const stopped = await recorder.stop(outcomeOf(body?.outcome), optionalString(body?.notes));
+    const portable = await exportSession(stopped.sessionId);
+    return reply(response, 200, { ...stopped, portable_bundle: portable.path, portable_bundle_bytes: portable.bytes });
+  }
   if (request.method === "GET" && url.pathname === "/api/sessions/status") return reply(response, 200, recorder.status());
   if (request.method === "GET" && url.pathname === "/api/sessions") return reply(response, 200, await listSessions());
   const replay = /^\/api\/sessions\/([^/]+)\/(manifest|events)$/.exec(url.pathname);
