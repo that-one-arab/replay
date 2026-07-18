@@ -27,8 +27,16 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
     await page.goto(`${origin}/replay?id=fixture`, { waitUntil: "networkidle" });
     assert.equal(await page.locator("[data-idle-range]").count(), 2);
     assert.equal(await page.locator("[data-navigation-event]").count(), 1);
-    assert.match(await page.locator("[data-navigation-event]").getAttribute("title") ?? "", /^Page refreshed — 0\.1s transition$/);
-    assert.equal(await page.locator("[data-idle-range]").first().getAttribute("title"), "Idle reduced from 6.2s to 2.0s");
+    assert.match(await page.locator("[data-navigation-event]").getAttribute("data-timeline-tooltip") ?? "", /^Page refreshed — 0\.1s transition$/);
+    const timelineBox = await page.locator("#scrubber").boundingBox();
+    if (!timelineBox) throw new Error("Timeline scrubber is not visible.");
+    const navigationLeft = Number((await page.locator("[data-navigation-event]").evaluate((element) => element.style.left)).replace("%", ""));
+    await page.mouse.move(timelineBox.x + timelineBox.width * navigationLeft / 100, timelineBox.y + timelineBox.height / 2);
+    await page.waitForTimeout(425);
+    assert.equal(await page.locator("#timeline-tooltip").evaluate((element) => element.classList.contains("is-visible")), false, "timeline descriptions wait before appearing");
+    await page.waitForTimeout(175);
+    assert.match(await page.locator("#timeline-tooltip").textContent() ?? "", /^Page refreshed — 0\.1s transition$/);
+    assert.equal(await page.locator("[data-idle-range]").first().getAttribute("data-timeline-tooltip"), "Idle time — reduced from 6.2s to 2.0s");
     assert.equal(await page.locator("#idle-summary").textContent(), "2 gaps");
     assert.equal(await page.locator("#skip").getAttribute("aria-pressed"), "true");
     assert.match((await page.locator("#skip").textContent()) ?? "", /Cut idle/);

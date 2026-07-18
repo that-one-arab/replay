@@ -23,6 +23,7 @@ const CURSOR_APPROACH_MS = 420;
 const REFRESH_INDICATOR_MS = 1_100;
 const MIN_REFRESH_INDICATOR_MS = 160;
 const MAX_REFRESH_INDICATOR_MS = 1_500;
+const TIMELINE_TOOLTIP_DELAY_MS = 550;
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 const id = new URLSearchParams(location.search).get("id");
@@ -47,6 +48,7 @@ async function load(recordingId: string) {
       activePlayback?.abort();
       renderShell(projection.manifest, cuttingIdle, playbackSpeed);
       prepareTimeline(projection.manifest.markers, projection.manifest.navigation_events ?? [], projection.duration, projection.activities, projection.playbackEnd, projection.idleRanges);
+      installTimelineTooltips();
       await replay(projection.manifest, projection.eventSets, projection.duration, projection.manifest.segments[0], projection.toPlayback(rawTime), autoplay, (enabled, requestedTime, shouldAutoplay) => {
         cuttingIdle = enabled;
         void present(projection.toRaw(requestedTime), shouldAutoplay).catch(renderError);
@@ -63,7 +65,7 @@ function renderShell(manifest: Manifest, cuttingIdle: boolean, playbackSpeed: nu
   const speedControls = [0.25, 0.5, DEFAULT_PLAYBACK_SPEED, 2, 4, 8]
     .map((speed) => `<button data-speed="${speed}"${speed === playbackSpeed ? " class=\"selected\"" : ""}>${speed}×</button>`)
     .join("");
-  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption"><span class="caption-kicker">SESSION REPLAY</span><strong>Press play to begin</strong><p>The timeline follows the full browser recording.</p></div><section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div><button class="skip-button${cuttingIdle ? " active" : ""}" id="skip" aria-label="${cuttingIdle ? "Cut idle time" : "Keep idle time"}" aria-pressed="${cuttingIdle}"><span>✂</span> Cut idle <b id="idle-summary"></b></button></div><div class="timeline-wrap"><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section></main>`;
+  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption"><span class="caption-kicker">SESSION REPLAY</span><strong>Press play to begin</strong><p>The timeline follows the full browser recording.</p></div><section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div><button class="skip-button${cuttingIdle ? " active" : ""}" id="skip" aria-label="${cuttingIdle ? "Cut idle time" : "Keep idle time"}" aria-pressed="${cuttingIdle}"><span>✂</span> Cut idle <b id="idle-summary"></b></button></div><div class="timeline-wrap"><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section><div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
 }
 
 async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>, duration: number, segment: Segment | undefined, requestedSessionTime: number, autoplay = false, onCutIdleChange?: (enabled: boolean, requestedTime: number, autoplay: boolean) => void, playbackSpeed = DEFAULT_PLAYBACK_SPEED, onPlaybackSpeedChange?: (speed: number) => void) {
@@ -444,8 +446,11 @@ function prepareTimeline(markers: Marker[], navigationEvents: NavigationEvent[],
   const buckets = Array.from({ length: 72 }, () => 0);
   interactions.forEach((time) => { buckets[Math.min(buckets.length - 1, Math.floor(time / duration * buckets.length))] += 1; });
   const max = Math.max(1, ...buckets);
-  density.innerHTML = buckets.map((count) => `<i style="--level:${Math.max(.08, count / max)}"></i>`).join("");
-  document.querySelector<HTMLElement>("#idle-ranges")!.innerHTML = projectedIdle.map((range) => `<i data-idle-range title="${nearlyEqual(range.originalDuration, range.end - range.start) ? `Idle for ${formatDuration(range.originalDuration)}` : `Idle reduced from ${formatDuration(range.originalDuration)} to ${formatDuration(range.end - range.start)}`}" style="left:${clamp(range.start / duration * 100, 0, 100)}%;width:${clamp((range.end - range.start) / duration * 100, 0, 100)}%"></i>`).join("");
+  density.innerHTML = buckets.map((count) => `<i data-timeline-tooltip="Recorded activity — ${count ? `${count} event${count === 1 ? "" : "s"}` : "no events"}" style="--level:${Math.max(.08, count / max)}"></i>`).join("");
+  document.querySelector<HTMLElement>("#idle-ranges")!.innerHTML = projectedIdle.map((range) => {
+    const label = nearlyEqual(range.originalDuration, range.end - range.start) ? `Idle time — ${formatDuration(range.originalDuration)}` : `Idle time — reduced from ${formatDuration(range.originalDuration)} to ${formatDuration(range.end - range.start)}`;
+    return `<i data-idle-range data-timeline-start="${range.start}" data-timeline-end="${range.end}" data-timeline-tooltip="${escape(label)}" style="left:${clamp(range.start / duration * 100, 0, 100)}%;width:${clamp((range.end - range.start) / duration * 100, 0, 100)}%"></i>`;
+  }).join("");
   document.querySelector<HTMLElement>("#navigation-events")!.innerHTML = navigationEvents.map((event) => {
     const start = clamp(event.started_at_ms / duration * 100, 0, 100);
     const presentationEnd = Math.min(duration, event.ready_at_ms + RELOAD_CONTEXT_MS);
@@ -453,10 +458,53 @@ function prepareTimeline(markers: Marker[], navigationEvents: NavigationEvent[],
     const action = event.kind === "reload" ? "Page refreshed" : "Page navigated";
     const exactDuration = Math.max(0, event.ready_at_ms - event.started_at_ms);
     const label = `${action} — ${formatDuration(exactDuration)} transition`;
-    return `<i data-navigation-event title="${label}" style="left:${start}%;width:${Math.max(.45, end - start)}%"></i>`;
+    return `<i data-navigation-event data-timeline-start="${event.started_at_ms}" data-timeline-end="${presentationEnd}" data-timeline-tooltip="${escape(label)}" style="left:${start}%;width:${Math.max(.45, end - start)}%"></i>`;
   }).join("");
   document.querySelector<HTMLElement>("#idle-summary")!.textContent = projectedIdle.length ? `${projectedIdle.length} gap${projectedIdle.length === 1 ? "" : "s"}` : "";
-  document.querySelector<HTMLElement>("#timeline-markers")!.innerHTML = markers.map((marker) => `<button data-marker="${marker.t_ms}" title="${escape(marker.label)}" style="left:${clamp(marker.t_ms / duration * 100, 1, 99)}%"><span></span></button>`).join("");
+  document.querySelector<HTMLElement>("#timeline-markers")!.innerHTML = markers.map((marker) => `<button data-marker="${marker.t_ms}" data-timeline-tooltip="${escape(`Marker — ${marker.label}${marker.note ? `: ${marker.note}` : ""}`)}" style="left:${clamp(marker.t_ms / duration * 100, 1, 99)}%"><span></span></button>`).join("");
+}
+
+function installTimelineTooltips() {
+  const timeline = document.querySelector<HTMLElement>(".timeline-wrap");
+  const tooltip = document.querySelector<HTMLElement>("#timeline-tooltip");
+  if (!timeline || !tooltip) return;
+  let timer: number | undefined;
+  let pendingLabel = "";
+  const hide = () => {
+    if (timer) window.clearTimeout(timer);
+    timer = undefined;
+    pendingLabel = "";
+    tooltip.classList.remove("is-visible");
+    tooltip.setAttribute("aria-hidden", "true");
+  };
+  const move = (event: PointerEvent) => {
+    const target = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-timeline-tooltip]") : null;
+    const directLabel = target?.dataset.timelineTooltip;
+    const bounds = timeline.getBoundingClientRect();
+    const time = clamp((event.clientX - bounds.left) / bounds.width, 0, 1);
+    const ranged = Array.from(timeline.querySelectorAll<HTMLElement>("[data-navigation-event], [data-idle-range]")).find((element) => {
+      const start = Number(element.dataset.timelineStart);
+      const end = Number(element.dataset.timelineEnd);
+      return time >= start / Number(document.querySelector<HTMLInputElement>("#scrubber")!.max) && time <= end / Number(document.querySelector<HTMLInputElement>("#scrubber")!.max);
+    });
+    const label = directLabel ?? ranged?.dataset.timelineTooltip ?? timeline.querySelectorAll<HTMLElement>("#density i")[Math.min(71, Math.floor(time * 72))]?.dataset.timelineTooltip;
+    if (!label) return hide();
+    tooltip.style.left = `${event.clientX}px`;
+    tooltip.style.top = `${event.clientY - 12}px`;
+    if (label === pendingLabel || (tooltip.classList.contains("is-visible") && tooltip.textContent === label)) return;
+    if (timer) window.clearTimeout(timer);
+    pendingLabel = label;
+    tooltip.classList.remove("is-visible");
+    timer = window.setTimeout(() => {
+      tooltip.textContent = label;
+      tooltip.classList.add("is-visible");
+      tooltip.setAttribute("aria-hidden", "false");
+      timer = undefined;
+    }, TIMELINE_TOOLTIP_DELAY_MS);
+  };
+  timeline.addEventListener("pointermove", move);
+  timeline.addEventListener("pointerleave", hide);
+  timeline.addEventListener("pointerdown", hide);
 }
 
 function syncNarration(markers: Marker[], time: number) {
