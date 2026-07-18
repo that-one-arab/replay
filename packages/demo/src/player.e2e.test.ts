@@ -38,7 +38,7 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
     await page.waitForTimeout(425);
     assert.equal(await page.locator("#timeline-tooltip").evaluate((element) => element.classList.contains("is-visible")), false, "timeline descriptions wait before appearing");
     await page.waitForTimeout(175);
-    assert.match(await page.locator("#timeline-tooltip").textContent() ?? "", /^Marker — /, "a marker takes hover priority over lower-level timeline context");
+    assert.equal(await page.locator("#timeline-tooltip").textContent(), "Action confirmed", "a marker takes hover priority and shows only its title");
     assert.equal(await page.locator("[data-idle-range]").first().getAttribute("data-timeline-tooltip"), "Idle time — reduced from 6.2s to 2.0s");
     assert.equal(await page.locator("#idle-summary").textContent(), "2 gaps");
     assert.equal(await page.locator("#skip").getAttribute("aria-pressed"), "true");
