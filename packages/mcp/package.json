@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "bin": { "rec-mcp": "./dist/main.js" },
+  "dependencies": {
+    "@signit/rec-core": "workspace:*"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",

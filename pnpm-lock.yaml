@@ -38,7 +38,11 @@ importers:
         specifier: ^1.55.0
         version: 1.61.1
 
-  packages/mcp: {}
+  packages/mcp:
+    dependencies:
+      '@signit/rec-core':
+        specifier: workspace:*
+        version: link:../core
 
   packages/player:
     dependencies:

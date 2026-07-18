@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
+import { exportSession } from "@signit/rec-core";
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type JsonObject = { [key: string]: Json };
@@ -228,7 +229,9 @@ async function stopRecording(argumentsValue: JsonObject) {
     notes: optionalString(argumentsValue.notes),
   }));
   const sessionId = requiredString(result.sessionId, "Recorder session ID");
-  const portableArtifactPath = optionalString(result.portable_bundle);
+  // Older already-running daemons predate portable_bundle. Export in the MCP as
+  // a compatibility fallback so an updated MCP can still publish their session.
+  const portableArtifactPath = optionalString(result.portable_bundle) ?? (await exportSession(sessionId)).path;
   let shareUrl: string | undefined;
   let shareError: string | undefined;
   const shareEndpoint = configuredShareEndpoint();
