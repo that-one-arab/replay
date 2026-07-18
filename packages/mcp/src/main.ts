@@ -71,7 +71,7 @@ const tools: JsonObject[] = [
   },
   {
     name: "recording_stop",
-    description: "Stop the active recording and return its local replay handoff plus a portable .rec artifact path.",
+    description: "Stop the active recording and return its local replay handoff. When REC_SHARE_URL is configured, automatically publish its portable artifact and return the share URL.",
     inputSchema: {
       type: "object",
       properties: {
@@ -229,20 +229,38 @@ async function stopRecording(argumentsValue: JsonObject) {
   }));
   const sessionId = requiredString(result.sessionId, "Recorder session ID");
   const portableArtifactPath = optionalString(result.portable_bundle);
-  return { ...result, ...(portableArtifactPath ? { portableArtifactPath } : {}), replayUrl: replayUrl(sessionId) };
+  let shareUrl: string | undefined;
+  let shareError: string | undefined;
+  const shareEndpoint = configuredShareEndpoint();
+  if (portableArtifactPath && shareEndpoint) {
+    try { shareUrl = await uploadArtifact(sessionId, portableArtifactPath, shareEndpoint); }
+    catch (error) { shareError = messageOf(error); }
+  }
+  return {
+    ...result,
+    ...(portableArtifactPath ? { portableArtifactPath } : {}),
+    ...(shareUrl ? { shareUrl } : {}),
+    ...(shareError ? { shareError } : {}),
+    replayUrl: replayUrl(sessionId),
+  };
 }
 
 async function shareRecording(argumentsValue: JsonObject) {
   const sessionId = requiredString(argumentsValue.sessionId, "Recorder session ID");
-  const shareEndpoint = process.env.REC_SHARE_URL?.replace(/\/$/, "");
+  const shareEndpoint = configuredShareEndpoint();
   if (!shareEndpoint) throw new Error("REC_SHARE_URL is not configured for this Rec MCP server.");
   const home = process.env.REC_HOME ?? join(process.env.HOME ?? process.cwd(), ".rec");
   const artifact = join(home, "exports", `${sessionId}.rec`);
   if (!existsSync(artifact)) throw new Error(`Portable artifact ${artifact} was not found. Call recording_stop before recording_share.`);
+  return { sessionId, shareUrl: await uploadArtifact(sessionId, artifact, shareEndpoint) };
+}
+
+function configuredShareEndpoint() { return process.env.REC_SHARE_URL?.replace(/\/$/, "") || undefined; }
+async function uploadArtifact(sessionId: string, artifact: string, shareEndpoint: string) {
   const response = await fetch(`${shareEndpoint}/v1/recordings`, { method: "POST", headers: { "content-type": "application/vnd.rec" }, body: await readFile(artifact) });
   const result = object(await response.json().catch(() => ({})));
   if (!response.ok) throw new Error(optionalString(result.error) ?? response.statusText);
-  return { sessionId, shareUrl: requiredString(result.shareUrl, "Share URL") };
+  return requiredString(result.shareUrl, `Share URL for ${sessionId}`);
 }
 
 async function ensureDaemon(): Promise<JsonObject> {

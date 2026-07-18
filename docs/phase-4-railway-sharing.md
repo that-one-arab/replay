@@ -58,14 +58,12 @@ pnpm rec share rec_12345678
 
 The command uses the automatic artifact from `recording_stop`, exporting it only
 if it is absent. For a coding agent, configure the same `REC_SHARE_URL` in the
-environment that starts Rec MCP, then call:
+environment that starts Rec MCP. Its normal `recording_stop` call then publishes
+automatically and returns `shareUrl`; no additional share tool call is needed.
 
-```text
-recording_share { "sessionId": "rec_12345678" }
-```
-
-Publishing is deliberately separate from `recording_stop`; stopping never uploads
-a recording merely because a share endpoint is configured.
+`recording_share { "sessionId": "rec_12345678" }` remains available to retry an
+older completed recording. If automatic upload fails, `recording_stop` still
+returns the local artifact and `shareError` rather than losing the recording.
 
 ## Manual acceptance check
 

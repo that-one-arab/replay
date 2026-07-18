@@ -11,7 +11,7 @@ It never exposes the recorder beyond the local machine.
 | `recording_start` | Starts a recording on an attached browser, but only after a navigated in-scope page exists. |
 | `recording_marker` | Adds an optional labelled checkpoint to the active recording. |
 | `recording_status` | Returns browser ownership, endpoint, page readiness, and active capture counts. |
-| `recording_stop` | Stops capture and returns its ID, local bundle details, a portable `.rec` artifact path, and local replay URL only when event data was captured. |
+| `recording_stop` | Stops capture and returns its ID, local bundle details, portable artifact path, and replay URL. With `REC_SHARE_URL`, it also publishes automatically and returns `shareUrl`; `shareError` preserves the local handoff if upload fails. |
 | `recording_share` | Explicitly uploads a stopped recording to `REC_SHARE_URL` and returns its public bearer link. |
 
 ## Two-server workflow
@@ -25,7 +25,7 @@ and record later without mentioning a browser, port, or recording workflow.
 2. Call `recording_start` when a recording is requested.
 3. Use Playwright MCP for every click, fill, wait, and tab action.
 4. Add `recording_marker` only for meaningful, confirmed checkpoints.
-5. Call `recording_stop` and use its `replayUrl`.
+5. Call `recording_stop` and use its `shareUrl` when configured, otherwise its local `replayUrl`.
 
 Do not drive Web Preview, Arc, Codex's in-app browser, or an arbitrary normal Chrome
 session while expecting Rec to capture it. For a standalone MCP client, configure

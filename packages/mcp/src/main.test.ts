@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:http";
 import { once } from "node:events";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +13,9 @@ import { fileURLToPath } from "node:url";
 test("MCP tools make browser setup explicit and preserve ordered marker metadata", async () => {
   const calls: { method: string; path: string; body?: Record<string, unknown> }[] = [];
   let attached = false;
+  const artifactRoot = await mkdtemp(join(tmpdir(), "rec-mcp-share-"));
+  const artifact = join(artifactRoot, "rec_test.rec");
+  await writeFile(artifact, "portable fixture");
   const daemon = createServer(async (request, response) => {
     const path = request.url ?? "/";
     let raw = "";
@@ -29,14 +35,15 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
     if (request.method === "POST" && path === "/api/browser/attach") return json(response, { managed: false, cdp_endpoint: body?.cdp_endpoint, browser_state: "ready" });
     if (request.method === "POST" && path === "/api/sessions/start") return json(response, { sessionId: "rec_test" });
     if (request.method === "POST" && path === "/api/sessions/marker") return empty(response);
-    if (request.method === "POST" && path === "/api/sessions/stop") return json(response, { sessionId: "rec_test", path: "/tmp/rec_test", portable_bundle: "/tmp/rec_test.rec", rawDurationMs: 1200, activeDurationMs: 900, markers: [] });
+    if (request.method === "POST" && path === "/api/sessions/stop") return json(response, { sessionId: "rec_test", path: "/tmp/rec_test", portable_bundle: artifact, rawDurationMs: 1200, activeDurationMs: 900, markers: [] });
+    if (request.method === "POST" && path === "/v1/recordings") return json(response, { shareUrl: "https://share.fixture/r/abc123" }, 201);
     return json(response, { error: "not found" }, 404);
   });
   daemon.listen(0, "127.0.0.1");
   await once(daemon, "listening");
   const address = daemon.address();
   if (!address || typeof address === "string") throw new Error("Fixture daemon did not expose a TCP port.");
-  const server = spawn(process.execPath, [resolve(dirname(fileURLToPath(import.meta.url)), "main.js")], { env: { ...process.env, REC_DAEMON_URL: `http://127.0.0.1:${address.port}` } });
+  const server = spawn(process.execPath, [resolve(dirname(fileURLToPath(import.meta.url)), "main.js")], { env: { ...process.env, REC_DAEMON_URL: `http://127.0.0.1:${address.port}`, REC_SHARE_URL: `http://127.0.0.1:${address.port}` } });
   try {
     const client = new McpClient(server);
     const initialized = await client.request("initialize", { protocolVersion: "2025-03-26" });
@@ -55,6 +62,7 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
     const stopped = await client.request("tools/call", { name: "recording_stop", arguments: { outcome: "reproduced" } });
     assert.match(stopped.result.content[0].text, /replayUrl/);
     assert.match(stopped.result.content[0].text, /portableArtifactPath/);
+    assert.match(stopped.result.content[0].text, /shareUrl/);
     const status = await client.request("tools/call", { name: "recording_status", arguments: {} });
     assert.match(status.result.content[0].text, /page_ready/);
     const external = await client.request("tools/call", { name: "recording_attach_browser", arguments: { cdpEndpoint: "http://127.0.0.1:9222" } });
@@ -66,6 +74,7 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
     server.kill();
     daemon.close();
     await once(daemon, "close");
+    await rm(artifactRoot, { recursive: true, force: true });
   }
 });
 

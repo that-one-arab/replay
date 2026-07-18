@@ -29,6 +29,7 @@ Create or update `<target-project>/.codex/config.toml`. Replace
 [mcp_servers.rec]
 command = "node"
 args = ["/absolute/path/to/rec/packages/mcp/dist/main.js"]
+env = { REC_SHARE_URL = "https://<your-service-domain>" } # Optional: publish on recording_stop
 
 [mcp_servers.playwright]
 command = "node"
@@ -51,8 +52,9 @@ For a fix:
 
 Codex uses Playwright for every browser action and Rec for recording lifecycle
 and optional markers. It returns a local replay URL and a portable artifact path
-when finished. You do not need to start Chrome, choose a port, or describe the
-recording workflow.
+when finished. With `REC_SHARE_URL` configured, `recording_stop` also publishes
+the artifact automatically and returns a share URL. You do not need to start
+Chrome, choose a port, or describe the recording workflow.
 
 ## What a replay includes
 
