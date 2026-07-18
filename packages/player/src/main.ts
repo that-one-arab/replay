@@ -104,6 +104,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   let refreshTimer: number | undefined;
   let frameKeyboardTimer: number | undefined;
   let visibleNavigation: NavigationEvent | undefined;
+  let refreshPinned = false;
   const navigationEvents = (manifest.navigation_events ?? []).filter((event) => event.segment_id === segment.id).sort((left, right) => left.started_at_ms - right.started_at_ms);
   let lastNavigationCheck = requestedSessionTime;
   const scrubber = document.querySelector<HTMLInputElement>("#scrubber")!;
@@ -150,25 +151,46 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     document.querySelector<HTMLButtonElement>("#play")!.classList.toggle("is-playing", value);
     document.querySelector<HTMLElement>("#stage-status")!.textContent = value ? "Playing" : "Paused";
   };
-  const showRefresh = (navigation: NavigationEvent) => {
+  const hideRefresh = () => {
+    if (refreshTimer) window.clearTimeout(refreshTimer);
+    refreshTimer = undefined;
+    visibleNavigation = undefined;
+    refreshPinned = false;
+    document.querySelector<HTMLElement>("#refresh-indicator")!.classList.remove("is-visible");
+  };
+  const showRefresh = (navigation: NavigationEvent, pinned = false) => {
     const indicator = document.querySelector<HTMLElement>("#refresh-indicator")!;
     visibleNavigation = navigation;
+    refreshPinned = pinned;
     document.querySelector<HTMLElement>("#refresh-label")!.textContent = navigation.kind === "reload" ? "Page is refreshing" : "Page is navigating";
     indicator.classList.add("is-visible");
     if (refreshTimer) window.clearTimeout(refreshTimer);
+    if (pinned) {
+      refreshTimer = undefined;
+      return;
+    }
     const duration = clamp(
       REFRESH_INDICATOR_MS * DEFAULT_PLAYBACK_SPEED / selectedPlaybackSpeed,
       MIN_REFRESH_INDICATOR_MS,
       MAX_REFRESH_INDICATOR_MS,
     );
     refreshTimer = window.setTimeout(() => {
-      indicator.classList.remove("is-visible");
-      visibleNavigation = undefined;
+      hideRefresh();
     }, duration);
   };
+  const activeNavigationAt = (time: number) => navigationEvents.find((event) => event.started_at_ms <= time && time <= event.ready_at_ms);
+  const syncNavigationAt = (time: number, pinned: boolean) => {
+    const active = activeNavigationAt(time);
+    if (active) showRefresh(active, pinned);
+    else if (visibleNavigation) hideRefresh();
+  };
   const announceNavigations = (time: number) => {
-    const crossed = navigationEvents.filter((event) => event.started_at_ms > lastNavigationCheck && event.started_at_ms <= time);
-    for (const navigation of crossed) showRefresh(navigation);
+    const active = activeNavigationAt(time);
+    if (active) showRefresh(active);
+    else {
+      const crossed = navigationEvents.filter((event) => event.started_at_ms > lastNavigationCheck && event.started_at_ms <= time);
+      for (const navigation of crossed) showRefresh(navigation);
+    }
     lastNavigationCheck = Math.max(lastNavigationCheck, time);
   };
   const updateProgress = () => {
@@ -190,7 +212,10 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   };
   replayer.on("start", () => { setPlaying(true); requestAnimationFrame(updateProgress); });
   replayer.on("resume", () => { setPlaying(true); requestAnimationFrame(updateProgress); });
-  replayer.on("pause", () => setPlaying(false));
+  replayer.on("pause", () => {
+    setPlaying(false);
+    syncNavigationAt(currentSessionTime, true);
+  });
   replayer.on("finish", () => {
     if (nextFocus) void bridgeToNewTab(nextFocus);
     else { setPlaying(false); updateTimelinePosition(tabEnd); }
@@ -214,7 +239,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     selectedPlaybackSpeed = speed;
     replayer.setConfig({ speed });
     onPlaybackSpeedChange?.(speed);
-    if (visibleNavigation) showRefresh(visibleNavigation);
+    if (visibleNavigation) showRefresh(visibleNavigation, refreshPinned);
   });
   document.querySelectorAll<HTMLButtonElement>("[data-marker]").forEach((button) => button.onclick = () => {
     const time = Number(button.dataset.marker);
@@ -238,6 +263,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     beginScrub();
     const time = Number(scrubber.value);
     updateTimelinePosition(time);
+    syncNavigationAt(time, true);
     syncNarration(manifest.markers, time);
   }, { signal: lifetime.signal });
   scrubber.addEventListener("change", () => {
@@ -287,6 +313,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     // newly requested point on the timeline.
     document.querySelector<HTMLElement>("#refresh-indicator")?.classList.remove("is-visible");
     visibleNavigation = undefined;
+    refreshPinned = false;
     if (frameKeyboardTimer) window.clearTimeout(frameKeyboardTimer);
     replayDocumentKeyboardHandler = undefined;
     frameWindows.forEach((frameWindow) => frameWindow.removeEventListener("keydown", onPlaybackKey, true));
@@ -342,6 +369,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   else {
     replayer.pause(localTime);
     updateTimelinePosition(tabStart + localTime);
+    syncNavigationAt(tabStart + localTime, true);
   }
 }
 

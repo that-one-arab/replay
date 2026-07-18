@@ -97,6 +97,39 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
   }
 });
 
+test("paused seeks show a recorded navigation only inside its transition interval", { skip: !chrome }, async () => {
+  const server = createFixtureServer();
+  await new Promise<void>((resolveListen, reject) => server.listen(0, "127.0.0.1", () => resolveListen()).on("error", reject));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Fixture server did not expose a TCP port.");
+  let browser: Browser | undefined;
+  try {
+    browser = await chromium.launch({ headless: true, executablePath: chrome });
+    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    await page.goto(`http://127.0.0.1:${address.port}/replay?id=navigation-window`, { waitUntil: "networkidle" });
+    await page.locator("#skip").click();
+    await page.waitForFunction(() => document.querySelector("#skip")?.getAttribute("aria-pressed") === "false");
+    const seek = async (time: number) => page.locator("#scrubber").evaluate((node, value) => {
+      const scrubber = node as HTMLInputElement;
+      scrubber.value = String(value);
+      scrubber.dispatchEvent(new Event("input", { bubbles: true }));
+      scrubber.dispatchEvent(new Event("change", { bubbles: true }));
+    }, time);
+
+    await seek(4_500);
+    await waitForRefresh(page, 1_000);
+    assert.equal(await playbackState(page), "Paused");
+    assert.equal(await page.locator("#refresh-label").textContent(), "Page is refreshing");
+
+    await seek(7_000);
+    await page.waitForTimeout(75);
+    assert.equal(await page.locator("#refresh-indicator").evaluate((element) => element.classList.contains("is-visible")), false, "seeking outside the recorded navigation interval clears the indicator");
+  } finally {
+    await browser?.close();
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+  }
+});
+
 test("browser replay creates and focuses a new tab at its recorded time", { skip: !chrome }, async () => {
   const server = createFixtureServer();
   await new Promise<void>((resolveListen, reject) => server.listen(0, "127.0.0.1", () => resolveListen()).on("error", reject));
@@ -204,9 +237,11 @@ function createFixtureServer() {
   return createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://fixture");
     if (url.pathname === "/api/sessions/fixture/manifest") return json(response, { id: "fixture", title: "Replay control fixture", raw_duration_ms: 16_000, markers: [], navigation_events: [{ segment_id: "seg_1", kind: "reload", started_at_ms: 7_950, committed_at_ms: 8_000, ready_at_ms: 8_010, from_url: "http://fixture/", to_url: "http://fixture/" }], segments: [{ id: "seg_1", page_url: "http://fixture/", clock_offset_ms: 0 }] });
+    if (url.pathname === "/api/sessions/navigation-window/manifest") return json(response, { id: "navigation-window", title: "Navigation interval fixture", raw_duration_ms: 16_000, markers: [], navigation_events: [{ segment_id: "seg_1", kind: "reload", started_at_ms: 3_000, committed_at_ms: 3_100, ready_at_ms: 6_000, from_url: "http://fixture/", to_url: "http://fixture/" }], segments: [{ id: "seg_1", page_url: "http://fixture/", clock_offset_ms: 0 }] });
     if (url.pathname === "/api/sessions/multi-page/manifest") return json(response, { id: "multi-page", title: "Multi-page fixture", raw_duration_ms: 6_500, markers: [], tab_events: [{ type: "opened", segment_id: "seg_1", t_ms: 0 }, { type: "focused", segment_id: "seg_1", t_ms: 0 }, { type: "opened", segment_id: "seg_2", t_ms: 3_000 }, { type: "focused", segment_id: "seg_2", t_ms: 3_300 }], segments: [{ id: "seg_1", page_url: "http://fixture/onboarding", clock_offset_ms: 0 }, { id: "seg_2", page_url: "http://fixture/invite-preview", clock_offset_ms: 3_000 }] });
     if (url.pathname === "/api/sessions/focus-cycle/manifest") return json(response, { id: "focus-cycle", title: "Focus lifecycle fixture", raw_duration_ms: 6_500, markers: [], tab_events: [{ type: "opened", segment_id: "seg_1", t_ms: 0 }, { type: "focused", segment_id: "seg_1", t_ms: 0 }, { type: "opened", segment_id: "seg_2", t_ms: 3_000 }, { type: "focused", segment_id: "seg_2", t_ms: 3_300 }, { type: "focused", segment_id: "seg_1", t_ms: 5_000 }, { type: "closed", segment_id: "seg_2", t_ms: 5_600 }], segments: [{ id: "seg_1", page_url: "http://fixture/onboarding", clock_offset_ms: 0 }, { id: "seg_2", page_url: "http://fixture/invite-preview", clock_offset_ms: 3_000 }] });
     if (url.pathname === "/api/sessions/fixture/events") return json(response, fixtureEvents);
+    if (url.pathname === "/api/sessions/navigation-window/events") return json(response, fixtureEvents);
     if (url.pathname === "/api/sessions/multi-page/events") return json(response, url.searchParams.get("segment") === "seg_2" ? inviteEvents : onboardingEvents);
     if (url.pathname === "/api/sessions/focus-cycle/events") return json(response, url.searchParams.get("segment") === "seg_2" ? focusCycleInviteEvents : focusCycleOnboardingEvents);
     const path = url.pathname === "/replay" ? resolve(playerDist, "index.html") : resolve(playerDist, `.${url.pathname}`);
