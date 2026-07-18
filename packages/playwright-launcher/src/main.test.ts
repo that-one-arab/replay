@@ -16,6 +16,8 @@ test("launcher ensures Rec's browser before transparently starting Playwright MC
     const body = raw ? JSON.parse(raw) as Record<string, unknown> : undefined;
     calls.push({ path: request.url ?? "/", body });
     if (request.method === "GET" && request.url === "/health") return json(response, { ok: true });
+    if (request.method === "POST" && request.url === "/api/leases/acquire") return json(response, { lease_id: "launcher-lease" }, 201);
+    if (request.method === "POST" && request.url === "/api/leases/release") return json(response, { released: true });
     if (request.method === "POST" && request.url === "/api/browser/ensure") { markEnsured(); return json(response, { cdp_endpoint: "http://127.0.0.1:9333" }); }
     return json(response, { error: "not found" }, 404);
   });
@@ -41,7 +43,7 @@ test("launcher ensures Rec's browser before transparently starting Playwright MC
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Launcher did not forward stdio to Playwright MCP.")), 2_000)),
     ]);
     assert.equal(result[0].toString(), "playwright-mcp-stdio\n");
-    assert.deepEqual(calls.map((call) => call.path), ["/health", "/api/browser/ensure"]);
+    assert.deepEqual(calls.map((call) => call.path), ["/health", "/api/leases/acquire", "/api/browser/ensure"]);
   } finally {
     launcher.kill();
     daemon.close();

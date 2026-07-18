@@ -21,6 +21,7 @@ void main().catch((error: unknown) => {
  */
 async function main() {
   await ensureDaemon();
+  const daemonLease = await acquireDaemonLease();
   const ensured = object(await api("POST", "/api/browser/ensure", { executable: process.env.REC_BROWSER_EXECUTABLE }, false));
   if (ensured.browser_state === "restart_required") throw new Error("Rec browser settings changed. Stop the managed browser with `rec browser stop`, then start this task again.");
   const cdpEndpoint = requiredString(ensured.cdp_endpoint, "Rec browser CDP endpoint");
@@ -32,7 +33,10 @@ async function main() {
     process.stderr.write(`rec-playwright-launcher: could not start Playwright MCP: ${messageOf(error)}\n`);
     process.exitCode = 1;
   });
-  child.once("exit", (code) => { process.exitCode = code ?? 1; });
+  child.once("exit", async (code) => {
+    await releaseDaemonLease(daemonLease);
+    process.exitCode = code ?? 1;
+  });
 }
 
 function playwrightArgs() {
@@ -58,6 +62,47 @@ async function ensureDaemon(): Promise<JsonObject> {
     try { return object(await api("GET", "/health", undefined, false)); } catch (error) { lastError = error; }
   }
   throw new Error(`Rec daemon did not start: ${messageOf(lastError)}`);
+}
+
+type DaemonLease = { id: string; renewTimer: NodeJS.Timeout };
+
+async function acquireDaemonLease(): Promise<DaemonLease | undefined> {
+  try {
+    const response = await fetch(`${endpoint}/api/leases/acquire`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ owner: "rec-playwright-launcher", kind: "agent", ttl_ms: 30_000 }),
+    });
+    const value = await response.json().catch(() => ({})) as { lease_id?: string };
+    if (!response.ok || !value.lease_id) return undefined;
+    const renewTimer = setInterval(() => void renewDaemonLease(value.lease_id!), 10_000);
+    renewTimer.unref();
+    return { id: value.lease_id, renewTimer };
+  } catch { return undefined; }
+}
+
+async function renewDaemonLease(id: string) {
+  try {
+    const response = await fetch(`${endpoint}/api/leases/renew`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ lease_id: id, ttl_ms: 30_000 }),
+    });
+    if (!response.ok) return;
+  } catch { /* Lease expiry protects against a lost daemon connection. */ }
+}
+
+async function releaseDaemonLease(lease: DaemonLease | undefined) {
+  if (!lease) return;
+  clearInterval(lease.renewTimer);
+  try {
+    await fetch(`${endpoint}/api/leases/release`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ lease_id: lease.id }),
+      keepalive: true,
+    });
+  } catch { /* Lease expiry is the fallback when the launcher is interrupted. */ }
 }
 
 async function api(method: string, path: string, body?: unknown, ensure = true): Promise<unknown> {

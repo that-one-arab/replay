@@ -53,6 +53,12 @@ If a managed browser’s headless mode, viewport, or executable no longer matche
 stop that managed browser and start a fresh task. The agent does not need a
 configuration tool or prompt-level recording settings.
 
+Rec's local daemon is started on demand. Rec MCP and the Playwright launcher
+hold a short-lived agent lease while their processes are active; after they
+end, Rec releases managed Chrome after a small grace period. Opening a local
+replay keeps only the daemon alive, not Chrome. This lifecycle is automatic;
+`rec daemon stop` is available for an explicit shutdown after recording stops.
+
 `recording_start` rejects an empty browser with guidance to navigate first;
 `recording_stop` rejects an empty capture instead of returning a misleading replay
 link. The recorder's existing password masking remains enabled; broader masking

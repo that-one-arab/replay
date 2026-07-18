@@ -25,6 +25,12 @@ Stop Rec’s managed Chrome. It refuses to stop while a recording is active and
 never stops an externally attached browser. Use it after changing `headless`,
 `viewport`, or `executable` configuration, then start a fresh agent task.
 
+### `rec daemon stop`
+
+Stop the local daemon and its Rec-managed Chrome. It refuses while a recording
+is active. This is an explicit escape hatch; in normal use the daemon releases
+the browser after its agent lease expires and exits after its idle timeout.
+
 ### `rec attach --cdp <loopback-url>`
 
 Attach Rec to an existing local Chrome debugging endpoint, for example:
@@ -128,6 +134,10 @@ behave as expected.
   `http://127.0.0.1:7717`.
 - `REC_SHARE_URL` enables `rec share`.
 - `REC_CONFIG` selects an additional Rec TOML file.
+- `REC_BROWSER_IDLE_TIMEOUT_MS` controls how long Rec keeps its managed Chrome
+  after the last agent lease (default: 30 seconds).
+- `REC_DAEMON_IDLE_TIMEOUT_MS` controls how long Rec keeps the local daemon
+  after all agent and replay leases end (default: 15 minutes).
 
 Browser and replay-specific `REC_*` variables are documented in the
 [configuration guide](../../docs/configuration.md).

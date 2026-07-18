@@ -13,6 +13,7 @@ type Request = { jsonrpc?: string; id?: string | number | null; method?: string;
 const endpoint = process.env.REC_DAEMON_URL ?? "http://127.0.0.1:7717";
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 const daemonEntry = process.env.REC_DAEMON_ENTRY ?? resolve(moduleDirectory, "../../daemon/dist/main.js");
+let daemonLease: DaemonLease | undefined;
 
 const tools: JsonObject[] = [
   {
@@ -97,6 +98,7 @@ const tools: JsonObject[] = [
 void run();
 
 async function run() {
+  await acquireDaemonLease();
   let buffered = "";
   let queue = Promise.resolve();
   process.stdin.setEncoding("utf8");
@@ -106,7 +108,12 @@ async function run() {
     buffered = lines.pop() ?? "";
     for (const line of lines) if (line.trim()) queue = queue.then(() => handleLine(line));
   });
-  process.stdin.on("end", () => { if (buffered.trim()) void handleLine(buffered); });
+  process.stdin.on("end", () => {
+    if (buffered.trim()) void handleLine(buffered);
+    void releaseDaemonLease();
+  });
+  process.once("SIGTERM", () => { void releaseDaemonLease(); process.exit(0); });
+  process.once("SIGINT", () => { void releaseDaemonLease(); process.exit(0); });
 }
 
 async function handleLine(line: string) {
@@ -287,6 +294,53 @@ async function ensureDaemon(): Promise<JsonObject> {
     try { return object(await api("GET", "/health", undefined, false)); } catch (error) { lastError = error; }
   }
   throw new Error(`rec daemon did not start: ${messageOf(lastError)}`);
+}
+
+type DaemonLease = { id: string; renewTimer: NodeJS.Timeout };
+
+async function acquireDaemonLease() {
+  try {
+    await ensureDaemon();
+    const response = await fetch(`${endpoint}/api/leases/acquire`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ owner: "rec-mcp", kind: "agent", ttl_ms: 30_000 }),
+    });
+    const value = await response.json().catch(() => ({})) as { lease_id?: string };
+    if (!response.ok || !value.lease_id) return;
+    const renewTimer = setInterval(() => void renewDaemonLease(value.lease_id!), 10_000);
+    renewTimer.unref();
+    daemonLease = { id: value.lease_id, renewTimer };
+  } catch {
+    // An older daemon does not yet implement leases. It remains compatible and
+    // will retain its previous manual lifecycle until it is restarted.
+  }
+}
+
+async function renewDaemonLease(id: string) {
+  try {
+    const response = await fetch(`${endpoint}/api/leases/renew`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ lease_id: id, ttl_ms: 30_000 }),
+    });
+    if (!response.ok) await releaseDaemonLease();
+  } catch { await releaseDaemonLease(); }
+}
+
+async function releaseDaemonLease() {
+  const lease = daemonLease;
+  daemonLease = undefined;
+  if (!lease) return;
+  clearInterval(lease.renewTimer);
+  try {
+    await fetch(`${endpoint}/api/leases/release`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ lease_id: lease.id }),
+      keepalive: true,
+    });
+  } catch { /* Lease expiry is the fallback when the process disappears. */ }
 }
 
 async function api(method: string, path: string, body?: unknown, ensure = true): Promise<unknown> {

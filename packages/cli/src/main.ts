@@ -13,6 +13,7 @@ const [command, ...args] = process.argv.slice(2);
 try {
   switch (command) {
     case "browser": await browser(args); break;
+    case "daemon": await daemon(args); break;
     case "attach": await attach(args); break;
     case "start": await start(args); break;
     case "marker": await marker(args); break;
@@ -42,6 +43,14 @@ async function browser(values: string[]) {
     console.log("\nChrome is ready for Playwright at the CDP endpoint above; it is not a replay URL.");
     console.log("Next: configure Playwright with that endpoint, navigate to your app, then run `pnpm rec start`.");
   }
+}
+
+async function daemon(values: string[]) {
+  if (values.shift() !== "stop") return usage("Use rec daemon stop");
+  const response = await fetch(`${endpoint}/api/daemon/stop`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  const result = await response.json().catch(() => ({})) as { error?: string };
+  if (!response.ok) throw new Error(result.error ?? response.statusText);
+  print(result);
 }
 
 async function attach(values: string[]) {
@@ -165,4 +174,4 @@ function flag(values: string[], name: string) { const index = values.indexOf(nam
 function duration(ms?: number) { if (!ms) return "0s"; const seconds = Math.round(ms / 1000); return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`; }
 function size(bytes: number) { return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`; }
 function print(value: unknown) { console.log(JSON.stringify(value, null, 2)); }
-function usage(message?: string): never { if (message) console.error(message); console.error("Usage: rec browser start [--executable <path>] | browser stop | attach --cdp <url> | start [--title <text>] [--origin <url>]... [--mask-all-inputs] [--record-canvas] | marker <label> [--note <text>] [--placement after_previous|before_next] | stop [--outcome reproduced|verified|other] [--notes <text>] | status | list | open <id> | export <id> [--output <file.rec>] | import <file.rec> | share <id> | config show | doctor"); process.exit(2); }
+function usage(message?: string): never { if (message) console.error(message); console.error("Usage: rec browser start [--executable <path>] | browser stop | daemon stop | attach --cdp <url> | start [--title <text>] [--origin <url>]... [--mask-all-inputs] [--record-canvas] | marker <label> [--note <text>] [--placement after_previous|before_next] | stop [--outcome reproduced|verified|other] [--notes <text>] | status | list | open <id> | export <id> [--output <file.rec>] | import <file.rec> | share <id> | config show | doctor"); process.exit(2); }

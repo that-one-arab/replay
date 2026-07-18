@@ -37,6 +37,37 @@ test("daemon reports an unattached browser and rejects unsafe or premature captu
   }
 });
 
+test("replay leases keep the daemon alive while agent leases control browser ownership", async () => {
+  const home = await mkdtemp(join(tmpdir(), "rec-daemon-leases-"));
+  const port = await unusedPort();
+  const daemon = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], {
+    env: { ...process.env, REC_HOME: home, REC_PORT: String(port), REC_BROWSER_IDLE_TIMEOUT_MS: "1000", REC_DAEMON_IDLE_TIMEOUT_MS: "1000" },
+    stdio: "ignore",
+  });
+  const endpoint = `http://127.0.0.1:${port}`;
+  try {
+    await waitForHealth(endpoint);
+    const agent = await request(endpoint, "/api/leases/acquire", { owner: "agent-test", kind: "agent", ttl_ms: 5_000 }) as { status: number; body: { lease_id?: string } };
+    assert.equal(agent.status, 201);
+    assert.ok(agent.body.lease_id);
+    const withAgent = await waitForHealth(endpoint) as { leases?: { agent_lease_count?: number; replay_lease_count?: number } };
+    assert.equal(withAgent.leases?.agent_lease_count, 1);
+    const releasedAgent = await request(endpoint, "/api/leases/release", { lease_id: agent.body.lease_id });
+    assert.equal(releasedAgent.status, 200);
+    const replay = await request(endpoint, "/api/leases/acquire", { owner: "player-test", kind: "replay", ttl_ms: 5_000 }) as { status: number; body: { lease_id?: string } };
+    assert.equal(replay.status, 201);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 1_150));
+    const withReplay = await waitForHealth(endpoint) as { leases?: { agent_lease_count?: number; replay_lease_count?: number } };
+    assert.equal(withReplay.leases?.agent_lease_count, 0);
+    assert.equal(withReplay.leases?.replay_lease_count, 1);
+    await request(endpoint, "/api/leases/release", { lease_id: replay.body.lease_id });
+    await waitForExit(daemon);
+  } finally {
+    await stop(daemon);
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 async function unusedPort() {
   const server = createServer();
   server.listen(0, "127.0.0.1");
@@ -65,7 +96,7 @@ async function request(endpoint: string, path: string, body: Record<string, unkn
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  return { status: response.status, body: await response.json() as { error?: string } };
+  return { status: response.status, body: await response.json() as { error?: string; lease_id?: string } };
 }
 
 async function stop(child: ChildProcess) {
@@ -73,4 +104,12 @@ async function stop(child: ChildProcess) {
   const exited = once(child, "exit");
   child.kill();
   await Promise.race([exited, new Promise((resolveWait) => setTimeout(resolveWait, 1_000))]);
+}
+
+async function waitForExit(child: ChildProcess) {
+  const exited = once(child, "exit");
+  await Promise.race([
+    exited,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Fixture daemon did not exit after its idle timeout.")), 3_000)),
+  ]);
 }

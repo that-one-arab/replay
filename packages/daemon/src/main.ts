@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createReadStream, existsSync } from "node:fs";
 import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
@@ -11,14 +12,32 @@ const recorder = new Recorder();
 let cdpEndpoint: string | undefined;
 let managedBrowser = existsSync(join(recHome(), "browser.json"));
 let activeBrowserConfig: BrowserConfig | undefined;
+const leases = new Map<string, DaemonLease>();
+const agentIdleTimeoutMs = configuredDuration("REC_BROWSER_IDLE_TIMEOUT_MS", 30_000);
+const daemonIdleTimeoutMs = configuredDuration("REC_DAEMON_IDLE_TIMEOUT_MS", 15 * 60_000);
+let agentIdleSince: number | undefined;
+let daemonIdleSince: number | undefined;
+let lifecycleCheckRunning = false;
+let shuttingDown = false;
 
 const server = createServer((request, response) => void route(request, response).catch((error: unknown) => reply(response, 500, { error: messageOf(error) })));
 server.listen(port, "127.0.0.1", () => console.log(`rec daemon listening on http://127.0.0.1:${port}`));
+const lifecycleTimer = setInterval(() => void enforceLifecycle(), 1_000);
+lifecycleTimer.unref();
 
 async function route(request: IncomingMessage, response: ServerResponse) {
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
   const body = request.method === "POST" ? await jsonBody(request) : undefined;
   if (request.method === "GET" && url.pathname === "/health") return reply(response, 200, await health());
+  if (request.method === "POST" && url.pathname === "/api/leases/acquire") return reply(response, 201, acquireLease(body));
+  if (request.method === "POST" && url.pathname === "/api/leases/renew") return reply(response, 200, renewLease(body));
+  if (request.method === "POST" && url.pathname === "/api/leases/release") return reply(response, 200, releaseLease(body));
+  if (request.method === "POST" && url.pathname === "/api/daemon/stop") {
+    if (recorder.status().state === "recording") throw new Error("Cannot stop the daemon while a recording is active.");
+    reply(response, 202, { stopping: true });
+    setImmediate(() => void shutdownDaemon());
+    return;
+  }
   if (request.method === "POST" && (url.pathname === "/api/attach" || url.pathname === "/api/browser/attach")) return reply(response, 200, await attachBrowser(String(body?.cdp_endpoint ?? "")));
   if (request.method === "POST" && (url.pathname === "/api/browser/start" || url.pathname === "/api/browser/ensure")) return reply(response, 200, await startBrowser(String(body?.executable ?? "")));
   if (request.method === "POST" && url.pathname === "/api/browser/stop") return reply(response, 200, await stopBrowser());
@@ -127,6 +146,7 @@ async function attachBrowser(endpoint: string) {
 }
 
 async function health() {
+  expireLeases();
   const browser = recorder.browserStatus();
   const config = await configDiagnostics();
   return {
@@ -136,9 +156,111 @@ async function health() {
     browser_state: browser.attached ? "ready" : "unavailable",
     page_count: browser.pageCount,
     navigated_page_count: browser.navigatedPageCount,
+    leases: leaseSummary(),
+    lifecycle: {
+      browser_idle_timeout_ms: agentIdleTimeoutMs,
+      daemon_idle_timeout_ms: daemonIdleTimeoutMs,
+      ...(agentIdleSince ? { browser_idle_since: new Date(agentIdleSince).toISOString() } : {}),
+      ...(daemonIdleSince ? { daemon_idle_since: new Date(daemonIdleSince).toISOString() } : {}),
+    },
     ...config,
     ...recorder.status(),
   };
+}
+
+type LeaseKind = "agent" | "replay";
+type DaemonLease = { id: string; owner: string; kind: LeaseKind; expiresAt: number };
+
+function acquireLease(body: Record<string, unknown> | undefined) {
+  const kind = leaseKind(body?.kind);
+  const now = Date.now();
+  const lease: DaemonLease = {
+    id: randomUUID(),
+    owner: optionalString(body?.owner) ?? "unknown",
+    kind,
+    expiresAt: now + leaseTtl(body?.ttl_ms),
+  };
+  leases.set(lease.id, lease);
+  if (kind === "agent") {
+    agentIdleSince = undefined;
+  }
+  daemonIdleSince = undefined;
+  return { lease_id: lease.id, expires_at: new Date(lease.expiresAt).toISOString(), ...leaseSummary() };
+}
+
+function renewLease(body: Record<string, unknown> | undefined) {
+  const id = optionalString(body?.lease_id);
+  const lease = id ? leases.get(id) : undefined;
+  if (!lease) throw new Error("Daemon lease was not found or has expired.");
+  lease.expiresAt = Date.now() + leaseTtl(body?.ttl_ms);
+  if (lease.kind === "agent") {
+    agentIdleSince = undefined;
+  }
+  daemonIdleSince = undefined;
+  return { lease_id: lease.id, expires_at: new Date(lease.expiresAt).toISOString(), ...leaseSummary() };
+}
+
+function releaseLease(body: Record<string, unknown> | undefined) {
+  const id = optionalString(body?.lease_id);
+  if (id) leases.delete(id);
+  void enforceLifecycle();
+  return { released: Boolean(id), ...leaseSummary() };
+}
+
+function leaseKind(value: unknown): LeaseKind {
+  if (value === "agent" || value === "replay") return value;
+  throw new Error("Lease kind must be agent or replay.");
+}
+
+function leaseTtl(value: unknown) {
+  const requested = typeof value === "number" && Number.isFinite(value) ? value : 30_000;
+  return Math.max(5_000, Math.min(60_000, Math.round(requested)));
+}
+
+function expireLeases(now = Date.now()) {
+  for (const [id, lease] of leases) if (lease.expiresAt <= now) leases.delete(id);
+}
+
+function leaseSummary() {
+  expireLeases();
+  let agent = 0;
+  let replay = 0;
+  for (const lease of leases.values()) if (lease.kind === "agent") agent += 1; else replay += 1;
+  return { active_lease_count: agent + replay, agent_lease_count: agent, replay_lease_count: replay };
+}
+
+async function enforceLifecycle() {
+  if (lifecycleCheckRunning || shuttingDown) return;
+  lifecycleCheckRunning = true;
+  try {
+    const now = Date.now();
+    expireLeases(now);
+    const recording = recorder.status().state === "recording";
+    const { active_lease_count: activeLeases, agent_lease_count: agentLeases } = leaseSummary();
+    if (recording || agentLeases > 0) agentIdleSince = undefined;
+    else {
+      agentIdleSince ??= now;
+      if (managedBrowser && now - agentIdleSince >= agentIdleTimeoutMs) await stopBrowser();
+    }
+    if (recording || activeLeases > 0) daemonIdleSince = undefined;
+    else {
+      daemonIdleSince ??= now;
+      if (now - daemonIdleSince >= daemonIdleTimeoutMs) await shutdownDaemon();
+    }
+  } finally {
+    lifecycleCheckRunning = false;
+  }
+}
+
+async function shutdownDaemon() {
+  if (shuttingDown || recorder.status().state === "recording") return;
+  shuttingDown = true;
+  clearInterval(lifecycleTimer);
+  if (managedBrowser) await stopBrowser().catch(() => undefined);
+  else await recorder.close().catch(() => undefined);
+  server.close(() => process.exit(0));
+  const forceExit = setTimeout(() => process.exit(0), 1_000);
+  forceExit.unref();
 }
 
 type ManagedBrowserState = { pid: number; cdp_endpoint: string; config_fingerprint?: string; browser_config?: BrowserConfig };
@@ -261,6 +383,10 @@ function jsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
 }
 
 function optionalString(value: unknown) { return typeof value === "string" ? value : undefined; }
+function configuredDuration(name: string, fallback: number) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value >= 1_000 ? Math.round(value) : fallback;
+}
 function outcomeOf(value: unknown): Outcome | undefined { return value === "reproduced" || value === "verified" || value === "other" ? value : undefined; }
 function markerPlacement(value: unknown) { if (value === undefined || value === "after_previous" || value === "before_next") return value ?? "after_previous"; throw new Error("Marker placement must be after_previous or before_next."); }
 function isLoopbackEndpoint(value: string) {

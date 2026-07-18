@@ -47,6 +47,9 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
       page_count: attached ? 1 : 0,
       navigated_page_count: attached ? 1 : 0,
     });
+    if (request.method === "POST" && path === "/api/leases/acquire") return json(response, { lease_id: "mcp-lease" }, 201);
+    if (request.method === "POST" && path === "/api/leases/renew") return json(response, { lease_id: "mcp-lease" });
+    if (request.method === "POST" && path === "/api/leases/release") return json(response, { released: true });
     if (request.method === "POST" && path === "/api/browser/ensure") { attached = true; return json(response, { managed: true, launched: true, cdp_endpoint: "http://127.0.0.1:9333", browser_state: "ready" }); }
     if (request.method === "POST" && path === "/api/browser/attach") return json(response, { managed: false, cdp_endpoint: body?.cdp_endpoint, browser_state: "ready" });
     if (request.method === "POST" && path === "/api/sessions/start") return json(response, { sessionId: "rec_test" });

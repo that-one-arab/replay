@@ -33,3 +33,23 @@ reconfigured.
 
 Replay defaults are copied into each new recording. Reviewers can still switch
 between **Cut**, **8×**, and **Keep** in the player without changing the artifact.
+
+## Local runtime lifecycle
+
+Rec manages the local daemon and, when used, its dedicated Chrome separately.
+The MCP server and Playwright launcher hold an **agent lease** while they are
+alive. When the final agent lease ends, Rec waits 30 seconds before stopping
+only its managed Chrome. A locally open replay holds a **replay lease**, keeping
+the daemon available without retaining Chrome.
+
+With neither kind of lease, the daemon exits after 15 minutes. Override either
+grace period in milliseconds when needed:
+
+```sh
+REC_BROWSER_IDLE_TIMEOUT_MS=60000
+REC_DAEMON_IDLE_TIMEOUT_MS=1800000
+```
+
+Both values must be at least 1000 ms. An active recording prevents automatic
+shutdown. Use `rec daemon stop` to end the daemon immediately once recording
+has stopped.

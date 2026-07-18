@@ -32,7 +32,47 @@ const id = new URLSearchParams(location.search).get("id");
 let activePlayback: AbortController | undefined;
 let currentSessionTime = 0;
 if (!id) renderError("Choose a recording with `rec open <id>`.");
-else void load(id);
+else {
+  maintainReplayLease();
+  void load(id);
+}
+
+function maintainReplayLease() {
+  let leaseId: string | undefined;
+  let renewTimer: number | undefined;
+  const release = () => {
+    if (renewTimer) window.clearInterval(renewTimer);
+    renewTimer = undefined;
+    if (!leaseId) return;
+    void fetch("/api/leases/release", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ lease_id: leaseId }),
+      keepalive: true,
+    }).catch(() => undefined);
+    leaseId = undefined;
+  };
+  const renew = () => {
+    if (!leaseId) return;
+    void fetch("/api/leases/renew", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ lease_id: leaseId, ttl_ms: 30_000 }),
+    }).then((response) => { if (!response.ok) release(); }).catch(release);
+  };
+  void fetch("/api/leases/acquire", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ owner: "rec-player", kind: "replay", ttl_ms: 30_000 }),
+  }).then(async (response) => {
+    if (!response.ok) return;
+    const value = await response.json() as { lease_id?: string };
+    if (!value.lease_id) return;
+    leaseId = value.lease_id;
+    renewTimer = window.setInterval(renew, 10_000);
+  }).catch(() => undefined);
+  window.addEventListener("pagehide", release, { once: true });
+}
 
 async function load(recordingId: string) {
   try {

@@ -102,6 +102,19 @@ The local daemon binds only to `127.0.0.1` (default port `7717`). Its API is an
 internal contract between the CLI, MCP server, launcher, and player; it is not
 an internet-facing API.
 
+### Local runtime lifecycle
+
+The daemon is lazy-started by Rec MCP, the Playwright launcher, or a CLI command.
+Those agent-facing processes acquire a renewable **agent lease** while they are
+alive. When the last agent lease ends, the daemon waits 30 seconds by default,
+then stops only Rec-managed Chrome. An open local player instead holds a
+**replay lease**: it keeps recording data reachable but never keeps Chrome
+running. Once no agent or replay lease remains, the daemon exits after 15
+minutes by default. An active recording blocks automatic shutdown, and
+`rec daemon stop` provides an explicit post-recording stop. Both grace periods
+are configurable through `REC_BROWSER_IDLE_TIMEOUT_MS` and
+`REC_DAEMON_IDLE_TIMEOUT_MS`.
+
 ### Recording lifecycle
 
 `recording_start` is valid only after a navigated in-scope page exists. This
