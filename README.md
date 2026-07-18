@@ -118,5 +118,6 @@ to the recording machine or browser.
 
 - [MCP tools and lifecycle](docs/mcp.md)
 - [Recording format](docs/format.md)
+- [Portable artifacts: implementation and E2E guide](docs/phase-3-portable-artifacts.md)
 - [Fresh-agent acceptance checklist](docs/phase-2-acceptance.md)
 - [Roadmap](docs/roadmap.md)

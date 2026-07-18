@@ -25,7 +25,8 @@ deferred.
 Allow a completed session to be exported, imported, and replayed independently of
 the recording machine. Define a versioned bundle, integrity checks, and a static
 or local viewer so an agent can attach the artifact to a handoff before hosted
-sharing exists.
+sharing exists. Implementation and maintenance notes are in
+[phase-3-portable-artifacts.md](phase-3-portable-artifacts.md).
 
 ## Phase 4 — secure sharing and review
 
