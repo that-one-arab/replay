@@ -1,5 +1,5 @@
 {
-  "name": "@signit/rec-share-server",
+  "name": "@rec/share-server",
   "version": "0.1.0",
   "private": true,
   "type": "module",

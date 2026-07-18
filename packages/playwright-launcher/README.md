@@ -1,4 +1,4 @@
-# `@signit/rec-playwright-launcher`
+# `@rec/playwright-launcher`
 
 A stdio-transparent bootstrapper for the separately installed Playwright MCP.
 Its executable is `rec-playwright-launcher`.

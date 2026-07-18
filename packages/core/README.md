@@ -1,4 +1,4 @@
-# `@signit/rec-core`
+# `@rec/core`
 
 The recording engine and portable-artifact library shared by every Rec runtime.
 
@@ -12,8 +12,8 @@ It owns:
 It deliberately has no HTTP server, CLI, MCP protocol, or player UI. Those live
 in sibling packages.
 
-Build or check from the repository root with `pnpm --filter @signit/rec-core build`
-or `pnpm --filter @signit/rec-core check`.
+Build or check from the repository root with `pnpm --filter @rec/core build`
+or `pnpm --filter @rec/core check`.
 
 See the root [recording format](../../docs/format.md) and
 [configuration guide](../../docs/configuration.md).

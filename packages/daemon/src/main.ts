@@ -4,7 +4,7 @@ import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
-import { Recorder, exportSession, recHome, resolveRecConfig, sessionsDir, sessionPath, type BrowserConfig, type Outcome, type RecordingManifest, type StartOptions } from "@signit/rec-core";
+import { Recorder, exportSession, recHome, resolveRecConfig, sessionsDir, sessionPath, type BrowserConfig, type Outcome, type RecordingManifest, type StartOptions } from "@rec/core";
 
 const port = Number(process.env.REC_PORT ?? 7717);
 const recorder = new Recorder();

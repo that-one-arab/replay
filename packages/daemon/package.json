@@ -1,5 +1,5 @@
 {
-  "name": "@signit/rec-daemon",
+  "name": "@rec/daemon",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,6 +9,6 @@
     "test": "node --test dist/**/*.test.js"
   },
   "dependencies": {
-    "@signit/rec-core": "workspace:*"
+    "@rec/core": "workspace:*"
   }
 }

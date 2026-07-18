@@ -1,4 +1,4 @@
-# `@signit/rec-cli`
+# `@rec/cli`
 
 The developer and troubleshooting command-line interface. Its executable is
 `rec`; from this repository, run it as `pnpm rec <command>`.

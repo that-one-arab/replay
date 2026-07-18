@@ -1,4 +1,4 @@
-# `@signit/rec-demo`
+# `@rec/demo`
 
 Deterministic fixtures and browser regression coverage for Rec’s replay player.
 

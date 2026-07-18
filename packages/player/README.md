@@ -1,4 +1,4 @@
-# `@signit/rec-player`
+# `@rec/player`
 
 The browser replay UI, built with Vite and rrweb replay. The daemon and hosted
 share server both serve its compiled `dist/` assets.

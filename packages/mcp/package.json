@@ -1,11 +1,11 @@
 {
-  "name": "@signit/rec-mcp",
+  "name": "@rec/mcp",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "bin": { "rec-mcp": "./dist/main.js" },
   "dependencies": {
-    "@signit/rec-core": "workspace:*"
+    "@rec/core": "workspace:*"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

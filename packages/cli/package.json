@@ -1,5 +1,5 @@
 {
-  "name": "@signit/rec-cli",
+  "name": "@rec/cli",
   "version": "0.1.0",
   "private": true,
   "type": "module",

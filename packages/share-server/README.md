@@ -1,4 +1,4 @@
-# `@signit/rec-share-server`
+# `@rec/share-server`
 
 The hosted replay service used by the Railway prototype. It accepts a validated
 portable `.rec` artifact, imports it into its private spool, and serves the
