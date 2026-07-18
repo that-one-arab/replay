@@ -1093,6 +1093,11 @@ function pointerPosition(event: ReplayEvent) {
 function isDirectPointerInteraction(event: ReplayEvent) {
   return event.type === 3 && event.data?.source === 2 && Number.isFinite(event.data.x) && Number.isFinite(event.data.y);
 }
+function typeableFill(event: ReplayEvent): string | undefined {
+  if (event.type !== 3 || event.data?.source !== 5) return undefined;
+  const text = event.data?.text;
+  return typeof text === "string" ? text : undefined;
+}
 function isVisibleShortFill(event: ReplayEvent) {
   const text = event.data?.text;
   return event.type === 3 && event.data?.source === 5 && typeof text === "string" && text.length > 2 && text.length <= 32 && text !== "on";
