@@ -15,7 +15,11 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
-  packages/cli: {}
+  packages/cli:
+    dependencies:
+      '@rec/core':
+        specifier: workspace:*
+        version: link:../core
 
   packages/core:
     dependencies:
@@ -58,6 +62,24 @@ importers:
         version: 7.3.6(@types/node@24.13.3)
 
   packages/playwright-launcher: {}
+
+  packages/runtime:
+    dependencies:
+      '@rec/cli':
+        specifier: workspace:*
+        version: link:../cli
+      '@rec/daemon':
+        specifier: workspace:*
+        version: link:../daemon
+      '@rec/mcp':
+        specifier: workspace:*
+        version: link:../mcp
+      '@rec/player':
+        specifier: workspace:*
+        version: link:../player
+      '@rec/playwright-launcher':
+        specifier: workspace:*
+        version: link:../playwright-launcher
 
   packages/share-server: {}
 

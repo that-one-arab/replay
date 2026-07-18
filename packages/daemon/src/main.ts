@@ -229,19 +229,21 @@ async function serveRecordedAsset(response: ServerResponse, sessionId: string, a
 }
 
 function servePlayer(response: ServerResponse) {
-  const path = resolve(process.cwd(), "packages/player/dist/index.html");
+  const path = join(playerRoot(), "index.html");
   if (!existsSync(path)) return reply(response, 503, { error: "Player not built. Run pnpm build." });
   response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   createReadStream(path).pipe(response);
 }
 
 function serveAsset(response: ServerResponse, pathname: string) {
-  const root = resolve(process.cwd(), "packages/player/dist");
+  const root = playerRoot();
   const path = resolve(root, `.${pathname}`);
   if (!path.startsWith(root) || !existsSync(path)) return reply(response, 404, { error: "Not found" });
   response.writeHead(200, { "content-type": pathname.endsWith(".js") ? "text/javascript" : "text/css" });
   createReadStream(path).pipe(response);
 }
+
+function playerRoot() { return resolve(process.env.REC_PLAYER_DIR ?? resolve(process.cwd(), "packages/player/dist")); }
 
 function reply(response: ServerResponse, status: number, value?: unknown) {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8" });

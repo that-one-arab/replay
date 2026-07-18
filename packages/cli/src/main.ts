@@ -5,7 +5,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 // The CLI build runs immediately after core's build, including when this
 // workspace has not been linked by a package manager yet.
-import { exportPath, exportSession, importSession, resolveRecConfig } from "../../core/dist/index.js";
+import { exportPath, exportSession, importSession, resolveRecConfig } from "@rec/core";
 
 const endpoint = process.env.REC_DAEMON_URL ?? "http://127.0.0.1:7717";
 const [command, ...args] = process.argv.slice(2);
@@ -148,8 +148,8 @@ async function api(method: string, path: string, body?: unknown): Promise<unknow
 
 async function ensureDaemon() {
   try { if ((await fetch(`${endpoint}/health`)).ok) return; } catch { /* start below */ }
-  const entry = resolve(process.cwd(), "packages/daemon/dist/main.js");
-  if (!existsSync(entry)) throw new Error("rec is not built. Run pnpm install && pnpm build first.");
+  const entry = process.env.REC_DAEMON_ENTRY ?? resolve(process.cwd(), "packages/daemon/dist/main.js");
+  if (!existsSync(entry)) throw new Error("Rec's runtime is unavailable. Reinstall Rec or set REC_DAEMON_ENTRY.");
   const child = spawn(process.execPath, [entry], { detached: true, stdio: "ignore", cwd: process.cwd(), env: { ...process.env, REC_CONFIG_CWD: process.cwd() } });
   child.unref();
   for (let attempt = 0; attempt < 25; attempt += 1) {

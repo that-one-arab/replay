@@ -3,43 +3,23 @@
 Rec lets a coding agent record the browser session it uses to reproduce or verify
 a change, then hand back a replay link and a portable `.rec` artifact.
 
-## Quick start: Codex
+## Install for Codex
 
-Rec records while stock Playwright MCP drives the browser. Install both MCP
-servers in the project where Codex will work.
+Rec is installed as one ready-to-run package: the Rec runtime, its Codex plugin,
+and the Playwright launcher. You do not clone this repository or manually wire
+MCP paths.
 
-### 1. Build Rec
+Download the approved macOS Apple-silicon release, unpack it, and run:
 
 ```sh
-cd /absolute/path/to/rec
-pnpm install
-pnpm build
+./rec-<version>-darwin-arm64/install.sh
 ```
 
-Node.js, `npx`, and Google Chrome must be available. The launcher obtains the
-separate `@playwright/mcp` dependency on first use.
+The installer places Rec under `~/.rec`, configures the plugin, and installs it
+in Codex. Open a new Codex task afterward. Google Chrome is required. The
+launcher obtains the separate `@playwright/mcp` dependency on first use.
 
-### 2. Configure Codex
-
-Create or update `<target-project>/.codex/config.toml`. Replace
-`/absolute/path/to/rec` with this checkout's real path.
-
-```toml
-[mcp_servers.rec]
-command = "node"
-args = ["/absolute/path/to/rec/packages/mcp/dist/main.js"]
-env = { REC_SHARE_URL = "https://<your-service-domain>" } # Optional: publish on recording_stop
-
-[mcp_servers.playwright]
-command = "node"
-args = ["/absolute/path/to/rec/packages/playwright-launcher/dist/main.js"]
-```
-
-Restart Codex or open a new task. The Playwright entry must point to Rec's
-launcher, not directly to stock Playwright MCP: the launcher starts Rec's
-dedicated Chrome when needed and connects Playwright to that same browser.
-
-### 3. Ask normally
+### Ask normally
 
 Start the app under test, then open a Codex task in that app's project and say:
 
@@ -88,8 +68,15 @@ and the required browser restart after changing launch settings.
 
 ## Development and manual use
 
-The direct CLI is for developing or troubleshooting Rec, rather than the normal
-coding-agent workflow:
+The direct CLI and source build are for contributors and troubleshooting, not
+the normal coding-agent workflow. Build a checkout first:
+
+```sh
+pnpm install
+pnpm build
+```
+
+Then use the CLI:
 
 ```sh
 pnpm rec browser start
@@ -146,4 +133,5 @@ usage, and limitations are in the [Railway sharing guide](docs/phase-4-railway-s
 - [Railway share links](docs/phase-4-railway-sharing.md)
 - [Configuration](docs/configuration.md)
 - [Fresh-agent acceptance checklist](docs/phase-2-acceptance.md)
+- [Codex distribution and release build](docs/distribution.md)
 - [Roadmap](docs/roadmap.md)

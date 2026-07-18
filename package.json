@@ -9,7 +9,8 @@
     "test": "node --test packages/core/dist/storage.test.js packages/core/dist/config.test.js packages/daemon/dist/main.test.js packages/mcp/dist/main.test.js packages/playwright-launcher/dist/main.test.js packages/demo/dist/player.e2e.test.js packages/share-server/dist/main.test.js",
     "rec": "node packages/cli/dist/main.js",
     "demo:record": "node packages/demo/dist/record-demo.js",
-    "demo:record:multi": "node packages/demo/dist/record-demo.js --multi-tab"
+    "demo:record:multi": "node packages/demo/dist/record-demo.js --multi-tab",
+    "package:macos": "pnpm build && node scripts/package-macos.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

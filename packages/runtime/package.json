@@ -1,0 +1,19 @@
+{
+  "name": "@rec/runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": ["bin"],
+  "bin": {
+    "rec": "./bin/rec.mjs",
+    "rec-mcp": "./bin/rec-mcp.mjs",
+    "rec-playwright-launcher": "./bin/rec-playwright-launcher.mjs"
+  },
+  "dependencies": {
+    "@rec/cli": "workspace:*",
+    "@rec/daemon": "workspace:*",
+    "@rec/mcp": "workspace:*",
+    "@rec/player": "workspace:*",
+    "@rec/playwright-launcher": "workspace:*"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "rec": {
+      "command": "__REC_RUNTIME_DIR__/bin/rec-mcp",
+      "env": {
+        "REC_SHARE_URL": "https://stitch-production-2492.up.railway.app"
+      }
+    },
+    "playwright": {
+      "command": "__REC_RUNTIME_DIR__/bin/rec-playwright-launcher"
+    }
+  }
+}
