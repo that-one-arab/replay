@@ -28,7 +28,8 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
     assert.equal(await page.locator("[data-idle-range]").count(), 2);
     assert.equal(await page.locator("[data-navigation-event]").count(), 1);
     assert.equal(await page.locator("[data-marker]").count(), 3, "markers are persistent timeline chapters");
-    assert.equal(await page.locator("[data-marker]").first().locator(".marker-label").textContent(), "Action begins");
+    assert.equal(await page.locator("[data-marker]").first().getAttribute("aria-label"), "Jump to marker: Action begins");
+    assert.equal(await page.locator("[data-marker]").first().locator(".marker-dot").count(), 1, "markers use a focused timeline dot instead of a persistent label");
     assert.match(await page.locator("[data-navigation-event]").getAttribute("data-timeline-tooltip") ?? "", /^Page refreshed — 0\.1s transition$/);
     const timelineBox = await page.locator("#scrubber").boundingBox();
     if (!timelineBox) throw new Error("Timeline scrubber is not visible.");
