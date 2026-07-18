@@ -9,7 +9,7 @@ type NavigationEvent = { segment_id: string; kind: "reload" | "navigate"; starte
 type IdleMode = "cut" | "fast_forward" | "preserve";
 type ReplayDefaults = { idle_mode: IdleMode; idle_retained_ms: number; idle_fast_forward_speed: number; default_speed: number };
 type Manifest = { id: string; title: string; created_at?: string; outcome?: string; notes?: string; markers: Marker[]; segments: Segment[]; tab_events?: TabEvent[]; navigation_events?: NavigationEvent[]; raw_duration_ms?: number; replay_defaults?: ReplayDefaults };
-type ReplayEvent = { timestamp: number; type: number; data?: { source?: number; href?: string; width?: number; height?: number; text?: string; id?: number; x?: number; y?: number; recSynthetic?: "approach"; positions?: { x: number; y: number; id?: number; timeOffset?: number }[] } };
+type ReplayEvent = { timestamp: number; type: number; data?: { source?: number; type?: number; href?: string; width?: number; height?: number; text?: string; id?: number; x?: number; y?: number; recSynthetic?: "approach"; positions?: { x: number; y: number; id?: number; timeOffset?: number }[] } };
 type IdleRange = { start: number; end: number };
 type TimelineIdleRange = IdleRange & { originalDuration: number; mode: IdleMode; speed: number };
 type PlaybackProjection = { manifest: Manifest; eventSets: Map<string, ReplayEvent[]>; duration: number; activities: number[]; playbackEnd: number; idleRanges: TimelineIdleRange[]; toPlayback(time: number): number; toRaw(time: number): number };
@@ -29,6 +29,12 @@ const TIMELINE_TOOLTIP_DELAY_MS = 550;
 const CAPTION_LINGER_MS = 4_500;
 const UI_IDLE_MS = 3_200;
 const SEEK_STEP_MS = 5_000;
+const CAMERA_ZOOM = 1.45;
+const CAMERA_HOLD_MS = 3_800;
+const CAMERA_EASE_PER_S = 4.2;
+// Camera inputs arriving from rrweb's seek reconstruction are historical; only
+// events cast near the live playhead may steer the camera.
+const CAMERA_SYNC_WINDOW_MS = 800;
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 const id = new URLSearchParams(location.search).get("id");
@@ -38,6 +44,19 @@ let lastNarrationKey: string | undefined;
 let captionTimer: number | undefined;
 let chaptersOpen: boolean | undefined;
 let introDismissed = false;
+// The auto-zoom camera ships dark: it only exists when the rec-camera flag is
+// switched on, via ?camera=on (persisted) or localStorage rec-camera=on.
+const cameraFeature = resolveCameraFlag();
+let cameraZoomEnabled = cameraFeature && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function resolveCameraFlag() {
+  const requested = new URLSearchParams(location.search).get("camera");
+  try {
+    if (requested === "on" || requested === "1") { localStorage.setItem("rec-camera", "on"); return true; }
+    if (requested === "off" || requested === "0") { localStorage.setItem("rec-camera", "off"); return false; }
+    return localStorage.getItem("rec-camera") === "on";
+  } catch { return requested === "on" || requested === "1"; }
+}
 let shareAvailable = false;
 let shareUrl: string | undefined;
 if (!id) renderError("Choose a recording with `rec open <id>`.");
@@ -130,6 +149,9 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
   const speedControls = [...new Set([0.25, 0.5, defaults.default_speed, 2, 4, 8])]
     .map((speed) => `<button data-speed="${speed}"${speed === playbackSpeed ? " class=\"selected\"" : ""}>${speed === defaults.default_speed ? "1×" : `${speed}×`}</button>`)
     .join("");
+  const cameraControl = cameraFeature
+    ? `<div class="camera-control" role="group" aria-label="Automatic zoom"><span>Zoom</span>${([["auto", "Auto"], ["off", "Off"]] as const).map(([mode, label]) => `<button data-camera-mode="${mode}"${(mode === "auto") === cameraZoomEnabled ? " class=\"selected\"" : ""}>${label}</button>`).join("")}</div>`
+    : "";
   const idleControls = ([
     ["cut", "Cut"],
     ["fast_forward", `${defaults.idle_fast_forward_speed}×`],
@@ -149,7 +171,7 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
   const chaptersPanel = manifest.markers.length
     ? `<aside class="chapters-panel" id="chapters-panel" aria-label="Recording chapters"><header>Chapters<span>${manifest.markers.length}</span></header><ol>${manifest.markers.map((marker) => `<li><button type="button" data-chapter="${marker.t_ms}"${marker.color === "yellow" ? " data-chapter-color=\"yellow\"" : ""} aria-current="false"><b>${format(marker.t_ms)}</b><span><strong>${escape(marker.label)}</strong>${marker.note ? `<p>${escape(marker.note)}</p>` : ""}</span></button></li>`).join("")}</ol></aside>`
     : "";
-  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="state-flash" id="state-flash" aria-hidden="true"><span></span></div><b id="stage-status" class="sr-only" role="status">Paused</b>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div>${introCard}${endCard}<section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div><div class="idle-control" role="group" aria-label="Idle handling"><span>Idle</span>${idleControls}</div><b id="idle-summary"></b>${shareControl}${chaptersToggle}</div><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section>${chaptersPanel}<div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
+  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="state-flash" id="state-flash" aria-hidden="true"><span></span></div><b id="stage-status" class="sr-only" role="status">Paused</b>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div>${introCard}${endCard}<section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div>${cameraControl}<div class="idle-control" role="group" aria-label="Idle handling"><span>Idle</span>${idleControls}</div><b id="idle-summary"></b>${shareControl}${chaptersToggle}</div><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section>${chaptersPanel}<div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
 }
 
 async function detectShareAvailability() {
@@ -215,8 +237,9 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     insertStyleRules: [".rec-focus-target{outline:2px solid rgba(105,86,255,.9)!important;outline-offset:3px!important;box-shadow:0 0 0 6px rgba(105,86,255,.16)!important;border-radius:4px!important}"]
   });
   fitReplay(mount, replayer, viewport);
+  const camera = createCamera(mount, replayer, viewport, lifetime);
   revealCursorOnFirstMove(replayer, lifetime);
-  window.addEventListener("resize", () => fitReplay(mount, replayer, viewport), { signal: lifetime.signal });
+  window.addEventListener("resize", () => { fitReplay(mount, replayer, viewport); camera.apply(); }, { signal: lifetime.signal });
   let playing = false;
   let scrubbing = false;
   let resumeAfterScrub = false;
@@ -280,6 +303,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     document.querySelector<HTMLElement>("#stage-status")!.textContent = value ? "Playing" : "Paused";
     scheduleCaptionFade();
     wakeInterface();
+    camera.setPlaying(value);
     if (lastPlayState !== undefined && lastPlayState !== value) flashPlayState(value);
     lastPlayState = value;
   };
@@ -291,6 +315,8 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     document.querySelector<HTMLElement>("#refresh-indicator")!.classList.remove("is-visible");
   };
   const showRefresh = (navigation: NavigationEvent, pinned = false) => {
+    // A page transition is a scene change — the camera pulls back for it.
+    camera.reset();
     const indicator = document.querySelector<HTMLElement>("#refresh-indicator")!;
     visibleNavigation = navigation;
     refreshPinned = pinned;
@@ -360,8 +386,20 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     else {
       setPlaying(false);
       updateTimelinePosition(tabEnd);
+      camera.reset();
       setEndCard(true);
     }
+  });
+  replayer.on("event-cast", (payload: unknown) => {
+    if (!cameraFeature) return;
+    const event = payload as ReplayEvent;
+    if (event.type !== 3 || !event.data) return;
+    const eventTime = sessionEventTime(event, events, tabStart);
+    if (eventTime === undefined || Math.abs(eventTime - currentSessionTime) > CAMERA_SYNC_WINDOW_MS) return;
+    const data = event.data;
+    if (data.source === 2 && (data.type === 2 || data.type === 4) && typeof data.x === "number" && typeof data.y === "number") camera.noteInteraction(data.x, data.y);
+    else if (data.source === 1) { const position = data.positions?.at(-1); if (position) camera.trackCursor(position.x, position.y); }
+    else if (data.source === 5) camera.refreshHold();
   });
   replayer.on("mouse-interaction", (payload: unknown) => {
     const interaction = payload as { type?: number; target?: unknown; x?: number; y?: number };
@@ -379,6 +417,11 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   document.querySelectorAll<HTMLButtonElement>("[data-idle-mode]").forEach((button) => button.onclick = () => {
     const mode = button.dataset.idleMode as IdleMode;
     onIdleModeChange?.(mode, currentSessionTime, playing);
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-camera-mode]").forEach((button) => button.onclick = () => {
+    cameraZoomEnabled = button.dataset.cameraMode === "auto";
+    document.querySelectorAll<HTMLButtonElement>("[data-camera-mode]").forEach((item) => item.classList.toggle("selected", item === button));
+    camera.setEnabled(cameraZoomEnabled);
   });
   document.querySelectorAll<HTMLButtonElement>("[data-speed]").forEach((button) => button.onclick = () => {
     document.querySelector(".speed-control .selected")?.classList.remove("selected");
@@ -408,6 +451,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   const beginScrub = () => {
     if (scrubbing) return;
     scrubbing = true;
+    camera.reset();
     resumeAfterScrub = playing;
     if (playing) pausePlayback();
   };
@@ -1017,10 +1061,100 @@ function spawnClickRipple(replayer: Replayer, interaction: { x?: number; y?: num
   window.setTimeout(() => ripple.remove(), 700);
 }
 function fitReplay(mount: HTMLElement, replayer: Replayer, viewport: { width: number; height: number }) {
-  const scale = Math.min(mount.clientWidth / viewport.width, mount.clientHeight / viewport.height);
+  // The camera owns the wrapper transform; fitReplay only sizes the canvas.
   replayer.wrapper.style.width = `${viewport.width}px`;
   replayer.wrapper.style.height = `${viewport.height}px`;
-  replayer.wrapper.style.transform = `scale(${scale})`;
+}
+function createCamera(mount: HTMLElement, replayer: Replayer, viewport: { width: number; height: number }, lifetime: AbortController) {
+  let enabled = cameraZoomEnabled;
+  let zoom = 1;
+  let targetZoom = 1;
+  let focusX = viewport.width / 2;
+  let focusY = viewport.height / 2;
+  let targetX = focusX;
+  let targetY = focusY;
+  let holdTimer: number | undefined;
+  let frame: number | undefined;
+  let lastTick = 0;
+  const apply = () => {
+    const base = Math.min(mount.clientWidth / viewport.width, mount.clientHeight / viewport.height);
+    // transform-origin is the wrapper center: translating by (center - focus)
+    // in content pixels before scaling lands the focus point mid-stage.
+    replayer.wrapper.style.transform = `scale(${base * zoom}) translate(${viewport.width / 2 - focusX}px, ${viewport.height / 2 - focusY}px)`;
+  };
+  const schedule = () => {
+    if (frame !== undefined || lifetime.signal.aborted) return;
+    lastTick = performance.now();
+    frame = requestAnimationFrame(tick);
+  };
+  const tick = (now: number) => {
+    frame = undefined;
+    const dt = Math.min(0.1, Math.max(0.001, (now - lastTick) / 1000));
+    lastTick = now;
+    const blend = 1 - Math.exp(-CAMERA_EASE_PER_S * dt);
+    zoom += (targetZoom - zoom) * blend;
+    focusX += (targetX - focusX) * blend;
+    focusY += (targetY - focusY) * blend;
+    // Hard clamp at the in-flight zoom so the frame never pans past an edge.
+    const halfW = viewport.width / (2 * zoom);
+    const halfH = viewport.height / (2 * zoom);
+    focusX = clamp(focusX, halfW, viewport.width - halfW);
+    focusY = clamp(focusY, halfH, viewport.height - halfH);
+    apply();
+    if (Math.abs(zoom - targetZoom) > 0.001 || Math.abs(focusX - targetX) > 0.5 || Math.abs(focusY - targetY) > 0.5) schedule();
+  };
+  const setFocusTarget = (x: number, y: number) => {
+    const halfW = viewport.width / (2 * targetZoom);
+    const halfH = viewport.height / (2 * targetZoom);
+    targetX = clamp(x, halfW, viewport.width - halfW);
+    targetY = clamp(y, halfH, viewport.height - halfH);
+  };
+  const zoomOut = () => {
+    targetZoom = 1;
+    setFocusTarget(viewport.width / 2, viewport.height / 2);
+    schedule();
+  };
+  const armHold = () => {
+    if (holdTimer) window.clearTimeout(holdTimer);
+    holdTimer = window.setTimeout(zoomOut, CAMERA_HOLD_MS);
+  };
+  const noteInteraction = (x: number, y: number) => {
+    if (!enabled) return;
+    targetZoom = CAMERA_ZOOM;
+    setFocusTarget(x, y);
+    armHold();
+    schedule();
+  };
+  const trackCursor = (x: number, y: number) => {
+    if (!enabled || targetZoom === 1) return;
+    setFocusTarget(x, y);
+    schedule();
+  };
+  const refreshHold = () => {
+    if (!enabled || targetZoom === 1) return;
+    armHold();
+  };
+  const reset = () => {
+    if (holdTimer) window.clearTimeout(holdTimer);
+    holdTimer = undefined;
+    zoomOut();
+  };
+  const setPlaying = (value: boolean) => {
+    // The hold window is wall-clock; freeze it while paused so a paused
+    // inspection stays framed, and rearm it on resume.
+    if (!value) { if (holdTimer) window.clearTimeout(holdTimer); holdTimer = undefined; }
+    else if (targetZoom > 1) armHold();
+  };
+  const setEnabled = (value: boolean) => {
+    enabled = value;
+    if (!value) reset();
+  };
+  lifetime.signal.addEventListener("abort", () => {
+    if (frame !== undefined) cancelAnimationFrame(frame);
+    if (holdTimer) window.clearTimeout(holdTimer);
+  }, { once: true });
+  apply();
+  return { apply, noteInteraction, trackCursor, refreshHold, reset, setPlaying, setEnabled };
 }
 function isTextEntryTarget(target: EventTarget | null) {
   if (!target || typeof target !== "object" || !("tagName" in target)) return false;

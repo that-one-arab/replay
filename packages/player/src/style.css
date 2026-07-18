@@ -345,6 +345,26 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
   font: 10px "DM Mono";
 }
 .speed-control button.selected { color: #171720; background: #f5f4fa; }
+.camera-control {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px;
+  background: rgba(0, 0, 0, .38);
+  border: 1px solid rgba(255, 255, 255, .2);
+  border-radius: 6px;
+}
+.camera-control > span { padding: 0 4px; color: rgba(255, 255, 255, .55); font: 10px "DM Mono"; }
+.camera-control button {
+  color: rgba(255, 255, 255, .6);
+  background: transparent;
+  border: 0;
+  padding: 4px 7px;
+  border-radius: 4px;
+  cursor: pointer;
+  font: 10px "DM Mono";
+}
+.camera-control button.selected { color: #171720; background: #f5f4fa; }
 .idle-control {
   display: flex;
   align-items: center;
@@ -583,7 +603,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
 @media (max-width: 640px) {
   .caption-card { left: 18px; bottom: 138px; }
   .control-deck { padding: 42px 18px 18px; }
-  .speed-control button, .idle-control button { padding: 4px 5px; }
-  .idle-control > span { display: none; }
+  .speed-control button, .idle-control button, .camera-control button { padding: 4px 5px; }
+  .idle-control > span, .camera-control > span { display: none; }
   .time-readout { min-width: 76px; }
 }
