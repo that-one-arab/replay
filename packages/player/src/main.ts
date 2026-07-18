@@ -26,11 +26,14 @@ const REFRESH_INDICATOR_MS = 1_100;
 const MIN_REFRESH_INDICATOR_MS = 160;
 const MAX_REFRESH_INDICATOR_MS = 1_500;
 const TIMELINE_TOOLTIP_DELAY_MS = 550;
+const CAPTION_LINGER_MS = 4_500;
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 const id = new URLSearchParams(location.search).get("id");
 let activePlayback: AbortController | undefined;
 let currentSessionTime = 0;
+let lastNarrationKey: string | undefined;
+let captionTimer: number | undefined;
 let shareAvailable = false;
 let shareUrl: string | undefined;
 if (!id) renderError("Choose a recording with `rec open <id>`.");
@@ -79,6 +82,7 @@ function maintainReplayLease() {
 async function load(recordingId: string) {
   try {
     currentSessionTime = 0;
+    lastNarrationKey = undefined;
     shareUrl = undefined;
     shareAvailable = await detectShareAvailability();
     const manifest = await request<Manifest>(`/api/sessions/${encodeURIComponent(recordingId)}/manifest`);
@@ -121,7 +125,7 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
   const shareControl = shareAvailable
     ? `<div class="share-control" id="share-control">${shareUrl ? shareResultMarkup(shareUrl) : `<button class="share-button" id="share" type="button">Share</button>`}</div>`
     : "";
-  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption"><strong>Press play to begin</strong><p>The timeline follows the full browser recording.</p></div><section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div><div class="idle-control" role="group" aria-label="Idle handling"><span>Idle</span>${idleControls}</div><b id="idle-summary"></b>${shareControl}</div><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section><div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
+  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div><section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div><div class="idle-control" role="group" aria-label="Idle handling"><span>Idle</span>${idleControls}</div><b id="idle-summary"></b>${shareControl}</div><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section><div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
 }
 
 async function detectShareAvailability() {
@@ -244,6 +248,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     playing = value;
     document.querySelector<HTMLButtonElement>("#play")!.classList.toggle("is-playing", value);
     document.querySelector<HTMLElement>("#stage-status")!.textContent = value ? "Playing" : "Paused";
+    scheduleCaptionFade();
   };
   const hideRefresh = () => {
     if (refreshTimer) window.clearTimeout(refreshTimer);
@@ -353,7 +358,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     if (target && target.id !== segment.id) void replay(manifest, eventSets, duration, target, time, false, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
     else {
       playFrom(time);
-      syncNarration(manifest.markers, time);
+      syncNarration(manifest.markers, time, true);
     }
   });
   document.querySelectorAll<HTMLElement>("[data-segment]").forEach((button) => {
@@ -643,9 +648,13 @@ function installTimelineTooltips() {
   timeline.addEventListener("pointerdown", hide);
 }
 
-function syncNarration(markers: Marker[], time: number) {
+function syncNarration(markers: Marker[], time: number, force = false) {
   const marker = [...markers].reverse().find((item) => item.t_ms <= time + 450);
-  if (marker) setActionCaption(marker.label, marker.note ?? "Narrated journey checkpoint");
+  const key = marker && `${marker.label} ${marker.note ?? ""}`;
+  if (!force && key === lastNarrationKey) return;
+  lastNarrationKey = key;
+  if (marker) setActionCaption(marker.label, marker.note);
+  else document.querySelector("#caption")?.classList.remove("is-visible");
 }
 function sessionDuration(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>) {
   const eventEnd = Math.max(1, ...manifest.segments.map((segment) => {
@@ -739,7 +748,25 @@ function segmentLabel(pageUrl: string) {
     return url.pathname === "/" ? url.host : `${url.host}${url.pathname}`;
   } catch { return pageUrl; }
 }
-function setActionCaption(title: string, copy: string) { document.querySelector<HTMLElement>("#caption strong")!.textContent = title; document.querySelector<HTMLElement>("#caption p")!.textContent = copy; }
+function setActionCaption(title: string, copy?: string) {
+  const caption = document.querySelector<HTMLElement>("#caption");
+  if (!caption) return;
+  caption.querySelector("strong")!.textContent = title;
+  const detail = caption.querySelector("p")!;
+  detail.textContent = copy ?? "";
+  detail.hidden = !copy;
+  caption.classList.add("is-visible");
+  scheduleCaptionFade();
+}
+// While playing, narration behaves like a lower third and yields the stage
+// back after a beat; while paused it stays up for reading.
+function scheduleCaptionFade() {
+  if (captionTimer) window.clearTimeout(captionTimer);
+  captionTimer = undefined;
+  if (!isPlayerPlaying()) return;
+  captionTimer = window.setTimeout(() => document.querySelector("#caption")?.classList.remove("is-visible"), CAPTION_LINGER_MS);
+}
+function isPlayerPlaying() { return document.querySelector("#play")?.classList.contains("is-playing") === true; }
 function isActivityEvent(event: ReplayEvent) {
   // Match rrweb's own user-interaction range: mouse movement/clicks, scrolling,
   // viewport changes, and input count as activity; DOM mutation and narration

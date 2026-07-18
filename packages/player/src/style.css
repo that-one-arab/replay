@@ -140,24 +140,30 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
 .refresh-indicator strong { margin-top: 8px; font-size: 20px; letter-spacing: -.02em; }
 @keyframes rec-spin { to { transform: rotate(360deg); } }
 
-/* Narration caption */
+/* Narration lower third */
 .caption-card {
   position: absolute;
   z-index: 3;
-  left: 50%;
-  bottom: 150px;
-  transform: translateX(-50%);
-  width: min(580px, calc(100vw - 48px));
-  padding: 14px 18px;
-  text-align: center;
-  background: rgba(13, 14, 20, .76);
-  border: 1px solid rgba(196, 189, 255, .36);
+  left: clamp(22px, 5vw, 78px);
+  bottom: 148px;
+  max-width: min(440px, calc(100vw - 44px));
+  padding: 12px 16px;
+  text-align: left;
+  background: rgba(13, 14, 20, .78);
+  border: 1px solid rgba(196, 189, 255, .32);
+  border-left: 3px solid #b7abff;
   border-radius: 10px;
   box-shadow: 0 16px 42px rgba(0, 0, 0, .34);
   backdrop-filter: blur(12px);
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  transition: opacity .25s ease, transform .25s ease;
 }
-.caption-card strong { display: block; color: white; font-size: 14px; }
+.caption-card.is-visible { opacity: 1; transform: translateY(0); pointer-events: auto; }
+.caption-card strong { display: block; color: white; font-size: 13px; }
 .caption-card p { margin: 4px 0 0; color: #c7cad5; font-size: 11px; line-height: 1.45; }
+.caption-card p[hidden] { display: none; }
 
 /* Control deck */
 .control-deck {
@@ -384,7 +390,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
 .error p:last-child { color: #aaa7b6; }
 
 @media (max-width: 640px) {
-  .caption-card { bottom: 138px; }
+  .caption-card { left: 18px; bottom: 138px; }
   .control-deck { padding: 42px 18px 18px; }
   .speed-control button, .idle-control button { padding: 4px 5px; }
   .idle-control > span { display: none; }
