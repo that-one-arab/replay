@@ -41,8 +41,12 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
     assert.equal(await page.locator("#timeline-tooltip").textContent(), "Action confirmed", "a marker takes hover priority and shows only its title");
     assert.equal(await page.locator("[data-idle-range]").first().getAttribute("data-timeline-tooltip"), "Idle time — reduced from 6.2s to 2.0s");
     assert.equal(await page.locator("#idle-summary").textContent(), "2 gaps");
-    assert.equal(await page.locator("#skip").getAttribute("aria-pressed"), "true");
-    assert.match((await page.locator("#skip").textContent()) ?? "", /Cut idle/);
+    assert.equal(await page.locator("[data-idle-mode='cut']").evaluate((element) => element.classList.contains("selected")), true);
+    await page.locator("[data-idle-mode='fast_forward']").click();
+    await page.waitForFunction(() => document.querySelector("[data-idle-mode='fast_forward']")?.classList.contains("selected") === true);
+    assert.equal(await page.locator("[data-idle-range]").first().getAttribute("data-timeline-tooltip"), "Idle time — played at 8× (6.2s recorded)");
+    await page.locator("[data-idle-mode='cut']").click();
+    await page.waitForFunction(() => document.querySelector("[data-idle-mode='cut']")?.classList.contains("selected") === true);
 
     const play = page.getByRole("button", { name: "Play replay" });
     await play.click();
@@ -97,11 +101,11 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
     assert.notEqual(await page.locator("#current-time").textContent(), "0:07");
 
     await page.reload({ waitUntil: "networkidle" });
-    await page.locator("#skip").click();
+    await page.locator("[data-idle-mode='preserve']").click();
     await page.locator("[data-speed='8']").click();
     await page.getByRole("button", { name: "Play replay" }).click();
     await page.waitForTimeout(900);
-    assert.equal(await playbackState(page), "Playing", "disabling Cut idle should retain the long inactive gap");
+    assert.equal(await playbackState(page), "Playing", "Keep idle should retain the long inactive gap");
     await page.locator("[data-marker]").first().click();
     assert.equal(await page.locator("[data-marker]").first().getAttribute("aria-current"), "step", "the selected marker stays visually active");
     assert.equal(await page.locator("#caption strong").textContent(), "Action begins", "selecting a marker updates the narrated chapter");
@@ -121,8 +125,8 @@ test("paused seeks show a recorded navigation only inside its transition interva
     browser = await chromium.launch({ headless: true, executablePath: chrome });
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
     await page.goto(`http://127.0.0.1:${address.port}/replay?id=navigation-window`, { waitUntil: "networkidle" });
-    await page.locator("#skip").click();
-    await page.waitForFunction(() => document.querySelector("#skip")?.getAttribute("aria-pressed") === "false");
+    await page.locator("[data-idle-mode='preserve']").click();
+    await page.waitForFunction(() => document.querySelector("[data-idle-mode='preserve']")?.classList.contains("selected") === true);
     const seek = async (time: number) => page.locator("#scrubber").evaluate((node, value) => {
       const scrubber = node as HTMLInputElement;
       scrubber.value = String(value);

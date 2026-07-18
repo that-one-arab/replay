@@ -6,18 +6,20 @@ type Marker = { t_ms: number; label: string; note?: string; placement?: "after_p
 type Segment = { id: string; page_url: string; clock_offset_ms: number };
 type TabEvent = { t_ms: number; segment_id: string; type: "opened" | "focused" | "closed" };
 type NavigationEvent = { segment_id: string; kind: "reload" | "navigate"; started_at_ms: number; committed_at_ms: number; ready_at_ms: number; from_url: string; to_url: string };
-type Manifest = { id: string; title: string; markers: Marker[]; segments: Segment[]; tab_events?: TabEvent[]; navigation_events?: NavigationEvent[]; raw_duration_ms?: number };
+type IdleMode = "cut" | "fast_forward" | "preserve";
+type ReplayDefaults = { idle_mode: IdleMode; idle_retained_ms: number; idle_fast_forward_speed: number; default_speed: number };
+type Manifest = { id: string; title: string; markers: Marker[]; segments: Segment[]; tab_events?: TabEvent[]; navigation_events?: NavigationEvent[]; raw_duration_ms?: number; replay_defaults?: ReplayDefaults };
 type ReplayEvent = { timestamp: number; type: number; data?: { source?: number; href?: string; width?: number; height?: number; text?: string; id?: number; x?: number; y?: number; recSynthetic?: "approach"; positions?: { x: number; y: number; id?: number; timeOffset?: number }[] } };
 type IdleRange = { start: number; end: number };
-type TimelineIdleRange = IdleRange & { originalDuration: number };
+type TimelineIdleRange = IdleRange & { originalDuration: number; mode: IdleMode; speed: number };
 type PlaybackProjection = { manifest: Manifest; eventSets: Map<string, ReplayEvent[]>; duration: number; activities: number[]; playbackEnd: number; idleRanges: TimelineIdleRange[]; toPlayback(time: number): number; toRaw(time: number): number };
 
 // Keep the default pace in one place so product teams can tune it without
 // changing the replay control behavior.
-const DEFAULT_PLAYBACK_SPEED = 1.25;
+const DEFAULT_PLAYBACK_SPEED = 1.15;
+const DEFAULT_REPLAY_DEFAULTS: ReplayDefaults = { idle_mode: "cut", idle_retained_ms: 2_000, idle_fast_forward_speed: 8, default_speed: DEFAULT_PLAYBACK_SPEED };
 const TAB_FOCUS_DELAY_MS = 700;
 const IDLE_THRESHOLD_MS = 3_000;
-const IDLE_RETAINED_MS = 2_000;
 const RELOAD_CONTEXT_MS = 750;
 const CURSOR_APPROACH_MS = 420;
 const REFRESH_INDICATOR_MS = 1_100;
@@ -41,16 +43,17 @@ async function load(recordingId: string) {
       humanizeEvents(await request<ReplayEvent[]>(`/api/sessions/${encodeURIComponent(manifest.id)}/events?segment=${encodeURIComponent(segment.id)}`)),
     ] as const)));
     const resolvedManifest = { ...manifest, markers: resolveMarkerTimes(manifest, eventSets) };
-    let cuttingIdle = true;
-    let playbackSpeed = DEFAULT_PLAYBACK_SPEED;
+    const replayDefaults = resolvedReplayDefaults(manifest.replay_defaults);
+    let idleMode = replayDefaults.idle_mode;
+    let playbackSpeed = replayDefaults.default_speed;
     const present = async (rawTime = 0, autoplay = false) => {
-      const projection = projectPlayback(resolvedManifest, eventSets, cuttingIdle);
+      const projection = projectPlayback(resolvedManifest, eventSets, idleMode, replayDefaults);
       activePlayback?.abort();
-      renderShell(projection.manifest, cuttingIdle, playbackSpeed);
+      renderShell(projection.manifest, idleMode, replayDefaults, playbackSpeed);
       prepareTimeline(projection.manifest.markers, projection.manifest.navigation_events ?? [], projection.duration, projection.activities, projection.playbackEnd, projection.idleRanges);
       installTimelineTooltips();
-      await replay(projection.manifest, projection.eventSets, projection.duration, projection.manifest.segments[0], projection.toPlayback(rawTime), autoplay, (enabled, requestedTime, shouldAutoplay) => {
-        cuttingIdle = enabled;
+      await replay(projection.manifest, projection.eventSets, projection.duration, projection.manifest.segments[0], projection.toPlayback(rawTime), autoplay, (nextMode, requestedTime, shouldAutoplay) => {
+        idleMode = nextMode;
         void present(projection.toRaw(requestedTime), shouldAutoplay).catch(renderError);
       }, playbackSpeed, (nextSpeed) => { playbackSpeed = nextSpeed; });
     };
@@ -58,17 +61,22 @@ async function load(recordingId: string) {
   } catch (error) { renderError(error instanceof Error ? error.message : String(error)); }
 }
 
-function renderShell(manifest: Manifest, cuttingIdle: boolean, playbackSpeed: number) {
+function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDefaults, playbackSpeed: number) {
   const segmentPicker = manifest.segments.length > 1
     ? `<nav class="segment-picker" aria-label="Recorded browser tabs">${manifest.segments.map((segment, index) => `<div class="segment-tab" data-segment="${escape(segment.id)}" title="Opened at ${format(segment.clock_offset_ms)} — ${escape(segment.page_url)}"${index === 0 ? "" : " hidden"}><span>Tab ${index + 1}</span>${escape(segmentLabel(segment.page_url))}</div>`).join("")}</nav>`
     : "";
-  const speedControls = [0.25, 0.5, DEFAULT_PLAYBACK_SPEED, 2, 4, 8]
+  const speedControls = [...new Set([0.25, 0.5, defaults.default_speed, 2, 4, 8])]
     .map((speed) => `<button data-speed="${speed}"${speed === playbackSpeed ? " class=\"selected\"" : ""}>${speed}×</button>`)
     .join("");
-  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption"><span class="caption-kicker">SESSION REPLAY</span><strong>Press play to begin</strong><p>The timeline follows the full browser recording.</p></div><section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div><button class="skip-button${cuttingIdle ? " active" : ""}" id="skip" aria-label="${cuttingIdle ? "Cut idle time" : "Keep idle time"}" aria-pressed="${cuttingIdle}"><span>✂</span> Cut idle <b id="idle-summary"></b></button></div><div class="timeline-wrap"><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section><div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
+  const idleControls = ([
+    ["cut", "Cut"],
+    ["fast_forward", `${defaults.idle_fast_forward_speed}×`],
+    ["preserve", "Keep"],
+  ] as const).map(([mode, label]) => `<button data-idle-mode="${mode}"${mode === idleMode ? " class=\"selected\"" : ""}>${label}</button>`).join("");
+  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="playback-state"><span></span><b id="stage-status">Paused</b></div>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption"><span class="caption-kicker">SESSION REPLAY</span><strong>Press play to begin</strong><p>The timeline follows the full browser recording.</p></div><section class="control-deck" aria-label="Browser replay controls"><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div><div class="speed-control" role="group" aria-label="Playback speed">${speedControls}</div><div class="idle-control" role="group" aria-label="Idle handling"><span>Idle</span>${idleControls}</div><b id="idle-summary"></b></div><div class="timeline-wrap"><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div></section><div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
 }
 
-async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>, duration: number, segment: Segment | undefined, requestedSessionTime: number, autoplay = false, onCutIdleChange?: (enabled: boolean, requestedTime: number, autoplay: boolean) => void, playbackSpeed = DEFAULT_PLAYBACK_SPEED, onPlaybackSpeedChange?: (speed: number) => void) {
+async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>, duration: number, segment: Segment | undefined, requestedSessionTime: number, autoplay = false, onIdleModeChange?: (mode: IdleMode, requestedTime: number, autoplay: boolean) => void, playbackSpeed = DEFAULT_PLAYBACK_SPEED, onPlaybackSpeedChange?: (speed: number) => void) {
   if (!segment) return;
   activePlayback?.abort();
   const lifetime = new AbortController();
@@ -142,7 +150,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   const togglePlayback = () => {
     if (playing) return pausePlayback();
     if (replayer.getCurrentTime() >= tabDuration - 10) {
-      void replay(manifest, eventSets, duration, manifest.segments[0], 0, true, onCutIdleChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
+      void replay(manifest, eventSets, duration, manifest.segments[0], 0, true, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
       return;
     }
     playFrom(Number(scrubber.value));
@@ -239,9 +247,10 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     setActionCaption(`Clicked ${readableTarget(target)}`, "The selected control is highlighted in the replay.");
   });
   document.querySelector<HTMLButtonElement>("#play")!.onclick = togglePlayback;
-  document.querySelector<HTMLButtonElement>("#skip")!.onclick = () => {
-    onCutIdleChange?.(document.querySelector<HTMLButtonElement>("#skip")!.getAttribute("aria-pressed") !== "true", currentSessionTime, playing);
-  };
+  document.querySelectorAll<HTMLButtonElement>("[data-idle-mode]").forEach((button) => button.onclick = () => {
+    const mode = button.dataset.idleMode as IdleMode;
+    onIdleModeChange?.(mode, currentSessionTime, playing);
+  });
   document.querySelectorAll<HTMLButtonElement>("[data-speed]").forEach((button) => button.onclick = () => {
     document.querySelector(".speed-control .selected")?.classList.remove("selected");
     button.classList.add("selected");
@@ -254,7 +263,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   document.querySelectorAll<HTMLButtonElement>("[data-marker]").forEach((button) => button.onclick = () => {
     const time = Number(button.dataset.marker);
     const target = segmentAtTime(manifest, eventSets, time);
-    if (target && target.id !== segment.id) void replay(manifest, eventSets, duration, target, time, false, onCutIdleChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
+    if (target && target.id !== segment.id) void replay(manifest, eventSets, duration, target, time, false, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
     else {
       playFrom(time);
       syncNarration(manifest.markers, time);
@@ -285,7 +294,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     resumeAfterScrub = false;
     const time = Number(scrubber.value);
     const target = segmentAtTime(manifest, eventSets, time) ?? segment;
-    void replay(manifest, eventSets, duration, target, time, shouldResume, onCutIdleChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
+    void replay(manifest, eventSets, duration, target, time, shouldResume, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
   }, { signal: lifetime.signal });
   const onPlaybackKey = (event: KeyboardEvent) => {
     const isPlaybackKey = event.key === "Enter" || event.key === " " || event.key === "Spacebar" || event.code === "Space";
@@ -338,7 +347,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     bridgingTabs = true;
     tabFocusTimer = undefined;
     updateTimelinePosition(Math.max(focus.t_ms, time));
-    await replay(manifest, eventSets, duration, tab, Math.max(focus.t_ms, time), true, onCutIdleChange, selectedPlaybackSpeed, onPlaybackSpeedChange);
+    await replay(manifest, eventSets, duration, tab, Math.max(focus.t_ms, time), true, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange);
   };
   const announceAndFocusNewTab = (focus: TabEvent, time: number) => {
     if (bridgingTabs) return;
@@ -386,28 +395,30 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   }
 }
 
-function projectPlayback(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>, cuttingIdle: boolean): PlaybackProjection {
+function projectPlayback(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>, idleMode: IdleMode, defaults: ReplayDefaults): PlaybackProjection {
   const playbackEnd = eventEndTime(manifest, eventSets);
   const activities = activityTimes(manifest, eventSets);
   const navigationEvents = resolvedNavigationEvents(manifest, eventSets);
   const rawIdle = idleRanges(activities, playbackEnd);
-  const ranges = cuttingIdle ? rawIdle : [];
+  const scale = (range: IdleRange) => idleScale(range, idleMode, defaults);
   const toPlayback = (time: number) => {
     let removed = 0;
-    for (const range of ranges) {
-      if (time >= range.end) { removed += range.end - range.start - IDLE_RETAINED_MS; continue; }
-      if (time > range.start) return range.start - removed + (time - range.start) * IDLE_RETAINED_MS / (range.end - range.start);
+    for (const range of rawIdle) {
+      const projectedDuration = (range.end - range.start) * scale(range);
+      if (time >= range.end) { removed += range.end - range.start - projectedDuration; continue; }
+      if (time > range.start) return range.start - removed + (time - range.start) * scale(range);
       break;
     }
     return time - removed;
   };
   const toRaw = (time: number) => {
     let removed = 0;
-    for (const range of ranges) {
+    for (const range of rawIdle) {
+      const projectedDuration = (range.end - range.start) * scale(range);
       const compactStart = range.start - removed;
-      const compactEnd = compactStart + IDLE_RETAINED_MS;
-      if (time >= compactEnd) { removed += range.end - range.start - IDLE_RETAINED_MS; continue; }
-      if (time > compactStart) return range.start + (time - compactStart) * (range.end - range.start) / IDLE_RETAINED_MS;
+      const compactEnd = compactStart + projectedDuration;
+      if (time >= compactEnd) { removed += range.end - range.start - projectedDuration; continue; }
+      if (time > compactStart) return range.start + (time - compactStart) / scale(range);
       break;
     }
     return time + removed;
@@ -432,7 +443,7 @@ function projectPlayback(manifest: Manifest, eventSets: Map<string, ReplayEvent[
     const events = source.map((event) => ({ ...event, timestamp: started + toPlayback(originalSegment.clock_offset_ms + event.timestamp - started) - segment.clock_offset_ms }));
     return [segment.id, events] as const;
   }));
-  const projectedIdle = rawIdle.map((range) => ({ start: toPlayback(range.start), end: toPlayback(range.end), originalDuration: range.end - range.start }));
+  const projectedIdle = rawIdle.map((range) => ({ start: toPlayback(range.start), end: toPlayback(range.end), originalDuration: range.end - range.start, mode: idleMode, speed: defaults.idle_fast_forward_speed }));
   return {
     manifest: projectedManifest,
     eventSets: projectedEvents,
@@ -445,6 +456,19 @@ function projectPlayback(manifest: Manifest, eventSets: Map<string, ReplayEvent[
   };
 }
 
+function idleScale(range: IdleRange, mode: IdleMode, defaults: ReplayDefaults) {
+  const duration = range.end - range.start;
+  if (mode === "preserve") return 1;
+  if (mode === "fast_forward") return 1 / defaults.idle_fast_forward_speed;
+  return Math.min(1, defaults.idle_retained_ms / duration);
+}
+
+function resolvedReplayDefaults(value: ReplayDefaults | undefined): ReplayDefaults {
+  if (!value || !["cut", "fast_forward", "preserve"].includes(value.idle_mode)) return DEFAULT_REPLAY_DEFAULTS;
+  if (![value.idle_retained_ms, value.idle_fast_forward_speed, value.default_speed].every((item) => Number.isFinite(item) && item > 0)) return DEFAULT_REPLAY_DEFAULTS;
+  return value;
+}
+
 function prepareTimeline(markers: Marker[], navigationEvents: NavigationEvent[], duration: number, interactions: number[], playbackEnd: number, projectedIdle: TimelineIdleRange[]) {
   const density = document.querySelector<HTMLElement>("#density")!;
   const buckets = Array.from({ length: 72 }, () => 0);
@@ -452,7 +476,11 @@ function prepareTimeline(markers: Marker[], navigationEvents: NavigationEvent[],
   const max = Math.max(1, ...buckets);
   density.innerHTML = buckets.map((count) => `<i data-timeline-tooltip="Recorded activity — ${count ? `${count} event${count === 1 ? "" : "s"}` : "no events"}" style="--level:${Math.max(.08, count / max)}"></i>`).join("");
   document.querySelector<HTMLElement>("#idle-ranges")!.innerHTML = projectedIdle.map((range) => {
-    const label = nearlyEqual(range.originalDuration, range.end - range.start) ? `Idle time — ${formatDuration(range.originalDuration)}` : `Idle time — reduced from ${formatDuration(range.originalDuration)} to ${formatDuration(range.end - range.start)}`;
+    const label = range.mode === "fast_forward"
+      ? `Idle time — played at ${range.speed}× (${formatDuration(range.originalDuration)} recorded)`
+      : nearlyEqual(range.originalDuration, range.end - range.start)
+        ? `Idle time — ${formatDuration(range.originalDuration)} retained`
+        : `Idle time — reduced from ${formatDuration(range.originalDuration)} to ${formatDuration(range.end - range.start)}`;
     return `<i data-idle-range data-timeline-start="${range.start}" data-timeline-end="${range.end}" data-timeline-tooltip="${escape(label)}" style="left:${clamp(range.start / duration * 100, 0, 100)}%;width:${clamp((range.end - range.start) / duration * 100, 0, 100)}%"></i>`;
   }).join("");
   document.querySelector<HTMLElement>("#navigation-events")!.innerHTML = navigationEvents.map((event) => {

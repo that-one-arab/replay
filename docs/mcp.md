@@ -6,7 +6,7 @@ It never exposes the recorder beyond the local machine.
 
 | Tool | Purpose |
 | --- | --- |
-| `recording_browser_ensure` | Launches or reuses Rec's dedicated Chrome and returns its CDP endpoint. |
+| `recording_browser_ensure` | Launches or reuses Rec's configured dedicated Chrome and returns its CDP endpoint. |
 | `recording_attach_browser` | Attaches Rec to an explicitly supplied loopback CDP endpoint; Rec never stops that external browser. |
 | `recording_start` | Starts a recording on an attached browser, but only after a navigated in-scope page exists. |
 | `recording_marker` | Adds an optional labelled checkpoint to the active recording. |
@@ -46,6 +46,12 @@ Rec-managed CDP endpoint. It forwards its stdio unchanged and never proxies or
 implements Playwright tools. By default it runs `npx -y @playwright/mcp@latest`;
 set `REC_PLAYWRIGHT_MCP_COMMAND` and `REC_PLAYWRIGHT_MCP_ARGS` (a JSON string
 array) to use a pinned or locally installed Playwright command instead.
+
+Rec reads browser and replay defaults from its [configuration](configuration.md).
+If a managed browser’s headless mode, viewport, or executable no longer matches,
+`recording_browser_ensure` and `recording_status` report `restart_required`;
+stop that managed browser and start a fresh task. The agent does not need a
+configuration tool or prompt-level recording settings.
 
 `recording_start` rejects an empty browser with guidance to navigate first;
 `recording_stop` rejects an empty capture instead of returning a misleading replay

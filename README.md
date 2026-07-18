@@ -1,8 +1,7 @@
 # rec
 
 Rec lets a coding agent record the browser session it uses to reproduce or verify
-a change, then hand back a local replay link and a portable `.rec` artifact.
-There is no hosted service or sharing layer yet.
+a change, then hand back a replay link and a portable `.rec` artifact.
 
 ## Quick start: Codex
 
@@ -61,8 +60,8 @@ Chrome, choose a port, or describe the recording workflow.
 - A single browser-session timeline, including recorded tabs, focus changes, and
   page reload or navigation transitions.
 - Captured DOM events, markers, and static assets needed for local replay.
-- Idle time reduced by default, plus seeking, speed controls, and keyboard
-  play/pause.
+- Configurable idle treatment (Cut, fast-forward, or Keep), plus seeking, speed
+  controls, and keyboard play/pause.
 
 Passwords are masked. Recordings do not include scripts, API responses, or assets
 larger than 10 MiB.
@@ -79,6 +78,13 @@ larger than 10 MiB.
 
 Do not use Web Preview, Codex's in-app browser, Arc, or a manually opened Chrome
 for a Rec recording; they are not connected to Rec's recorder.
+
+## Configure Rec
+
+Rec can use a visible local Chrome for interactive work or a hidden local Chrome
+for unattended runs. Replay defaults travel with each recording. See
+[configuration](docs/configuration.md) for the TOML file, settings precedence,
+and the required browser restart after changing launch settings.
 
 ## Development and manual use
 
@@ -126,10 +132,11 @@ export REC_SHARE_URL=https://<your-service-domain>
 pnpm rec share <session-id>
 ```
 
-This is an explicit upload after recording stops. The resulting link is currently
-an unlisted bearer link—anyone with it can view the recording—so use only
-non-sensitive recordings. Deployment, agent usage, and limitations are in the
-[Railway sharing guide](docs/phase-4-railway-sharing.md).
+For a coding agent, `recording_stop` uploads automatically when `REC_SHARE_URL`
+is configured. The command above is only a recovery path for an earlier local
+recording. A resulting link is currently an unlisted bearer link—anyone with it
+can view the recording—so use only non-sensitive recordings. Deployment, agent
+usage, and limitations are in the [Railway sharing guide](docs/phase-4-railway-sharing.md).
 
 ## Documentation
 
@@ -137,5 +144,6 @@ non-sensitive recordings. Deployment, agent usage, and limitations are in the
 - [Recording format](docs/format.md)
 - [Portable artifacts: implementation and E2E guide](docs/phase-3-portable-artifacts.md)
 - [Railway share links](docs/phase-4-railway-sharing.md)
+- [Configuration](docs/configuration.md)
 - [Fresh-agent acceptance checklist](docs/phase-2-acceptance.md)
 - [Roadmap](docs/roadmap.md)

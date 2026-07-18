@@ -2,8 +2,9 @@
 
 ## Status
 
-Deferred. This plan defines a configuration system for a later phase; it does
-not change current Rec behavior.
+Implemented. The first configuration release covers the typed TOML loader,
+browser launch settings, replay defaults persisted in recordings, the player’s
+three idle modes, CLI diagnostics, and agent/launcher integration.
 
 ## Objective
 
