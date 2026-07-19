@@ -121,8 +121,11 @@ function togglePanel() {
     panel.querySelector<HTMLTextAreaElement>(".chat-composer textarea")?.focus();
   }
   syncToggles();
-  // The stage width changed; let fitReplay and the camera re-measure.
+  // The stage width changes over a CSS transition; re-measure both now and once
+  // it settles so the replay shrinks into its column instead of staying wide and
+  // slipping behind the panel.
   window.dispatchEvent(new Event("resize"));
+  window.setTimeout(() => window.dispatchEvent(new Event("resize")), 260);
 }
 
 function syncToggles() {
