@@ -2,31 +2,15 @@ import { Replayer } from "@rrweb/replay";
 import "rrweb/dist/style.css";
 import "./style.css";
 import { closeChat, initChat, registerReplayControl, wireChatToggle } from "./chat.js";
+import { EventType, IncrementalSource, MouseInteraction, type IdleMode, type Manifest, type Marker, type NavigationEvent, type ReplayDefaults, type ReplayEvent, type Segment, type TabEvent, type TimelineIdleRange } from "./types.js";
+import { clamp, escape, format, formatDuration, nearlyEqual } from "./format.js";
+import { CURSOR_APPROACH_MS, humanizeEvents, isRealPoint, withCursorLeadIns } from "./humanize.js";
+import { RELOAD_CONTEXT_MS, closedAt, nextFocusForSegment, recordingViewport, resolveMarkerTimes, segmentAtTime, segmentLabel, sessionEventTime, tabEvents } from "./manifest.js";
+import { DEFAULT_PLAYBACK_SPEED, projectPlayback, resolvedReplayDefaults } from "./projection.js";
+import { createCamera } from "./camera.js";
+import { elementCenter, isElementLike, makeCursorPlacer, revealCursorOnFirstMove, spawnClickRipple } from "./cursor.js";
 
-type Marker = { t_ms: number; label: string; note?: string; placement?: "after_previous" | "before_next"; color?: "yellow" | "green" };
-type Segment = { id: string; page_url: string; clock_offset_ms: number };
-type TabEvent = { t_ms: number; segment_id: string; type: "opened" | "focused" | "closed" };
-type NavigationEvent = { segment_id: string; kind: "reload" | "navigate"; started_at_ms: number; committed_at_ms: number; ready_at_ms: number; from_url: string; to_url: string };
-type IdleMode = "cut" | "fast_forward" | "preserve";
-type ReplayDefaults = { idle_mode: IdleMode; idle_retained_ms: number; idle_fast_forward_speed: number; default_speed: number };
-type Manifest = { id: string; title: string; created_at?: string; outcome?: string; notes?: string; markers: Marker[]; segments: Segment[]; tab_events?: TabEvent[]; navigation_events?: NavigationEvent[]; raw_duration_ms?: number; replay_defaults?: ReplayDefaults };
-type ReplayEvent = { timestamp: number; type: number; data?: { source?: number; type?: number; href?: string; width?: number; height?: number; text?: string; id?: number; x?: number; y?: number; recSynthetic?: "approach"; tag?: string; positions?: { x: number; y: number; id?: number; timeOffset?: number }[] } };
-type IdleRange = { start: number; end: number };
-type TimelineIdleRange = IdleRange & { originalDuration: number; mode: IdleMode; speed: number };
-type PlaybackProjection = { manifest: Manifest; eventSets: Map<string, ReplayEvent[]>; duration: number; activities: number[]; playbackEnd: number; idleRanges: TimelineIdleRange[]; toPlayback(time: number): number; toRaw(time: number): number };
-
-// Keep the default pace in one place so product teams can tune it without
-// changing the replay control behavior.
-const DEFAULT_PLAYBACK_SPEED = 1.15;
-const DEFAULT_REPLAY_DEFAULTS: ReplayDefaults = { idle_mode: "cut", idle_retained_ms: 2_000, idle_fast_forward_speed: 8, default_speed: DEFAULT_PLAYBACK_SPEED };
 const TAB_FOCUS_DELAY_MS = 700;
-const IDLE_THRESHOLD_MS = 3_000;
-const RELOAD_CONTEXT_MS = 750;
-const CURSOR_APPROACH_MS = 420;
-// Beat the synthetic cursor rests on its target after arriving, before the
-// action fires — enough room to read "it's here, about to act."
-const CURSOR_DWELL_MS = 320;
-const KEYSTROKE_PACE_MS = 85;
 const REFRESH_INDICATOR_MS = 1_100;
 const MIN_REFRESH_INDICATOR_MS = 160;
 const MAX_REFRESH_INDICATOR_MS = 1_500;
@@ -41,9 +25,6 @@ const SEEK_STEP_MS = 5_000;
 // marker we're sitting on so an upcoming marker stays reachable.
 const MARKER_BACK_BUFFER_MS = 600;
 const MARKER_FWD_SLOP_MS = 60;
-const CAMERA_ZOOM = 1.45;
-const CAMERA_HOLD_MS = 3_800;
-const CAMERA_EASE_PER_S = 4.2;
 // Camera inputs arriving from rrweb's seek reconstruction are historical; only
 // events cast near the live playhead may steer the camera.
 const CAMERA_SYNC_WINDOW_MS = 800;
@@ -160,10 +141,17 @@ async function load(recordingId: string) {
       wireChapters();
       wireSessionCards();
       wireDeckMenus();
-      await replay(projection.manifest, projection.eventSets, projection.duration, projection.manifest.segments[0], projection.toPlayback(rawTime), autoplay, (nextMode, requestedTime, shouldAutoplay) => {
-        idleMode = nextMode;
-        void present(projection.toRaw(requestedTime), shouldAutoplay).catch(renderError);
-      }, playbackSpeed, (nextSpeed) => { playbackSpeed = nextSpeed; });
+      const session: ReplaySession = {
+        manifest: projection.manifest,
+        eventSets: projection.eventSets,
+        duration: projection.duration,
+        onIdleModeChange: (nextMode, requestedTime, shouldAutoplay) => {
+          idleMode = nextMode;
+          void present(projection.toRaw(requestedTime), shouldAutoplay).catch(renderError);
+        },
+        onPlaybackSpeedChange: (nextSpeed) => { playbackSpeed = nextSpeed; },
+      };
+      await replay(session, projection.manifest.segments[0], projection.toPlayback(rawTime), autoplay, playbackSpeed);
     };
     await present();
   } catch (error) { renderError(error instanceof Error ? error.message : String(error)); }
@@ -266,7 +254,19 @@ function shareResultMarkup(url: string) {
   return `<a class="share-link" href="${escape(url)}" target="_blank" rel="noopener" title="${escape(url)}">${escape(url)}</a><button class="share-button" id="share-copy" type="button">Copy</button>`;
 }
 
-async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>, duration: number, segment: Segment | undefined, requestedSessionTime: number, autoplay = false, onIdleModeChange?: (mode: IdleMode, requestedTime: number, autoplay: boolean) => void, playbackSpeed = DEFAULT_PLAYBACK_SPEED, onPlaybackSpeedChange?: (speed: number) => void) {
+// One replay() invocation owns one rrweb Replayer over one segment; seeks, tab
+// switches, and idle-mode changes tear it down and start a fresh one. The
+// session carries everything that survives those restarts.
+type ReplaySession = {
+  manifest: Manifest;
+  eventSets: Map<string, ReplayEvent[]>;
+  duration: number;
+  onIdleModeChange?: (mode: IdleMode, requestedTime: number, autoplay: boolean) => void;
+  onPlaybackSpeedChange?: (speed: number) => void;
+};
+
+async function replay(session: ReplaySession, segment: Segment | undefined, requestedSessionTime: number, autoplay = false, playbackSpeed = DEFAULT_PLAYBACK_SPEED) {
+  const { manifest, eventSets, duration, onIdleModeChange, onPlaybackSpeedChange } = session;
   if (!segment) return;
   activePlayback?.abort();
   const lifetime = new AbortController();
@@ -286,9 +286,9 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   // pointer data at all, drive the cursor ourselves from the element each
   // interaction resolves to, and feed the replayer lead-in cues so the cursor
   // arrives as the action fires. Recordings with real coordinates keep rrweb's.
-  const syntheticCursor = !events.some((event) => event.type === 3 && (
-    (event.data?.source === 1 && (event.data.positions?.length ?? 0) > 0) ||
-    (event.data?.source === 2 && isRealPoint(event.data.x, event.data.y))
+  const syntheticCursor = !events.some((event) => event.type === EventType.IncrementalSnapshot && (
+    (event.data?.source === IncrementalSource.MouseMove && (event.data.positions?.length ?? 0) > 0) ||
+    (event.data?.source === IncrementalSource.MouseInteraction && isRealPoint(event.data.x, event.data.y))
   ));
   const replayEvents = syntheticCursor ? withCursorLeadIns(events) : events;
   const replayer = new Replayer(replayEvents as never[], {
@@ -304,10 +304,10 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     }] as never[],
     insertStyleRules: [".rec-focus-target{outline:2px solid rgba(105,86,255,.9)!important;outline-offset:3px!important;box-shadow:0 0 0 6px rgba(105,86,255,.16)!important;border-radius:4px!important}"]
   });
-  fitReplay(mount, replayer, viewport);
-  const camera = createCamera(mount, replayer, viewport, lifetime);
+  fitReplay(replayer, viewport);
+  const camera = createCamera(mount, replayer, viewport, lifetime, cameraZoomEnabled);
   revealCursorOnFirstMove(replayer, lifetime);
-  window.addEventListener("resize", () => { fitReplay(mount, replayer, viewport); camera.apply(); }, { signal: lifetime.signal });
+  window.addEventListener("resize", () => { fitReplay(replayer, viewport); camera.apply(); }, { signal: lifetime.signal });
   const moveCursor = makeCursorPlacer(replayer);
   let playing = false;
   let scrubbing = false;
@@ -358,7 +358,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   const togglePlayback = () => {
     if (playing) return pausePlayback();
     if (replayer.getCurrentTime() >= tabDuration - 10) {
-      void replay(manifest, eventSets, duration, manifest.segments[0], 0, true, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
+      void replay(session, manifest.segments[0], 0, true, selectedPlaybackSpeed).catch(renderError);
       return;
     }
     playFrom(Number(scrubber.value));
@@ -405,11 +405,8 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
       hideRefresh();
     }, duration);
   };
-  // A local reload commonly finishes in a few milliseconds. Preserve that
-  // exact span in the manifest, but give it a short, explicit presentation
-  // tail so viewers can seek to the transition and understand what happened.
-  // Idle projection retains this same context, keeping the timeline and the
-  // overlay on one shared interval.
+  // Idle projection retains the same post-navigation context window, keeping
+  // the timeline and the overlay on one shared interval.
   const navigationPresentationEnd = (event: NavigationEvent) => Math.min(duration, event.ready_at_ms + RELOAD_CONTEXT_MS);
   const activeNavigationAt = (time: number) => navigationEvents.find((event) => event.started_at_ms <= time && time <= navigationPresentationEnd(event));
   const syncNavigationAt = (time: number, pinned: boolean) => {
@@ -466,13 +463,13 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   replayer.on("event-cast", (payload: unknown) => {
     if (!cameraFeature) return;
     const event = payload as ReplayEvent;
-    if (event.type !== 3 || !event.data) return;
+    if (event.type !== EventType.IncrementalSnapshot || !event.data) return;
     const eventTime = sessionEventTime(event, events, tabStart);
     if (eventTime === undefined || Math.abs(eventTime - currentSessionTime) > CAMERA_SYNC_WINDOW_MS) return;
     const data = event.data;
-    if (data.source === 2 && (data.type === 2 || data.type === 4) && isRealPoint(data.x, data.y)) camera.noteInteraction(data.x!, data.y!);
-    else if (data.source === 1) { const position = data.positions?.at(-1); if (position) camera.trackCursor(position.x, position.y); }
-    else if (data.source === 5) camera.refreshHold();
+    if (data.source === IncrementalSource.MouseInteraction && (data.type === MouseInteraction.Click || data.type === MouseInteraction.DblClick) && isRealPoint(data.x, data.y)) camera.noteInteraction(data.x!, data.y!);
+    else if (data.source === IncrementalSource.MouseMove) { const position = data.positions?.at(-1); if (position) camera.trackCursor(position.x, position.y); }
+    else if (data.source === IncrementalSource.Input) camera.refreshHold();
   });
   // The lead-in cue: glide the synthetic cursor to the upcoming target so it is
   // arriving as the interaction fires. rrweb skips custom events while seeking,
@@ -480,7 +477,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   replayer.on("custom-event", (payload: unknown) => {
     if (!syntheticCursor) return;
     const event = payload as ReplayEvent;
-    if (event.type !== 5 || event.data?.tag !== "rec-cursor" || typeof event.data.id !== "number") return;
+    if (event.type !== EventType.Custom || event.data?.tag !== "rec-cursor" || typeof event.data.id !== "number") return;
     const center = elementCenter(replayer.getMirror().getNode(event.data.id));
     if (!center) return;
     // Match the glide to the wall-clock gap before the interaction (~the lead
@@ -490,9 +487,8 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   });
   replayer.on("mouse-interaction", (payload: unknown) => {
     const interaction = payload as { type?: number; target?: unknown };
-    // 2 = click, 4 = double click, 5 = focus in rrweb's MouseInteractions enum.
-    const isClick = interaction.type === 2 || interaction.type === 4;
-    const isFocus = interaction.type === 5;
+    const isClick = interaction.type === MouseInteraction.Click || interaction.type === MouseInteraction.DblClick;
+    const isFocus = interaction.type === MouseInteraction.Focus;
     if (!isClick && !isFocus) return;
     const point = syntheticCursor ? elementCenter(interaction.target) : undefined;
     // Re-assert the exact landing after rrweb re-parks the cursor at (0,0) on
@@ -534,7 +530,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     setEndCard(false);
     const time = Number(button.dataset.marker ?? button.dataset.chapter);
     const target = segmentAtTime(manifest, eventSets, time);
-    if (target && target.id !== segment.id) void replay(manifest, eventSets, duration, target, time, false, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
+    if (target && target.id !== segment.id) void replay(session, target, time, false, selectedPlaybackSpeed).catch(renderError);
     else {
       playFrom(time);
       syncNarration(manifest.markers, time, true);
@@ -568,14 +564,14 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     resumeAfterScrub = false;
     const time = Number(scrubber.value);
     const target = segmentAtTime(manifest, eventSets, time) ?? segment;
-    void replay(manifest, eventSets, duration, target, time, shouldResume, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
+    void replay(session, target, time, shouldResume, selectedPlaybackSpeed).catch(renderError);
   }, { signal: lifetime.signal });
   const jumpTo = (time: number) => {
     dismissIntro();
     setEndCard(false);
     const clamped = clamp(time, 0, duration);
     const target = segmentAtTime(manifest, eventSets, clamped) ?? segment;
-    void replay(manifest, eventSets, duration, target, clamped, playing, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange).catch(renderError);
+    void replay(session, target, clamped, playing, selectedPlaybackSpeed).catch(renderError);
   };
   const seekBy = (delta: number) => jumpTo(currentSessionTime + delta);
   // Arrow keys hop between chapter markers so viewers land on the moments that
@@ -663,7 +659,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     bridgingTabs = true;
     tabFocusTimer = undefined;
     updateTimelinePosition(Math.max(focus.t_ms, time));
-    await replay(manifest, eventSets, duration, tab, Math.max(focus.t_ms, time), true, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange);
+    await replay(session, tab, Math.max(focus.t_ms, time), true, selectedPlaybackSpeed);
   };
   const announceAndFocusNewTab = (focus: TabEvent, time: number) => {
     if (bridgingTabs) return;
@@ -712,7 +708,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
       setEndCard(false);
       const projected = clamp(rawToPlayback(rawMs), 0, duration);
       const target = segmentAtTime(manifest, eventSets, projected) ?? segment;
-      await replay(manifest, eventSets, duration, target, projected, play, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange);
+      await replay(session, target, projected, play, selectedPlaybackSpeed);
       syncNarration(manifest.markers, projected, true);
       return `Playhead moved to recording time ${format(rawMs)} (${play ? "playing" : "paused"}). The viewer is now looking at this moment.`;
     },
@@ -752,7 +748,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     },
   });
   syncNarration(manifest.markers, requestedSessionTime);
-  const openingFrame = Math.max(0, (events.find((event) => event.type === 2)?.timestamp ?? events[0].timestamp) - events[0].timestamp);
+  const openingFrame = Math.max(0, (events.find((event) => event.type === EventType.FullSnapshot)?.timestamp ?? events[0].timestamp) - events[0].timestamp);
   const localTime = clamp(requestedSessionTime - tabStart, openingFrame, tabDuration);
   if (autoplay) playFrom(tabStart + localTime);
   else {
@@ -760,80 +756,6 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     updateTimelinePosition(tabStart + localTime);
     syncNavigationAt(tabStart + localTime, true);
   }
-}
-
-function projectPlayback(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>, idleMode: IdleMode, defaults: ReplayDefaults): PlaybackProjection {
-  const playbackEnd = eventEndTime(manifest, eventSets);
-  const activities = activityTimes(manifest, eventSets);
-  const navigationEvents = resolvedNavigationEvents(manifest, eventSets);
-  const rawIdle = idleRanges(activities, playbackEnd);
-  const scale = (range: IdleRange) => idleScale(range, idleMode, defaults);
-  const toPlayback = (time: number) => {
-    let removed = 0;
-    for (const range of rawIdle) {
-      const projectedDuration = (range.end - range.start) * scale(range);
-      if (time >= range.end) { removed += range.end - range.start - projectedDuration; continue; }
-      if (time > range.start) return range.start - removed + (time - range.start) * scale(range);
-      break;
-    }
-    return time - removed;
-  };
-  const toRaw = (time: number) => {
-    let removed = 0;
-    for (const range of rawIdle) {
-      const projectedDuration = (range.end - range.start) * scale(range);
-      const compactStart = range.start - removed;
-      const compactEnd = compactStart + projectedDuration;
-      if (time >= compactEnd) { removed += range.end - range.start - projectedDuration; continue; }
-      if (time > compactStart) return range.start + (time - compactStart) / scale(range);
-      break;
-    }
-    return time + removed;
-  };
-  const projectedManifest: Manifest = {
-    ...manifest,
-    raw_duration_ms: toPlayback(playbackEnd),
-    segments: manifest.segments.map((segment) => ({ ...segment, clock_offset_ms: toPlayback(segment.clock_offset_ms) })),
-    tab_events: manifest.tab_events?.map((event) => ({ ...event, t_ms: toPlayback(event.t_ms) })),
-    navigation_events: navigationEvents.map((event) => ({
-      ...event,
-      started_at_ms: toPlayback(event.started_at_ms),
-      committed_at_ms: toPlayback(event.committed_at_ms),
-      ready_at_ms: toPlayback(event.ready_at_ms),
-    })),
-    markers: manifest.markers.map((marker) => ({ ...marker, t_ms: toPlayback(marker.t_ms) })),
-  };
-  const projectedEvents = new Map(projectedManifest.segments.map((segment) => {
-    const source = eventSets.get(segment.id) ?? [];
-    const originalSegment = manifest.segments.find((item) => item.id === segment.id)!;
-    const started = source[0]?.timestamp ?? 0;
-    const events = source.map((event) => ({ ...event, timestamp: started + toPlayback(originalSegment.clock_offset_ms + event.timestamp - started) - segment.clock_offset_ms }));
-    return [segment.id, events] as const;
-  }));
-  const projectedIdle = rawIdle.map((range) => ({ start: toPlayback(range.start), end: toPlayback(range.end), originalDuration: range.end - range.start, mode: idleMode, speed: defaults.idle_fast_forward_speed }));
-  return {
-    manifest: projectedManifest,
-    eventSets: projectedEvents,
-    duration: toPlayback(playbackEnd),
-    activities: activities.map(toPlayback),
-    playbackEnd: toPlayback(playbackEnd),
-    idleRanges: projectedIdle,
-    toPlayback,
-    toRaw,
-  };
-}
-
-function idleScale(range: IdleRange, mode: IdleMode, defaults: ReplayDefaults) {
-  const duration = range.end - range.start;
-  if (mode === "preserve") return 1;
-  if (mode === "fast_forward") return 1 / defaults.idle_fast_forward_speed;
-  return Math.min(1, defaults.idle_retained_ms / duration);
-}
-
-function resolvedReplayDefaults(value: ReplayDefaults | undefined): ReplayDefaults {
-  if (!value || !["cut", "fast_forward", "preserve"].includes(value.idle_mode)) return DEFAULT_REPLAY_DEFAULTS;
-  if (![value.idle_retained_ms, value.idle_fast_forward_speed, value.default_speed].every((item) => Number.isFinite(item) && item > 0)) return DEFAULT_REPLAY_DEFAULTS;
-  return value;
 }
 
 function prepareTimeline(markers: Marker[], navigationEvents: NavigationEvent[], duration: number, interactions: number[], playbackEnd: number, projectedIdle: TimelineIdleRange[]) {
@@ -998,77 +920,13 @@ function installTimelineTooltips() {
 
 function syncNarration(markers: Marker[], time: number, force = false) {
   const marker = [...markers].reverse().find((item) => item.t_ms <= time + 450);
-  const key = marker && `${marker.label} ${marker.note ?? ""}`;
+  // A NUL separator no page text can contain, so the pair ("a", "bc") never
+  // collides with ("ab", "c").
+  const key = marker && `${marker.label}\u0000${marker.note ?? ""}`;
   if (!force && key === lastNarrationKey) return;
   lastNarrationKey = key;
   if (marker) setActionCaption(marker.label, marker.note);
   else document.querySelector("#caption")?.classList.remove("is-visible");
-}
-function sessionDuration(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>) {
-  const eventEnd = Math.max(1, ...manifest.segments.map((segment) => {
-    const events = eventSets.get(segment.id) ?? [];
-    return segment.clock_offset_ms + Math.max(0, (events.at(-1)?.timestamp ?? 0) - (events[0]?.timestamp ?? 0));
-  }));
-  return Math.max(manifest.raw_duration_ms ?? 0, eventEnd);
-}
-function activityTimes(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>) {
-  const interactions = manifest.segments.flatMap((segment) => segmentActivityTimes(eventSets.get(segment.id) ?? [], segment.clock_offset_ms));
-  const end = eventEndTime(manifest, eventSets);
-  const navigationContext = resolvedNavigationEvents(manifest, eventSets).flatMap((event) => [
-    clamp(event.started_at_ms - RELOAD_CONTEXT_MS, 0, end),
-    clamp(event.ready_at_ms + RELOAD_CONTEXT_MS, 0, end),
-  ]);
-  return [...interactions, ...navigationContext];
-}
-function segmentActivityTimes(events: ReplayEvent[], clockOffsetMs: number) {
-  const started = events[0]?.timestamp ?? 0;
-  return [clockOffsetMs, ...events.filter(isActivityEvent).map((event) => clockOffsetMs + event.timestamp - started)];
-}
-function resolvedNavigationEvents(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>): NavigationEvent[] {
-  if (manifest.navigation_events?.length) return manifest.navigation_events;
-  // Recordings made before first-class navigation capture retain the former
-  // meta-event fallback. It is converted once into timeline metadata so the
-  // player never reacts to rrweb's seek reconstruction events.
-  return manifest.segments.flatMap((segment) => {
-    const events = eventSets.get(segment.id) ?? [];
-    const started = events[0]?.timestamp ?? 0;
-    const firstNavigation = events.find((event) => event.type === 4)?.timestamp;
-    return events.filter((event) => event.type === 4 && event.timestamp > (firstNavigation ?? Infinity)).map((event) => {
-      const time = segment.clock_offset_ms + event.timestamp - started;
-      const href = typeof event.data?.href === "string" ? event.data.href : segment.page_url;
-      return { segment_id: segment.id, kind: "reload" as const, started_at_ms: time, committed_at_ms: time, ready_at_ms: time, from_url: href, to_url: href };
-    });
-  });
-}
-function eventEndTime(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>) {
-  return Math.max(0, ...manifest.segments.map((segment) => {
-    const events = eventSets.get(segment.id) ?? [];
-    const started = events[0]?.timestamp ?? 0;
-    return segment.clock_offset_ms + Math.max(0, (events.at(-1)?.timestamp ?? started) - started);
-  }));
-}
-function resolveMarkerTimes(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>) {
-  const steps = manifest.segments.flatMap((segment) => {
-    const events = eventSets.get(segment.id) ?? [];
-    const started = events[0]?.timestamp ?? 0;
-    return events.filter((event, index) => isMarkerStep(event, index)).map((event) => segment.clock_offset_ms + event.timestamp - started);
-  }).sort((left, right) => left - right);
-  return manifest.markers.map((marker) => {
-    const related = marker.placement === "before_next"
-      ? steps.find((time) => time >= marker.t_ms)
-      : [...steps].reverse().find((time) => time <= marker.t_ms);
-    return related === undefined ? marker : { ...marker, t_ms: related };
-  });
-}
-function segmentAtTime(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>, time: number) {
-  const focused = [...tabEvents(manifest)].reverse().find((event) => event.type === "focused" && event.t_ms <= time && !closedAt(manifest, event.segment_id, time));
-  const focusedSegment = manifest.segments.find((segment) => segment.id === focused?.segment_id);
-  if (focusedSegment) return focusedSegment;
-  return [...manifest.segments].sort((left, right) => right.clock_offset_ms - left.clock_offset_ms).find((segment) => {
-    const events = eventSets.get(segment.id) ?? [];
-    const end = segment.clock_offset_ms + Math.max(0, (events.at(-1)?.timestamp ?? 0) - (events[0]?.timestamp ?? 0));
-    return time >= segment.clock_offset_ms && time <= end && !closedAt(manifest, segment.id, time);
-  });
 }
 function revealTabs(manifest: Manifest, time: number) {
   document.querySelectorAll<HTMLElement>("[data-segment]").forEach((button) => {
@@ -1076,25 +934,6 @@ function revealTabs(manifest: Manifest, time: number) {
     const openedAt = tabEvents(manifest).find((event) => event.type === "opened" && event.segment_id === segment?.id)?.t_ms ?? segment?.clock_offset_ms ?? 0;
     button.hidden = Boolean(segment && (openedAt > time || closedAt(manifest, segment.id, time)));
   });
-}
-function tabEvents(manifest: Manifest) {
-  if (manifest.tab_events?.length) return [...manifest.tab_events].sort((left, right) => left.t_ms - right.t_ms);
-  return manifest.segments.flatMap((segment) => [
-    { type: "opened" as const, segment_id: segment.id, t_ms: segment.clock_offset_ms },
-    { type: "focused" as const, segment_id: segment.id, t_ms: segment.clock_offset_ms },
-  ]);
-}
-function nextFocusForSegment(manifest: Manifest, segmentId: string, after: number) {
-  return tabEvents(manifest).find((event) => event.type === "focused" && event.segment_id !== segmentId && event.t_ms > after);
-}
-function closedAt(manifest: Manifest, segmentId: string, time: number) {
-  return tabEvents(manifest).some((event) => event.type === "closed" && event.segment_id === segmentId && event.t_ms <= time);
-}
-function segmentLabel(pageUrl: string) {
-  try {
-    const url = new URL(pageUrl);
-    return url.pathname === "/" ? url.host : `${url.host}${url.pathname}`;
-  } catch { return pageUrl; }
 }
 function setActionCaption(title: string, copy?: string) {
   const caption = document.querySelector<HTMLElement>("#caption");
@@ -1138,339 +977,10 @@ function toggleFullscreen() {
   if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
   else void document.documentElement.requestFullscreen().catch(() => undefined);
 }
-function isActivityEvent(event: ReplayEvent) {
-  // Match rrweb's own user-interaction range: mouse movement/clicks, scrolling,
-  // viewport changes, and input count as activity; DOM mutation and narration
-  // markers do not keep an idle gap alive.
-  return event.type === 3 && ((event.data?.source ?? -1) > 1 && (event.data?.source ?? Infinity) <= 5 || event.data?.recSynthetic === "approach");
-}
-function isMarkerStep(event: ReplayEvent, index: number) {
-  // Mouse moves describe travel, not an explanation-worthy step. Buttons,
-  // input, navigation, and rebuilt documents are visible state transitions.
-  if (event.type === 3) return event.data?.source === 2 || event.data?.source === 5 || event.data?.source === 0;
-  return index > 0 && (event.type === 2 || event.type === 4);
-}
-function humanizeEvents(events: ReplayEvent[]) {
-  const output: ReplayEvent[] = [];
-  let addedDelay = 0;
-  let lastEmittedAt = -Infinity;
-  let cursor: { x: number; y: number; t: number } | undefined;
-  // rrweb stores an input's full cumulative value on every keystroke. Remember
-  // the last value per field so a stream of per-keystroke events can be paced
-  // in place instead of re-dramatized from the first character.
-  const lastInput = new Map<number, { text: string; nextSlot: number }>();
-  for (const event of events) {
-    // Playwright's raw move stream often represents instantaneous driver jumps,
-    // not a useful human gesture. Reconstruct that gesture from actual targets.
-    if (event.type === 3 && event.data?.source === 1) continue;
-    const adjusted = { ...event, timestamp: event.timestamp + addedDelay, data: event.data ? { ...event.data } : undefined };
-    const pointer = pointerPosition(adjusted);
-    // The first pointer position has no visible origin to travel from — the
-    // cursor fades in on target instead of flying in from the page corner.
-    if (isDirectPointerInteraction(adjusted) && pointer && cursor && adjusted.timestamp - cursor.t >= 280) {
-      const approachAt = Math.max(lastEmittedAt + 1, adjusted.timestamp - CURSOR_APPROACH_MS);
-      if (approachAt < adjusted.timestamp - 45) {
-        // A single endpoint still lets rrweb paint the cursor directly on the
-        // target. Give it a short, timed path instead, continuing from the
-        // prior target.
-        const origin = cursor;
-        const steps = 8;
-        const positions = Array.from({ length: steps }, (_, index) => {
-          const progress = index / (steps - 1);
-          const eased = progress < 0.5
-            ? 4 * progress ** 3
-            : 1 - (-2 * progress + 2) ** 3 / 2;
-          return {
-            x: origin.x + (pointer.x - origin.x) * eased,
-            y: origin.y + (pointer.y - origin.y) * eased,
-            id: pointer.id,
-            timeOffset: Math.round(progress * CURSOR_APPROACH_MS),
-          };
-        });
-        output.push({ type: 3, timestamp: approachAt, data: { source: 1, recSynthetic: "approach", positions } });
-        lastEmittedAt = approachAt;
-        cursor = { ...pointer, t: adjusted.timestamp };
-      }
-    }
-    const typedText = typeableFill(adjusted);
-    if (typedText !== undefined) {
-      const id = adjusted.data!.id;
-      const prior = typeof id === "number" ? lastInput.get(id) : undefined;
-      // Incremental typing: this event is the previous value plus one or more
-      // characters. rrweb already has the right cumulative value, so just pace
-      // it onto the keystroke cadence. Splitting from the first character here
-      // is what visibly deletes and retypes the field on every keystroke.
-      const added = prior && typedText.startsWith(prior.text) ? Array.from(typedText).length - Array.from(prior.text).length : 0;
-      if (prior && added > 0) {
-        const stepAt = Math.max(adjusted.timestamp, prior.nextSlot);
-        addedDelay += Math.max(0, stepAt - adjusted.timestamp);
-        output.push({ ...adjusted, timestamp: stepAt });
-        lastEmittedAt = stepAt;
-        prior.text = typedText;
-        prior.nextSlot = stepAt + added * KEYSTROKE_PACE_MS;
-        continue;
-      }
-      if (isVisibleShortFill(adjusted)) {
-        // A batch fill (paste or a single insertText) arrives with the whole
-        // value at once; dramatize it character by character from an empty field.
-        const characters = Array.from(typedText);
-        let slot = adjusted.timestamp;
-        for (let index = 0; index < characters.length; index += 1) {
-          const typed = characters.slice(0, index + 1).join("");
-          slot = adjusted.timestamp + (index + 1) * KEYSTROKE_PACE_MS;
-          output.push({ ...adjusted, timestamp: slot, data: { ...adjusted.data, text: typed } });
-        }
-        addedDelay += characters.length * KEYSTROKE_PACE_MS;
-        lastEmittedAt = slot;
-        if (typeof id === "number") lastInput.set(id, { text: typedText, nextSlot: slot + KEYSTROKE_PACE_MS });
-        continue;
-      }
-      // Lone keystrokes (one or two characters) and checkbox "on" values pass
-      // through unchanged, but the value is still remembered so the next
-      // keystroke is recognized as incremental.
-      output.push(adjusted);
-      lastEmittedAt = adjusted.timestamp;
-      if (typeof id === "number") lastInput.set(id, { text: typedText, nextSlot: adjusted.timestamp + KEYSTROKE_PACE_MS });
-      continue;
-    }
-    output.push(adjusted);
-    lastEmittedAt = adjusted.timestamp;
-    if (pointer) cursor = { ...pointer, t: adjusted.timestamp };
-  }
-  return output;
-}
-// Agent-driven clicks are often recorded at the page origin (0,0) because the
-// driver dispatches them without pointer coordinates. Treat that as "no real
-// position" so the cursor is never parked, revealed, or zoomed at the top-left.
-function isRealPoint(x: number | undefined, y: number | undefined) {
-  return Number.isFinite(x) && Number.isFinite(y) && !(x === 0 && y === 0);
-}
-function pointerPosition(event: ReplayEvent) {
-  if (event.type !== 3) return undefined;
-  if (event.data?.source === 1) return event.data.positions?.at(-1);
-  if (event.data?.source === 2 && isRealPoint(event.data.x, event.data.y)) return { x: event.data.x!, y: event.data.y!, id: event.data.id };
-  return undefined;
-}
-function isDirectPointerInteraction(event: ReplayEvent) {
-  return event.type === 3 && event.data?.source === 2 && isRealPoint(event.data.x, event.data.y);
-}
-function typeableFill(event: ReplayEvent): string | undefined {
-  if (event.type !== 3 || event.data?.source !== 5) return undefined;
-  const text = event.data?.text;
-  return typeof text === "string" ? text : undefined;
-}
-function isVisibleShortFill(event: ReplayEvent) {
-  const text = event.data?.text;
-  return event.type === 3 && event.data?.source === 5 && typeof text === "string" && text.length > 2 && text.length <= 32 && text !== "on";
-}
-function sessionEventTime(event: unknown, events: ReplayEvent[], tabStart: number) {
-  if (!isReplayEvent(event) || !events[0]) return undefined;
-  return tabStart + event.timestamp - events[0].timestamp;
-}
-function isReplayEvent(event: unknown): event is ReplayEvent {
-  return typeof event === "object" && event !== null && "timestamp" in event && typeof (event as { timestamp?: unknown }).timestamp === "number";
-}
-function idleRanges(activities: number[], playbackEnd: number): IdleRange[] {
-  const times = [...new Set(activities.filter((time) => time >= 0 && time <= playbackEnd).sort((left, right) => left - right))];
-  const ranges: IdleRange[] = [];
-  for (let index = 1; index < times.length; index += 1) {
-    const start = times[index - 1]!;
-    const end = times[index]!;
-    if (end - start >= IDLE_THRESHOLD_MS) ranges.push({ start, end });
-  }
-  const last = times.at(-1);
-  if (last !== undefined && playbackEnd - last >= IDLE_THRESHOLD_MS) ranges.push({ start: last, end: playbackEnd });
-  return ranges;
-}
-function nearlyEqual(left: number, right: number) { return Math.abs(left - right) < 2; }
-function recordingViewport(events: ReplayEvent[]) {
-  const meta = events.find((event) => event.type === 4 && event.data?.width && event.data?.height);
-  return { width: meta?.data?.width ?? 1280, height: meta?.data?.height ?? 720 };
-}
-function revealCursorOnFirstMove(replayer: Replayer, lifetime: AbortController) {
-  const mouse = replayer.wrapper.querySelector<HTMLElement>(".replayer-mouse");
-  if (!mouse) return;
-  // rrweb parks the cursor at the page origin until the first pointer event
-  // positions it. Keep it invisible until it actually lands somewhere real —
-  // recordings whose only "positions" are origin clicks never reveal a cursor
-  // stranded in the top-left corner.
-  const reveal = new MutationObserver(() => {
-    const x = parseFloat(mouse.style.left);
-    const y = parseFloat(mouse.style.top);
-    if (!isRealPoint(x, y)) return;
-    replayer.wrapper.classList.add("rec-cursor-live");
-    reveal.disconnect();
-  });
-  reveal.observe(mouse, { attributes: true, attributeFilter: ["style"] });
-  lifetime.signal.addEventListener("abort", () => reveal.disconnect(), { once: true });
-}
-/**
- * Build a cursor mover for recordings without pointer coordinates: given the
- * element an interaction resolved to, park the synthetic cursor at its center
- * (in the replay's content coordinates, which the overlay shares). The first
- * placement appears on target rather than gliding in from the corner; later
- * ones ease across so the path between elements reads as intentional movement.
- */
-/**
- * Insert a lead-in cue before every click/double-click/focus so the synthetic
- * cursor starts travelling ahead of the action. Works on already-projected
- * (playback-time) events, so the lead is real screen time — a raw-time lead
- * would collapse inside a cut idle gap right before the interaction.
- */
-function withCursorLeadIns(events: ReplayEvent[]): ReplayEvent[] {
-  const out: ReplayEvent[] = [];
-  let lastTs = -Infinity;
-  for (const event of events) {
-    if (event.type === 3 && event.data?.source === 2 && [2, 4, 5].includes(event.data.type ?? -1) && typeof event.data.id === "number") {
-      // Lead by the glide plus a dwell beat, so the cursor arrives early and
-      // rests on the target before the action fires.
-      const at = Math.max(lastTs + 1, event.timestamp - CURSOR_APPROACH_MS - CURSOR_DWELL_MS);
-      if (at < event.timestamp - 40) {
-        out.push({ type: 5, timestamp: at, data: { tag: "rec-cursor", id: event.data.id } });
-        lastTs = at;
-      }
-    }
-    out.push(event);
-    lastTs = event.timestamp;
-  }
-  return out;
-}
-/** Center of the element an interaction resolved to, in the replay's content
- *  coordinates (which the cursor overlay shares); undefined if it isn't laid out. */
-function elementCenter(node: unknown): { x: number; y: number } | undefined {
-  if (!isElementLike(node)) return undefined;
-  const rect = node.getBoundingClientRect();
-  if (!rect.width && !rect.height) return undefined;
-  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-}
-/**
- * Move the synthetic cursor. `durationMs` glides it (a lead-in approach); 0
- * snaps instantly (the exact landing at interaction time, re-asserted after
- * rrweb re-parks the cursor at (0,0) on click). The first appearance always
- * lands on target rather than gliding in from the page corner.
- */
-function makeCursorPlacer(replayer: Replayer) {
-  let placed = false;
-  return (x: number, y: number, durationMs: number) => {
-    const mouse = replayer.wrapper.querySelector<HTMLElement>(".replayer-mouse");
-    if (!mouse) return;
-    const duration = placed ? durationMs : 0;
-    mouse.style.transition = duration > 0
-      ? `left ${duration}ms cubic-bezier(.22, .61, .36, 1), top ${duration}ms cubic-bezier(.22, .61, .36, 1), opacity .25s ease`
-      : "opacity .25s ease";
-    mouse.style.left = `${x}px`;
-    mouse.style.top = `${y}px`;
-    placed = true;
-    replayer.wrapper.classList.add("rec-cursor-live");
-  };
-}
-function spawnClickRipple(replayer: Replayer, interaction: { x?: number; y?: number }) {
-  const mouse = replayer.wrapper.querySelector<HTMLElement>(".replayer-mouse");
-  const x = typeof interaction.x === "number" ? interaction.x : parseFloat(mouse?.style.left ?? "");
-  const y = typeof interaction.y === "number" ? interaction.y : parseFloat(mouse?.style.top ?? "");
-  if (!isRealPoint(x, y)) return;
-  const ripple = document.createElement("span");
-  ripple.className = "rec-click-ripple";
-  ripple.style.left = `${x}px`;
-  ripple.style.top = `${y}px`;
-  replayer.wrapper.appendChild(ripple);
-  window.setTimeout(() => ripple.remove(), 700);
-}
-function fitReplay(mount: HTMLElement, replayer: Replayer, viewport: { width: number; height: number }) {
+function fitReplay(replayer: Replayer, viewport: { width: number; height: number }) {
   // The camera owns the wrapper transform; fitReplay only sizes the canvas.
   replayer.wrapper.style.width = `${viewport.width}px`;
   replayer.wrapper.style.height = `${viewport.height}px`;
-}
-function createCamera(mount: HTMLElement, replayer: Replayer, viewport: { width: number; height: number }, lifetime: AbortController) {
-  let enabled = cameraZoomEnabled;
-  let zoom = 1;
-  let targetZoom = 1;
-  let focusX = viewport.width / 2;
-  let focusY = viewport.height / 2;
-  let targetX = focusX;
-  let targetY = focusY;
-  let holdTimer: number | undefined;
-  let frame: number | undefined;
-  let lastTick = 0;
-  const apply = () => {
-    const base = Math.min(mount.clientWidth / viewport.width, mount.clientHeight / viewport.height);
-    // transform-origin is the wrapper center: translating by (center - focus)
-    // in content pixels before scaling lands the focus point mid-stage.
-    replayer.wrapper.style.transform = `scale(${base * zoom}) translate(${viewport.width / 2 - focusX}px, ${viewport.height / 2 - focusY}px)`;
-  };
-  const schedule = () => {
-    if (frame !== undefined || lifetime.signal.aborted) return;
-    lastTick = performance.now();
-    frame = requestAnimationFrame(tick);
-  };
-  const tick = (now: number) => {
-    frame = undefined;
-    const dt = Math.min(0.1, Math.max(0.001, (now - lastTick) / 1000));
-    lastTick = now;
-    const blend = 1 - Math.exp(-CAMERA_EASE_PER_S * dt);
-    zoom += (targetZoom - zoom) * blend;
-    focusX += (targetX - focusX) * blend;
-    focusY += (targetY - focusY) * blend;
-    // Hard clamp at the in-flight zoom so the frame never pans past an edge.
-    const halfW = viewport.width / (2 * zoom);
-    const halfH = viewport.height / (2 * zoom);
-    focusX = clamp(focusX, halfW, viewport.width - halfW);
-    focusY = clamp(focusY, halfH, viewport.height - halfH);
-    apply();
-    if (Math.abs(zoom - targetZoom) > 0.001 || Math.abs(focusX - targetX) > 0.5 || Math.abs(focusY - targetY) > 0.5) schedule();
-  };
-  const setFocusTarget = (x: number, y: number) => {
-    const halfW = viewport.width / (2 * targetZoom);
-    const halfH = viewport.height / (2 * targetZoom);
-    targetX = clamp(x, halfW, viewport.width - halfW);
-    targetY = clamp(y, halfH, viewport.height - halfH);
-  };
-  const zoomOut = () => {
-    targetZoom = 1;
-    setFocusTarget(viewport.width / 2, viewport.height / 2);
-    schedule();
-  };
-  const armHold = () => {
-    if (holdTimer) window.clearTimeout(holdTimer);
-    holdTimer = window.setTimeout(zoomOut, CAMERA_HOLD_MS);
-  };
-  const noteInteraction = (x: number, y: number) => {
-    if (!enabled) return;
-    targetZoom = CAMERA_ZOOM;
-    setFocusTarget(x, y);
-    armHold();
-    schedule();
-  };
-  const trackCursor = (x: number, y: number) => {
-    if (!enabled || targetZoom === 1) return;
-    setFocusTarget(x, y);
-    schedule();
-  };
-  const refreshHold = () => {
-    if (!enabled || targetZoom === 1) return;
-    armHold();
-  };
-  const reset = () => {
-    if (holdTimer) window.clearTimeout(holdTimer);
-    holdTimer = undefined;
-    zoomOut();
-  };
-  const setPlaying = (value: boolean) => {
-    // The hold window is wall-clock; freeze it while paused so a paused
-    // inspection stays framed, and rearm it on resume.
-    if (!value) { if (holdTimer) window.clearTimeout(holdTimer); holdTimer = undefined; }
-    else if (targetZoom > 1) armHold();
-  };
-  const setEnabled = (value: boolean) => {
-    enabled = value;
-    if (!value) reset();
-  };
-  lifetime.signal.addEventListener("abort", () => {
-    if (frame !== undefined) cancelAnimationFrame(frame);
-    if (holdTimer) window.clearTimeout(holdTimer);
-  }, { once: true });
-  apply();
-  return { apply, noteInteraction, trackCursor, refreshHold, reset, setPlaying, setEnabled };
 }
 function isTextEntryTarget(target: EventTarget | null) {
   if (!target || typeof target !== "object" || !("tagName" in target)) return false;
@@ -1484,8 +994,6 @@ function isTextEntryTarget(target: EventTarget | null) {
 function isMainDocumentTarget(target: EventTarget | null) {
   return !!target && target instanceof Node && target.ownerDocument === document;
 }
-type ElementLike = { nodeType: number; classList: DOMTokenList; getAttribute(name: string): string | null; textContent: string | null; tagName: string; getBoundingClientRect(): DOMRect };
-function isElementLike(value: unknown): value is ElementLike { return typeof value === "object" && value !== null && (value as { nodeType?: number }).nodeType === 1 && "classList" in value; }
 /** Let rrweb finish painting a fresh seek before the assistant reads the frame. */
 function settleReplayFrame() {
   return new Promise<void>((resolveSettle) => {
@@ -1508,8 +1016,4 @@ function findElementByText(frameDocument: Document, query: string) {
   return best;
 }
 async function request<T>(url: string, init?: RequestInit) { const response = await fetch(url, init); if (!response.ok) throw new Error((await response.json().catch(() => ({ error: response.statusText }))).error); return response.json() as Promise<T>; }
-function format(ms?: number) { if (!ms) return "0:00"; const seconds = Math.round(ms / 1000); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`; }
-function formatDuration(ms: number) { return `${(ms / 1_000).toFixed(ms >= 10_000 ? 0 : 1)}s`; }
-function clamp(value: number, min: number, max: number) { return Math.min(max, Math.max(min, value)); }
-function escape(value: string) { const span = document.createElement("span"); span.textContent = value; return span.innerHTML; }
 function renderError(message: string) { app.innerHTML = `<section class=error><p>REC</p><h1>Replay unavailable</h1><p>${escape(message)}</p></section>`; }

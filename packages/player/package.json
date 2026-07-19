@@ -9,7 +9,7 @@
   "scripts": {
     "build": "vite build",
     "check": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test dist/**/*.test.js"
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/*.test.js"
   },
   "dependencies": {
     "@rrweb/replay": "2.0.0-alpha.20",
