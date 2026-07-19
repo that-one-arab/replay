@@ -68,7 +68,7 @@ const tools: JsonObject[] = [
   },
   {
     name: "recording_status",
-    description: "Read local recorder and browser attachment status.",
+    description: "Read local recorder and browser attachment status. Includes `viewport` (the live emulated viewport vs. the display); when `viewport.clipped` is true the page renders off-screen, and `viewport.recommendedViewport` is a safe size to resize to. Clipping is also reported in `configWarnings`.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -231,6 +231,7 @@ async function recordingStatus() {
     replayDefaults: health.replay_defaults,
     configWarnings: health.config_warnings,
     configError: health.config_error,
+    viewport: health.viewport,
     recording: recording ? {
       sessionId: health.sessionId,
       elapsedMs: health.elapsedMs,

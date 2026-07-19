@@ -5,6 +5,8 @@ export { parseRecToml, resolveRecConfig } from "./config.js";
 export { uploadRecording } from "./share-client.js";
 export type { ShareUploadOptions, ShareUploadResult } from "./share-client.js";
 export { describeNode, formatTime, renderSummaryText, stepsInRange, summarizeReplay } from "./summary.js";
+export { evaluateViewportFit } from "./viewport.js";
+export type { ViewportFit, ViewportMeasurement } from "./viewport.js";
 export type { ReplayStep, ReplaySummary } from "./summary.js";
 export type { ExportResult, ImportResult } from "./bundle.js";
 export type { BrowserConfig, ChatConfig, ChatProviderName, IdleMode, ReplayDefaults, ResolvedRecConfig } from "./config.js";

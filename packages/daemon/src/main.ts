@@ -125,6 +125,12 @@ async function startBrowser(executable: string) {
   if (browserConfig.headless) {
     launchArgs.push("--headless=new", `--window-size=${browserConfig.viewport.width},${browserConfig.viewport.height}`);
   } else {
+    // Open the visible window filling the display work area. Playwright drives
+    // this browser with a device-metrics override; if the window is smaller than
+    // that emulated viewport, Chrome paints the overflow off-screen (the page
+    // looks "zoomed in" with edges cut off). A maximized window fits any
+    // reasonable viewport, so the common case never clips.
+    launchArgs.push("--start-maximized");
     // A headed browser is one a person can see and accidentally touch. Brand its
     // chrome so it is unmistakably Rec's controlled session: a bold purple frame
     // and a labelled profile that live in browser UI, never in the recorded page.
@@ -183,6 +189,11 @@ async function health() {
   expireLeases();
   const browser = recorder.browserStatus();
   const config = await configDiagnostics();
+  // Only measure a real, navigated page — an empty or unattached browser has no
+  // meaningful viewport, and the check must never block a status poll.
+  const viewport = browser.attached && browser.navigatedPageCount > 0 ? await recorder.viewportFit() : undefined;
+  const baseWarnings = "config_warnings" in config && Array.isArray(config.config_warnings) ? config.config_warnings : [];
+  const configWarnings = [...baseWarnings, ...(viewport?.warning ? [viewport.warning] : [])];
   return {
     ok: true,
     share_available: Boolean(shareEndpoint()),
@@ -200,6 +211,8 @@ async function health() {
       ...(daemonIdleSince ? { daemon_idle_since: new Date(daemonIdleSince).toISOString() } : {}),
     },
     ...config,
+    config_warnings: configWarnings,
+    ...(viewport ? { viewport } : {}),
     ...recorder.status(),
   };
 }

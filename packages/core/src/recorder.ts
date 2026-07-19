@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import type { Browser, BrowserContext, Frame, Page, Request as PlaywrightRequest, Response as PlaywrightResponse } from "playwright-core";
 import { chromium } from "playwright-core";
 import { SessionStore } from "./storage.js";
+import { evaluateViewportFit, type ViewportFit } from "./viewport.js";
 import type { BrowserStatus, Marker, NavigationEvent, RecordingManifest, StartOptions, StopResult } from "./types.js";
 
 const require = createRequire(import.meta.url);
@@ -172,6 +173,29 @@ export class Recorder {
       pageCount: pages.length,
       navigatedPageCount: pages.filter((page) => isNavigatedPage(page.url())).length,
     };
+  }
+
+  /**
+   * Read the live emulated viewport against the physical display so callers can
+   * warn when Playwright's device-metrics override renders content off-window.
+   * Best-effort: returns undefined if no navigated page can be measured, and is
+   * bounded by a short timeout so a busy page never stalls a status poll.
+   */
+  async viewportFit(): Promise<ViewportFit | undefined> {
+    const page = this.context?.pages().find((candidate) => isNavigatedPage(candidate.url()));
+    if (!page) return undefined;
+    try {
+      const measurement = await withTimeout(page.evaluate(() => ({
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight,
+        screenAvailWidth: window.screen.availWidth,
+        screenAvailHeight: window.screen.availHeight,
+        devicePixelRatio: window.devicePixelRatio,
+      })), 2_000);
+      return measurement ? evaluateViewportFit(measurement) : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   async close() {
@@ -407,6 +431,15 @@ export class Recorder {
     await Promise.all(children.map((url) => this.captureAssetUrl(url)));
     return new TextEncoder().encode(rewriteCssUrls(css, sourceUrl, this.store?.manifest.id, this.store?.manifest.assets ?? []));
   }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const timeout = new Promise<T>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("viewport measurement timed out")), ms); });
+  // Whichever side loses the race settles later; swallow its result so a late
+  // rejection from the abandoned evaluate never surfaces as unhandled.
+  promise.catch(() => undefined);
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 function originOf(url: string) {
