@@ -108,6 +108,71 @@ test("maps client faults to their own status instead of a blanket 500", async ()
       body: Buffer.from("release"),
     });
     assert.equal(badVersion.status, 400);
+
+    // Stats are not exposed unless a token is configured, so the endpoint is not
+    // even discoverable on a default deployment.
+    const statsDisabled = await fetch(`${endpoint}/stats`);
+    assert.equal(statsDisabled.status, 404);
+  } finally {
+    if (server) await stop(server);
+    if (previousHome === undefined) delete process.env.REC_HOME;
+    else process.env.REC_HOME = previousHome;
+    await rm(data, { recursive: true, force: true });
+  }
+});
+
+test("rate limits the upload path per client and reports a retry window", async () => {
+  const data = await mkdtemp(join(tmpdir(), "rec-share-rate-"));
+  const previousHome = process.env.REC_HOME;
+  const port = await unusedPort();
+  const endpoint = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | undefined;
+  try {
+    // One upload per window: the first request is admitted (and rejected on its
+    // own merits), the second is turned away by the limiter before routing.
+    server = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], { env: { ...process.env, PORT: String(port), REC_SHARE_DATA_DIR: data, REC_SHARE_PUBLIC_URL: endpoint, REC_SHARE_UPLOAD_RATE_LIMIT_POINTS: "1", REC_SHARE_UPLOAD_RATE_LIMIT_DURATION: "60" }, stdio: "ignore" });
+    await waitForHealth(endpoint);
+
+    const first = await fetch(`${endpoint}/v1/recordings`, { method: "POST", body: Buffer.from("not a real .rec bundle") });
+    assert.equal(first.status, 422);
+    const second = await fetch(`${endpoint}/v1/recordings`, { method: "POST", body: Buffer.from("not a real .rec bundle") });
+    assert.equal(second.status, 429);
+    const retryAfter = Number(second.headers.get("retry-after"));
+    assert.ok(retryAfter >= 1 && retryAfter <= 60, `retry-after should be a positive window, got ${retryAfter}`);
+
+    // Reads use a separate, generous budget, so a health probe is unaffected.
+    assert.equal((await fetch(`${endpoint}/health`)).status, 200);
+  } finally {
+    if (server) await stop(server);
+    if (previousHome === undefined) delete process.env.REC_HOME;
+    else process.env.REC_HOME = previousHome;
+    await rm(data, { recursive: true, force: true });
+  }
+});
+
+test("exposes token-guarded stats counters", async () => {
+  const data = await mkdtemp(join(tmpdir(), "rec-share-stats-"));
+  const previousHome = process.env.REC_HOME;
+  const port = await unusedPort();
+  const endpoint = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | undefined;
+  try {
+    server = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], { env: { ...process.env, PORT: String(port), REC_SHARE_DATA_DIR: data, REC_SHARE_PUBLIC_URL: endpoint, REC_SHARE_STATS_TOKEN: "test-stats-token" }, stdio: "ignore" });
+    await waitForHealth(endpoint);
+
+    // A rejected upload should register in the counters we read back.
+    assert.equal((await fetch(`${endpoint}/v1/recordings`, { method: "POST", body: Buffer.from("garbage") })).status, 422);
+
+    assert.equal((await fetch(`${endpoint}/stats`)).status, 401);
+    assert.equal((await fetch(`${endpoint}/stats`, { headers: { authorization: "Bearer wrong" } })).status, 401);
+
+    const stats = await fetch(`${endpoint}/stats`, { headers: { authorization: "Bearer test-stats-token" } });
+    assert.equal(stats.status, 200);
+    const snapshot = await stats.json() as { service: string; uptime_seconds: number; requests: { total: number }; uploads: { rejected_invalid: number } };
+    assert.equal(snapshot.service, "rec-share-server");
+    assert.ok(Number.isInteger(snapshot.uptime_seconds) && snapshot.uptime_seconds >= 0);
+    assert.ok(snapshot.requests.total >= 1);
+    assert.equal(snapshot.uploads.rejected_invalid, 1);
   } finally {
     if (server) await stop(server);
     if (previousHome === undefined) delete process.env.REC_HOME;

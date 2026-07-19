@@ -5,6 +5,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { dirname, join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { importSession, sessionPath, type RecordingManifest } from "../../core/dist/index.js";
+import { checkRateLimit, clientIp } from "./rate-limit.js";
+import { logger, metrics } from "./telemetry.js";
 
 const port = Number(process.env.PORT ?? 8080);
 const dataDir = resolve(process.env.REC_SHARE_DATA_DIR ?? "./.rec-share");
@@ -18,6 +20,9 @@ const releasesDir = resolve(process.env.REC_RELEASE_DIR ?? join(dataDir, "releas
 const releasesPath = join(releasesDir, "index.json");
 const maxReleaseBytes = Number(process.env.REC_RELEASE_MAX_UPLOAD_BYTES ?? 150 * 1024 * 1024);
 const releasePublishToken = process.env.REC_RELEASE_PUBLISH_TOKEN;
+// GET /stats stays disabled unless a token is configured, so the counters are
+// never exposed on a public server by default.
+const statsToken = process.env.REC_SHARE_STATS_TOKEN;
 
 type Share = { id: string; session_id: string; title: string; created_at: string; bytes: number };
 type Release = { version: string; platform: "darwin-arm64"; archive: string; sha256: string; bytes: number; published_at: string };
@@ -26,13 +31,45 @@ type Release = { version: string; platform: "darwin-arm64"; archive: string; sha
 // import) is reported with its own status; anything unclassified is a genuine
 // 500 the operator needs to see.
 class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
-const server = createServer((request, response) => void route(request, response).catch((error: unknown) => reply(response, error instanceof HttpError ? error.status : 500, { error: messageOf(error) })));
-server.listen(port, "0.0.0.0", () => console.log(`rec share server listening on http://0.0.0.0:${port}`));
+const server = createServer((request, response) => {
+  const startedAt = process.hrtime.bigint();
+  // One access-log line per response. Listening on "finish" (rather than logging
+  // inside route) captures the final status for every path, including streamed
+  // file bodies and errors the catch below maps to a status.
+  response.on("finish", () => {
+    metrics.recordRequest(response.statusCode);
+    logger.info({ method: request.method, path: (request.url ?? "/").split("?")[0], status: response.statusCode, duration_ms: Math.round(Number(process.hrtime.bigint() - startedAt) / 1e5) / 10, ip: clientIp(request) }, "request");
+  });
+  void handle(request, response).catch((error: unknown) => {
+    const status = error instanceof HttpError ? error.status : 500;
+    // A non-HttpError is an unclassified server fault; surface it in the logs and
+    // count it, since the JSON reply only carries the message.
+    if (status >= 500) { metrics.recordServerError(); logger.error({ path: (request.url ?? "/").split("?")[0], err: messageOf(error) }, "unhandled request error"); }
+    if (!response.headersSent) reply(response, status, { error: messageOf(error) });
+  });
+});
+server.listen(port, "0.0.0.0", () => logger.info({ port, data_dir: dataDir }, "rec share server listening"));
 
-async function route(request: IncomingMessage, response: ServerResponse) {
+// Gate every request behind the per-IP rate limiter before routing. Health is
+// exempt so uptime probes never consume a client's budget.
+async function handle(request: IncomingMessage, response: ServerResponse) {
   const origin = requestOrigin(request);
   const url = new URL(request.url ?? "/", origin);
+  if (url.pathname !== "/health") {
+    const kind = request.method === "POST" && url.pathname === "/v1/recordings" ? "upload" : "general";
+    const decision = await checkRateLimit(kind, clientIp(request));
+    if (!decision.allowed) {
+      metrics.recordRateLimited();
+      response.writeHead(429, { "content-type": "application/json; charset=utf-8", "retry-after": String(decision.retryAfterSeconds) });
+      return void response.end(JSON.stringify({ error: "Too many requests. Retry after a moment." }));
+    }
+  }
+  return route(request, response, url, origin);
+}
+
+async function route(request: IncomingMessage, response: ServerResponse, url: URL, origin: string) {
   if (request.method === "GET" && url.pathname === "/health") return reply(response, 200, { ok: true });
+  if (request.method === "GET" && url.pathname === "/stats") return serveStats(request, response);
   if (request.method === "POST" && url.pathname === "/v1/recordings") return upload(request, response, origin);
   if (request.method === "PUT" && url.pathname === "/v1/releases") return publishRelease(request, response);
   if (request.method === "GET" && url.pathname === "/v1/releases/latest") return latestRelease(response, origin, url.searchParams.get("platform"));
@@ -90,7 +127,7 @@ async function serveRelease(response: ServerResponse, archive: string) {
 }
 
 async function upload(request: IncomingMessage, response: ServerResponse, origin: string) {
-  const body = await binaryBody(request, maxUploadBytes, "Recording");
+  const body = await binaryBody(request, maxUploadBytes, "Recording").catch((error: unknown) => { if (error instanceof HttpError && error.status === 413) metrics.recordUploadRejected("too_large"); throw error; });
   await mkdir(uploadsDir, { recursive: true });
   const temporary = join(uploadsDir, `${randomBytes(12).toString("hex")}.rec`);
   await writeFile(temporary, body, { flag: "wx" });
@@ -99,14 +136,15 @@ async function upload(request: IncomingMessage, response: ServerResponse, origin
     // copy and hand back its existing link instead of failing on a duplicate import.
     // The body is client-supplied, so a failed import is a bad upload (422), not
     // a server fault.
-    const imported = await importSession(temporary, { reuseExisting: true }).catch((error: unknown) => { throw new HttpError(422, `The uploaded artifact is not a valid Rec recording: ${messageOf(error)}`); });
+    const imported = await importSession(temporary, { reuseExisting: true }).catch((error: unknown) => { metrics.recordUploadRejected("invalid"); throw new HttpError(422, `The uploaded artifact is not a valid Rec recording: ${messageOf(error)}`); });
     const shares = await readShares();
     const existing = shares.find((entry) => entry.session_id === imported.sessionId);
-    if (existing) return reply(response, 201, { shareId: existing.id, sessionId: existing.session_id, shareUrl: `${origin}/r/${existing.id}` });
+    if (existing) { metrics.recordUploadIdempotent(body.byteLength); return reply(response, 201, { shareId: existing.id, sessionId: existing.session_id, shareUrl: `${origin}/r/${existing.id}` }); }
     const manifest = await readManifest(imported.sessionId);
     const share: Share = { id: randomBytes(12).toString("hex"), session_id: imported.sessionId, title: manifest.title, created_at: new Date().toISOString(), bytes: body.byteLength };
     shares.push(share);
     await writeShares(shares);
+    metrics.recordUploadAccepted(body.byteLength);
     return reply(response, 201, { shareId: share.id, sessionId: share.session_id, shareUrl: `${origin}/r/${share.id}` });
   } finally {
     await rm(temporary, { force: true });
@@ -190,12 +228,20 @@ function binaryBody(request: IncomingMessage, maxBytes: number, label: string): 
     request.on("error", reject);
   });
 }
-function validPublishToken(header: string | undefined) {
+function serveStats(request: IncomingMessage, response: ServerResponse) {
+  // Absent a token the endpoint does not exist, so it is never discoverable on a
+  // public deployment; with one, a mismatch is an ordinary 401.
+  if (!statsToken) return reply(response, 404, { error: "Not found" });
+  if (!bearerMatches(request.headers.authorization, statsToken)) return reply(response, 401, { error: "Unauthorized" });
+  reply(response, 200, metrics.snapshot());
+}
+function validPublishToken(header: string | undefined) { return bearerMatches(header, releasePublishToken); }
+function bearerMatches(header: string | undefined, expected: string | undefined) {
   const supplied = header?.match(/^Bearer (.+)$/)?.[1];
-  if (!supplied || !releasePublishToken) return false;
-  const expected = Buffer.from(releasePublishToken);
-  const received = Buffer.from(supplied);
-  return expected.byteLength === received.byteLength && timingSafeEqual(expected, received);
+  if (!supplied || !expected) return false;
+  const expectedBytes = Buffer.from(expected);
+  const receivedBytes = Buffer.from(supplied);
+  return expectedBytes.byteLength === receivedBytes.byteLength && timingSafeEqual(expectedBytes, receivedBytes);
 }
 function releaseVersion(value: string | string[] | undefined) { if (typeof value === "string" && /^\d+\.\d+\.\d+$/.test(value)) return value; throw new HttpError(400, "x-rec-release-version must be a semantic version such as 0.1.0."); }
 function releasePlatform(value: string | string[] | undefined): Release["platform"] { if (value === "darwin-arm64") return value; throw new HttpError(400, "x-rec-release-platform must be darwin-arm64."); }

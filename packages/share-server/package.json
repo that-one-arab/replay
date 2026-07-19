@@ -7,5 +7,9 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "node --test dist/main.test.js"
+  },
+  "dependencies": {
+    "pino": "^10.3.1",
+    "rate-limiter-flexible": "^11.2.0"
   }
 }
