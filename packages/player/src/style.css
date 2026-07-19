@@ -965,3 +965,138 @@ body.chat-open #app { width: calc(100% - 404px); }
   .share-link { max-width: 110px; }
   .chat-panel { left: 10px; width: auto; }
 }
+
+/* ───────── First-run onboarding spotlight tour ─────────
+   Body-mounted (above #app) so it survives #app rebuilds. The backdrop is a
+   single element whose target rectangle is cut out with an even-odd clip-path;
+   the cut-out passes pointer events through to the highlighted control. */
+.onboarding {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .25s ease;
+}
+.onboarding.is-visible { opacity: 1; }
+.onboarding-backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  background: rgba(8, 9, 14, .72);
+  backdrop-filter: blur(2px);
+  cursor: pointer;
+}
+.onboarding-ring {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 10px;
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .55), 0 0 26px rgba(120, 108, 255, .35);
+  opacity: 0;
+  transition: opacity .2s ease;
+}
+.onboarding-tip {
+  position: absolute;
+  pointer-events: auto;
+  width: min(340px, calc(100vw - 32px));
+  padding: 16px 18px 14px;
+  border-radius: 14px;
+  background: rgba(22, 22, 31, .96);
+  border: 1px solid rgba(255, 255, 255, .08);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .55);
+  color: #fff;
+}
+/* A small notch points from the callout toward the spotlighted control. The
+   tip is placed above the target by default (notch hangs off the bottom edge);
+   .is-below flips it to the top edge when the tip sits below the target. */
+.onboarding-tip::before {
+  content: "";
+  position: absolute;
+  left: var(--notch-x, 26px);
+  bottom: -6px;
+  width: 12px;
+  height: 12px;
+  background: rgba(22, 22, 31, .96);
+  border-right: 1px solid rgba(255, 255, 255, .08);
+  border-bottom: 1px solid rgba(255, 255, 255, .08);
+  transform: rotate(45deg);
+}
+.onboarding-tip.is-below::before {
+  bottom: auto;
+  top: -6px;
+  border: 0;
+  border-left: 1px solid rgba(255, 255, 255, .08);
+  border-top: 1px solid rgba(255, 255, 255, .08);
+}
+.onboarding-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: rgba(255, 255, 255, .66);
+  font: 10px "DM Mono";
+  text-transform: uppercase;
+  letter-spacing: .14em;
+}
+.onboarding-kicker i { width: 8px; height: 8px; background: #ff5257; border-radius: 50%; box-shadow: 0 0 10px rgba(255, 82, 87, .8); }
+.onboarding-title {
+  display: block;
+  margin: 9px 0 0;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -.01em;
+  line-height: 1.25;
+}
+.onboarding-body {
+  margin: 8px 0 0;
+  color: rgba(255, 255, 255, .66);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.onboarding-dots {
+  display: flex;
+  gap: 6px;
+  margin: 14px 0 12px;
+}
+.onboarding-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .22);
+  transition: background .2s ease, width .2s ease;
+}
+.onboarding-dots span.is-active { background: #fff; width: 14px; border-radius: 4px; }
+.onboarding-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.onboarding-skip {
+  padding: 8px 4px;
+  border: 0;
+  background: none;
+  color: rgba(255, 255, 255, .45);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.onboarding-skip:hover { color: rgba(255, 255, 255, .8); }
+.onboarding-next {
+  margin-left: auto;
+  padding: 9px 16px;
+  border: 0;
+  border-radius: 9px;
+  background: #fff;
+  color: #17171f;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background .15s ease;
+}
+.onboarding-next:hover { background: #e7e5ff; }
+.onboarding-next:focus-visible,
+.onboarding-skip:focus-visible {
+  outline: 2px solid #b7abff;
+  outline-offset: 2px;
+}

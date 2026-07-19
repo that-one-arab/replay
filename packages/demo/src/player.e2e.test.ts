@@ -24,6 +24,10 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
   try {
     browser = await chromium.launch({ headless: true, executablePath: chrome });
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    // These assertions drive the controls of a returning viewer. Seed the
+    // first-run onboarding flag so the spotlight-tour mask can't intercept the
+    // mouse/keyboard input below.
+    await page.addInitScript(() => { try { localStorage.setItem("replay-onboarding-seen", "1"); } catch { /* storage blocked */ } });
     await page.goto(`${origin}/replay?id=fixture`, { waitUntil: "networkidle" });
     assert.equal(await page.locator("[data-idle-range]").count(), 2);
     assert.equal(await page.locator("[data-navigation-event]").count(), 1);
@@ -109,6 +113,61 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
     await page.locator("[data-marker]").first().click();
     assert.equal(await page.locator("[data-marker]").first().getAttribute("aria-current"), "step", "the selected marker stays visually active");
     assert.equal(await page.locator("#caption strong").textContent(), "Action begins", "selecting a marker updates the narrated chapter");
+  } finally {
+    await browser?.close();
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+  }
+});
+
+test("the first-run spotlight tour orients a new viewer, then dismisses for good", { skip: !chrome }, async () => {
+  const server = createFixtureServer();
+  await new Promise<void>((resolveListen, reject) => server.listen(0, "127.0.0.1", () => resolveListen()).on("error", reject));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Fixture server did not expose a TCP port.");
+  let browser: Browser | undefined;
+  try {
+    browser = await chromium.launch({ headless: true, executablePath: chrome });
+    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    await page.goto(`http://127.0.0.1:${address.port}/replay?id=fixture`, { waitUntil: "networkidle" });
+
+    // A first-time viewer gets the tour, opened on the framing step.
+    await page.locator(".onboarding-title").waitFor({ state: "visible" });
+    assert.equal(await page.locator(".onboarding-title").textContent(), "What you're watching");
+
+    // Steps advance on Next. The fixture has chapters but no chat endpoint, so
+    // the Ask AI step (hidden #chat-toggle) is skipped automatically.
+    await page.locator(".onboarding-next").click();
+    assert.equal(await page.locator(".onboarding-title").textContent(), "Play");
+    await page.locator(".onboarding-next").click();
+    assert.equal(await page.locator(".onboarding-title").textContent(), "Timeline");
+    await page.locator(".onboarding-next").click();
+    assert.equal(await page.locator(".onboarding-title").textContent(), "Chapters");
+    assert.equal(await page.locator(".onboarding-next").textContent(), "Get started");
+
+    // Finishing the tour dismisses it and records the seen flag.
+    await page.locator(".onboarding-next").click();
+    assert.equal(await page.locator(".onboarding").count(), 0, "the tour is removed once completed");
+    assert.equal(await page.evaluate(() => localStorage.getItem("replay-onboarding-seen")), "1");
+
+    // It does not come back for a returning viewer.
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForTimeout(150);
+    assert.equal(await page.locator(".onboarding").count(), 0, "the tour stays dismissed after reload");
+
+    // A fresh tour (flag cleared) ends as soon as the viewer presses play. The
+    // tour is also still intercepting the player's hotkeys: space reaches the
+    // focused Next button (advancing the tour) instead of starting playback.
+    await page.evaluate(() => localStorage.removeItem("replay-onboarding-seen"));
+    await page.reload({ waitUntil: "networkidle" });
+    await page.locator(".onboarding-title").waitFor({ state: "visible" });
+    assert.equal(await playbackState(page), "Paused");
+    await page.keyboard.press("Space");
+    assert.equal(await playbackState(page), "Paused", "the tour blocks the player's space-to-play shortcut");
+    assert.equal(await page.locator(".onboarding-title").textContent(), "Play");
+    // The spotlight now sits over the play button, so the click reaches it.
+    await page.locator("#play").click({ force: true });
+    assert.equal(await page.locator(".onboarding").count(), 0, "pressing play dismisses the tour");
+    assert.equal(await playbackState(page), "Playing");
   } finally {
     await browser?.close();
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()));

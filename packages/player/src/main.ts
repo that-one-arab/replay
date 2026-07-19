@@ -2,6 +2,7 @@ import { Replayer } from "@rrweb/replay";
 import "rrweb/dist/style.css";
 import "./style.css";
 import { closeChat, initChat, registerReplayControl, wireChatToggle } from "./chat.js";
+import { dismissOnboarding, startOnboardingIfDue } from "./onboarding.js";
 import { EventType, IncrementalSource, MouseInteraction, type AgentAction, type IdleMode, type Manifest, type Marker, type NavigationEvent, type ReplayDefaults, type ReplayEvent, type Segment, type TabEvent, type TimelineIdleRange } from "./types.js";
 import { clamp, escape, format, formatDuration, nearlyEqual } from "./format.js";
 import { CURSOR_APPROACH_MS, humanizeEvents, isRealPoint, withCursorLeadIns } from "./humanize.js";
@@ -43,6 +44,9 @@ let lastNarrationKey: string | undefined;
 let captionTimer: number | undefined;
 let chaptersOpen: boolean | undefined;
 let introDismissed = false;
+// The spotlight tour starts once after the first replay shell renders and is
+// never re-triggered by the recursive present() calls that seeks/idle changes fire.
+let tourStarted = false;
 // The auto-zoom camera is a viewer setting: off by default, toggled from the
 // play-bar settings menu, and remembered across replays via replay-camera. The
 // ?camera=on/off query param still seeds it for shared links.
@@ -164,6 +168,12 @@ async function load(replayId: string) {
       await replay(session, projection.manifest.segments[0], projection.toPlayback(rawTime), autoplay, playbackSpeed);
     };
     await present();
+    if (!tourStarted) {
+      // The shell and its control-deck targets now exist, so the spotlight tour
+      // (if due) can locate #replay, #play, the timeline, Ask AI, and Chapters.
+      tourStarted = true;
+      startOnboardingIfDue();
+    }
   } catch (error) { renderError(error instanceof Error ? error.message : String(error)); }
 }
 
@@ -353,6 +363,8 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
     // rrweb's seek-while-paused also emits start/pause internally, so the
     // cards cannot key off setPlaying.
     dismissIntro();
+    // Once the viewer starts watching, stop coaching.
+    dismissOnboarding();
     setEndCard(false);
     const start = tabEnd >= duration - 10 && time >= duration - 10 ? tabStart : clamp(time, tabStart, tabEnd);
     // A direct marker/timeline jump is a new playback baseline. Do not announce
