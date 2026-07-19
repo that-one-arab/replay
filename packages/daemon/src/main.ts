@@ -99,8 +99,17 @@ async function startBrowser(executable: string) {
     throw new Error(`A browser is already listening at ${managedEndpoint}, but Rec does not own it. Use recording_attach_browser with its endpoint or stop that browser before calling recording_browser_ensure.`);
   }
   await mkdir(recHome(), { recursive: true });
-  const launchArgs = ["--remote-debugging-port=9333", `--user-data-dir=${join(recHome(), "chromium-profile")}`, "--no-first-run", "--no-default-browser-check"];
-  if (browserConfig.headless) launchArgs.push("--headless=new", `--window-size=${browserConfig.viewport.width},${browserConfig.viewport.height}`);
+  const profileDir = join(recHome(), "chromium-profile");
+  const launchArgs = ["--remote-debugging-port=9333", `--user-data-dir=${profileDir}`, "--no-first-run", "--no-default-browser-check"];
+  if (browserConfig.headless) {
+    launchArgs.push("--headless=new", `--window-size=${browserConfig.viewport.width},${browserConfig.viewport.height}`);
+  } else {
+    // A headed browser is one a person can see and accidentally touch. Brand its
+    // chrome so it is unmistakably Rec's controlled session: a bold purple frame
+    // and a labelled profile that live in browser UI, never in the recorded page.
+    // Seed the profile before Chrome reads it at startup.
+    await brandControlledProfile(profileDir);
+  }
   const child = spawn(browser, launchArgs, { detached: true, stdio: "ignore" });
   child.unref();
   cdpEndpoint = managedEndpoint;
@@ -306,6 +315,39 @@ function chromeExecutable() {
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
   ];
   return candidates.find(existsSync);
+}
+
+const CONTROLLED_PROFILE_NAME = "Rec — controlled session";
+// Rec's brand purple (#7C5CFF) as an opaque SkColor (ARGB int). Chrome derives a
+// Material tonal palette from this seed and paints the frame / tab strip with it,
+// so a headed managed browser reads as branded and unmistakably controlled.
+const CONTROLLED_FRAME_COLOR = 0xff7c5cff;
+// BrowserColorVariant::kVibrant — keeps the purple hue but boosts chroma so the
+// frame is clearly non-default rather than a faint tint. (kTonalSpot=1, kVibrant=3.)
+const CONTROLLED_COLOR_VARIANT = 3;
+
+/**
+ * Brand a headed managed browser as Rec's controlled session by seeding its
+ * profile: a labelled profile pill plus a bold purple frame theme. Both live in
+ * Chrome's own UI (never the recorded page) and are applied by seeding
+ * Preferences — Google Chrome stable ignores --load-extension theme injection.
+ * Best-effort: on any failure the browser still launches, just unbranded.
+ */
+async function brandControlledProfile(profileDir: string) {
+  try {
+    const preferencesPath = join(profileDir, "Default", "Preferences");
+    await mkdir(join(profileDir, "Default"), { recursive: true });
+    let preferences: Record<string, unknown> = {};
+    if (existsSync(preferencesPath)) {
+      try { preferences = JSON.parse(await readFile(preferencesPath, "utf8")) as Record<string, unknown>; } catch { preferences = {}; }
+    }
+    // Merge in place so any profile state persisted from earlier sessions survives.
+    const profile = { ...(preferences.profile as Record<string, unknown> | undefined), name: CONTROLLED_PROFILE_NAME };
+    const browser = { ...(preferences.browser as Record<string, unknown> | undefined), theme: { user_color: CONTROLLED_FRAME_COLOR, color_variant: CONTROLLED_COLOR_VARIANT, is_grayscale: false } };
+    await writeFile(preferencesPath, JSON.stringify({ ...preferences, profile, browser }));
+  } catch (error) {
+    console.log(`rec daemon: could not brand the controlled browser: ${messageOf(error)}`);
+  }
 }
 
 async function waitForBrowser(endpoint: string, attempts = 30) {
