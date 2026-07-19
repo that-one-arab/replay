@@ -348,7 +348,8 @@ body.chat-open #app { width: calc(100% - 404px); }
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 5px 9px;
+  height: 28px;
+  padding: 0 10px;
   color: rgba(255, 255, 255, .75);
   background: rgba(255, 255, 255, .06);
   border: 1px solid rgba(255, 255, 255, .14);
@@ -359,7 +360,7 @@ body.chat-open #app { width: calc(100% - 404px); }
 }
 .menu-button:hover { color: #fff; background: rgba(255, 255, 255, .12); }
 .menu-button i { font-style: normal; font-size: 8px; opacity: .7; }
-.menu-button-icon { padding: 6px 8px; }
+.menu-button-icon { padding: 0 9px; }
 .menu-pop {
   position: absolute;
   z-index: 7;
@@ -404,10 +405,13 @@ body.chat-open #app { width: calc(100% - 404px); }
 /* Share */
 .share-control { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .share-button {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
   color: #171720;
   background: #b7abff;
   border: 0;
-  padding: 5px 13px;
+  padding: 0 14px;
   border-radius: 999px;
   font: 10px "DM Mono";
   cursor: pointer;
@@ -441,11 +445,12 @@ body.chat-open #app { width: calc(100% - 404px); }
   display: flex;
   align-items: center;
   gap: 6px;
+  height: 28px;
   color: rgba(255, 255, 255, .75);
   background: rgba(0, 0, 0, .38);
   border: 1px solid rgba(255, 255, 255, .2);
   border-radius: 6px;
-  padding: 4px 9px;
+  padding: 0 11px;
   font: 10px "DM Mono";
   cursor: pointer;
   white-space: nowrap;
@@ -637,11 +642,12 @@ body.chat-open #app { width: calc(100% - 404px); }
   display: flex;
   align-items: center;
   gap: 6px;
+  height: 28px;
   color: rgba(255, 255, 255, .75);
   background: rgba(183, 171, 255, .14);
   border: 1px solid rgba(196, 189, 255, .35);
   border-radius: 6px;
-  padding: 4px 9px;
+  padding: 0 11px;
   font: 10px "DM Mono";
   cursor: pointer;
   white-space: nowrap;
