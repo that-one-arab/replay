@@ -9,6 +9,7 @@ import { RELOAD_CONTEXT_MS, closedAt, nextFocusForSegment, recordingViewport, re
 import { DEFAULT_PLAYBACK_SPEED, projectPlayback, resolvedReplayDefaults } from "./projection.js";
 import { createCamera } from "./camera.js";
 import { elementCenter, isElementLike, makeCursorPlacer, revealCursorOnFirstMove, spawnClickRipple } from "./cursor.js";
+import { sanitizeReplayEvents } from "./sanitize.js";
 
 const TAB_FOCUS_DELAY_MS = 700;
 const REFRESH_INDICATOR_MS = 1_100;
@@ -131,7 +132,7 @@ async function load(recordingId: string) {
     const manifest = await request<Manifest>(`/api/sessions/${encodeURIComponent(recordingId)}/manifest`);
     const eventSets = new Map(await Promise.all(manifest.segments.map(async (segment) => [
       segment.id,
-      humanizeEvents(await request<ReplayEvent[]>(`/api/sessions/${encodeURIComponent(manifest.id)}/events?segment=${encodeURIComponent(segment.id)}`)),
+      humanizeEvents(sanitizeReplayEvents(await request<ReplayEvent[]>(`/api/sessions/${encodeURIComponent(manifest.id)}/events?segment=${encodeURIComponent(segment.id)}`))),
     ] as const)));
     const resolvedManifest = { ...manifest, markers: resolveMarkerTimes(manifest, eventSets) };
     const replayDefaults = resolvedReplayDefaults(manifest.replay_defaults);

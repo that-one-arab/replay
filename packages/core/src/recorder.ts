@@ -21,6 +21,7 @@ interface PageState {
   clockOffsetMs: number;
   firstEventTimestamp?: number;
   flushTimer?: NodeJS.Timeout;
+  flushChain?: Promise<void>;
 }
 
 interface PendingNavigation {
@@ -276,9 +277,27 @@ export class Recorder {
     return state;
   }
 
-  private async flush(state: PageState) {
+  private flush(state: PageState) {
     if (state.flushTimer) clearTimeout(state.flushTimer);
     state.flushTimer = undefined;
+    // Serialize drains per page. Draining now waits on in-flight asset captures,
+    // which widens the window in which a second timer could fire and race the
+    // append sequence counter onto the same chunk filename. Run the next drain
+    // regardless of how the previous one settled so a transient failure does not
+    // wedge the chain, while still surfacing this drain's own error to stop().
+    const previous = state.flushChain ?? Promise.resolve();
+    state.flushChain = previous.then(() => this.drain(state), () => this.drain(state));
+    return state.flushChain;
+  }
+
+  private async drain(state: PageState) {
+    // Asset copies are captured asynchronously. Rewriting an event before its
+    // referenced asset lands in the manifest freezes the original (often
+    // private-network) URL into the persisted event forever — that is what makes
+    // a shared replay reach back to localhost and trip Chrome's local network
+    // access prompt. Let pending captures settle so their assets are known first.
+    const pending = [...this.assetCaptures.values()];
+    if (pending.length > 0) await Promise.allSettled(pending);
     const events = state.queue.splice(0).map((event) => {
       state.baseUrl = eventUrl(event, state.baseUrl);
       return rewriteAssetUrls(event, state.baseUrl, this.store?.manifest.id, this.store?.manifest.assets ?? [], this.origins);
@@ -370,8 +389,9 @@ export class Recorder {
     const resources = await page.evaluate(() => {
       const urls = new Set<string>();
       const add = (value: string | null | undefined) => { if (value) { try { urls.add(new URL(value, location.href).href); } catch { /* ignore invalid URLs */ } } };
-      document.querySelectorAll<HTMLLinkElement>('link[rel~="stylesheet"][href]').forEach((node) => add(node.href));
+      document.querySelectorAll<HTMLLinkElement>('link[rel~="stylesheet"][href], link[rel~="icon"][href], link[rel~="apple-touch-icon"][href], link[rel~="mask-icon"][href], link[rel~="preload"][href], link[rel~="prefetch"][href]').forEach((node) => add(node.href));
       document.querySelectorAll<HTMLElement>("img[src], source[src], video[poster], input[type=image][src]").forEach((node) => add(node.getAttribute("src") ?? node.getAttribute("poster")));
+      document.querySelectorAll<HTMLElement>("img[srcset], source[srcset]").forEach((node) => (node.getAttribute("srcset") ?? "").split(",").forEach((candidate) => add(candidate.trim().split(/\s+/)[0])));
       performance.getEntriesByType("resource").forEach((entry) => {
         const resource = entry as PerformanceResourceTiming;
         if (["img", "css", "link", "font"].includes(resource.initiatorType)) add(resource.name);
@@ -509,6 +529,19 @@ function rewriteCssUrls(value: string, baseUrl: string, sessionId: string | unde
     return local ? `url(${quote}${local}${quote})` : whole;
   });
 }
+// srcset / imagesrcset are comma-separated "<url> <descriptor>" candidates, so a
+// single-URL assetPath() lookup on the whole value never matches — each captured
+// candidate has to be rewritten in place or the responsive image keeps pointing
+// at the recorded (private-network) origin.
+function rewriteSrcset(value: string, baseUrl: string, sessionId: string | undefined, assets: { id: string; source_urls: string[] }[]) {
+  return value.split(",").map((candidate) => {
+    const trimmed = candidate.trim();
+    if (!trimmed) return candidate;
+    const [source, ...descriptors] = trimmed.split(/\s+/);
+    const local = assetPath(source, baseUrl, sessionId, assets);
+    return local ? [local, ...descriptors].join(" ") : trimmed;
+  }).join(", ");
+}
 function cssUrls(value: string, baseUrl: string) {
   const urls = new Set<string>();
   value.replace(/url\(\s*(['"]?)([^'"()]+)\1\s*\)/gi, (_whole, _quote: string, source: string) => {
@@ -525,7 +558,10 @@ export function rewriteAssetUrls(event: unknown, baseUrl: string, sessionId: str
     }
     if (Array.isArray(value)) return value.map(rewrite);
     if (!value || typeof value !== "object") return value;
-    const copy = Object.fromEntries(Object.entries(value).map(([key, child]) => [key, rewrite(child)]));
+    const copy = Object.fromEntries(Object.entries(value).map(([key, child]) =>
+      (key === "srcset" || key === "imagesrcset") && typeof child === "string"
+        ? [key, rewriteSrcset(child, baseUrl, sessionId, assets)]
+        : [key, rewrite(child)]));
     return iframeFallback(copy, baseUrl, allowedOrigins);
   };
   return rewrite(event);
