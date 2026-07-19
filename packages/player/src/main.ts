@@ -213,7 +213,19 @@ function wireShareControl(recordingId: string) {
   const button = document.querySelector<HTMLButtonElement>("#share");
   if (button) button.onclick = () => void shareRecording(recordingId, button);
   const copy = document.querySelector<HTMLButtonElement>("#share-copy");
-  if (copy) copy.onclick = () => { if (shareUrl) void navigator.clipboard?.writeText(shareUrl); };
+  if (copy) copy.onclick = () => copyShareLink(copy);
+}
+
+function copyShareLink(button: HTMLButtonElement) {
+  const clipboard = navigator.clipboard;
+  if (!shareUrl || !clipboard) { setActionCaption("Copy the link", "Select the share link and copy it manually."); return; }
+  void clipboard.writeText(shareUrl)
+    .then(() => {
+      button.textContent = "Copied";
+      window.setTimeout(() => { button.textContent = "Copy"; }, 1600);
+      setActionCaption("Link copied", "The share link is on your clipboard.");
+    })
+    .catch(() => setActionCaption("Copy the link", "Select the share link and copy it manually."));
 }
 
 async function shareRecording(recordingId: string, button: HTMLButtonElement) {
@@ -236,6 +248,7 @@ async function shareRecording(recordingId: string, button: HTMLButtonElement) {
       const control = document.querySelector<HTMLElement>("#share-control");
       if (control) control.innerHTML = shareResultMarkup(shareUrl);
       wireShareControl(recordingId);
+      setActionCaption("Share link ready", "Copy it from the control bar.");
     }
   } catch (error) {
     button.disabled = false;
