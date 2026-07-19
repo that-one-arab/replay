@@ -86,7 +86,7 @@ export class Recorder {
     this.observedPages = new WeakSet<Page>();
     this.pendingNavigations.clear();
     this.assetCaptures.clear();
-    const id = `rec_${randomUUID().slice(0, 8)}`;
+    const id = `rec_${randomUUID()}`;
     const manifest: RecordingManifest = {
       format_version: 1,
       id,
