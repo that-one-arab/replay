@@ -295,6 +295,16 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   const camera = createCamera(mount, replayer, viewport, lifetime);
   revealCursorOnFirstMove(replayer, lifetime);
   window.addEventListener("resize", () => { fitReplay(mount, replayer, viewport); camera.apply(); }, { signal: lifetime.signal });
+  // Agent-driven recordings capture interactions without pointer coordinates, so
+  // rrweb has nothing to move the cursor with. When a recording carries no real
+  // pointer data at all, drive the cursor ourselves from the element each
+  // interaction resolves to — clicks, focus, and typed fields — so the flow
+  // stays visible. Recordings with real coordinates keep rrweb's own cursor.
+  const syntheticCursor = !events.some((event) => event.type === 3 && (
+    (event.data?.source === 1 && (event.data.positions?.length ?? 0) > 0) ||
+    (event.data?.source === 2 && isRealPoint(event.data.x, event.data.y))
+  ));
+  const placeCursorAtElement = makeCursorPlacer(replayer);
   let playing = false;
   let scrubbing = false;
   let resumeAfterScrub = false;
@@ -461,11 +471,17 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     else if (data.source === 5) camera.refreshHold();
   });
   replayer.on("mouse-interaction", (payload: unknown) => {
-    const interaction = payload as { type?: number; target?: unknown; x?: number; y?: number };
-    // 2 = click, 4 = double click in rrweb's MouseInteractions enum. Focus,
-    // blur, and pointer downs replay silently.
-    if (interaction.type !== 2 && interaction.type !== 4) return;
-    spawnClickRipple(replayer, interaction);
+    const interaction = payload as { type?: number; target?: unknown };
+    // 2 = click, 4 = double click, 5 = focus in rrweb's MouseInteractions enum.
+    const isClick = interaction.type === 2 || interaction.type === 4;
+    const isFocus = interaction.type === 5;
+    if (!isClick && !isFocus) return;
+    // With no recorded coordinates, put the cursor on the element rrweb resolved
+    // for this interaction (and let the camera follow clicks) so the flow shows.
+    const point = syntheticCursor ? placeCursorAtElement(interaction.target) : undefined;
+    if (point && isClick && cameraFeature) camera.noteInteraction(point.x, point.y);
+    if (!isClick) return;
+    spawnClickRipple(replayer, point ?? {});
     const target = interaction.target;
     if (!isElementLike(target)) return;
     target.classList.remove("rec-focus-target");
@@ -1263,6 +1279,45 @@ function revealCursorOnFirstMove(replayer: Replayer, lifetime: AbortController) 
   reveal.observe(mouse, { attributes: true, attributeFilter: ["style"] });
   lifetime.signal.addEventListener("abort", () => reveal.disconnect(), { once: true });
 }
+/**
+ * Build a cursor mover for recordings without pointer coordinates: given the
+ * element an interaction resolved to, park the synthetic cursor at its center
+ * (in the replay's content coordinates, which the overlay shares). The first
+ * placement appears on target rather than gliding in from the corner; later
+ * ones ease across so the path between elements reads as intentional movement.
+ */
+function makeCursorPlacer(replayer: Replayer) {
+  const glide = "left .34s cubic-bezier(.22,.61,.36,1), top .34s cubic-bezier(.22,.61,.36,1), opacity .25s ease";
+  let placed = false;
+  const apply = (x: number, y: number) => {
+    const mouse = replayer.wrapper.querySelector<HTMLElement>(".replayer-mouse");
+    if (!mouse) return;
+    if (!placed) {
+      mouse.style.transition = "none";
+      mouse.style.left = `${x}px`;
+      mouse.style.top = `${y}px`;
+      void mouse.offsetWidth;
+      mouse.style.transition = glide;
+      placed = true;
+    } else {
+      mouse.style.left = `${x}px`;
+      mouse.style.top = `${y}px`;
+    }
+    replayer.wrapper.classList.add("rec-cursor-live");
+  };
+  return (node: unknown): { x: number; y: number } | undefined => {
+    if (!isElementLike(node)) return undefined;
+    const rect = node.getBoundingClientRect();
+    if (!rect.width && !rect.height) return undefined;
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    // On a click rrweb re-parks the cursor at (d.x, d.y) = (0,0) synchronously
+    // right after emitting the interaction. Apply our position in a microtask so
+    // it lands after that, before the frame paints.
+    queueMicrotask(() => apply(x, y));
+    return { x, y };
+  };
+}
 function spawnClickRipple(replayer: Replayer, interaction: { x?: number; y?: number }) {
   const mouse = replayer.wrapper.querySelector<HTMLElement>(".replayer-mouse");
   const x = typeof interaction.x === "number" ? interaction.x : parseFloat(mouse?.style.left ?? "");
@@ -1383,7 +1438,7 @@ function isTextEntryTarget(target: EventTarget | null) {
 function isMainDocumentTarget(target: EventTarget | null) {
   return !!target && target instanceof Node && target.ownerDocument === document;
 }
-type ElementLike = { nodeType: number; classList: DOMTokenList; getAttribute(name: string): string | null; textContent: string | null; tagName: string };
+type ElementLike = { nodeType: number; classList: DOMTokenList; getAttribute(name: string): string | null; textContent: string | null; tagName: string; getBoundingClientRect(): DOMRect };
 function isElementLike(value: unknown): value is ElementLike { return typeof value === "object" && value !== null && (value as { nodeType?: number }).nodeType === 1 && "classList" in value; }
 /** Let rrweb finish painting a fresh seek before the assistant reads the frame. */
 function settleReplayFrame() {
