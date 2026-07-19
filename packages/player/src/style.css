@@ -212,6 +212,11 @@ body.chat-open #app { width: calc(100% - 404px); }
 .caption-card strong { display: block; color: white; font-size: 13px; }
 .caption-card p { margin: 4px 0 0; color: #c7cad5; font-size: 11px; line-height: 1.45; }
 .caption-card p[hidden] { display: none; }
+/* Colored markers tint the banner to match their timeline dot and chapter entry. */
+.caption-card[data-color="yellow"] { border-color: rgba(255, 202, 114, .42); border-left-color: #ffca72; }
+.caption-card[data-color="yellow"] strong { color: #ffd98f; }
+.caption-card[data-color="green"] { border-color: rgba(90, 209, 154, .42); border-left-color: #5ad19a; }
+.caption-card[data-color="green"] strong { color: #7ee3b4; }
 
 /* Session title and end cards */
 .session-overlay {

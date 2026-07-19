@@ -937,11 +937,12 @@ function installTimelineTooltips() {
 function syncNarration(markers: Marker[], time: number, force = false) {
   const marker = [...markers].reverse().find((item) => item.t_ms <= time + 450);
   // A NUL separator no page text can contain, so the pair ("a", "bc") never
-  // collides with ("ab", "c").
-  const key = marker && `${marker.label}\u0000${marker.note ?? ""}`;
+  // collides with ("ab", "c"). Color rides along so the banner restyles when
+  // the active marker's color changes, even if its label and note match.
+  const key = marker && `${marker.label}\u0000${marker.note ?? ""}\u0000${marker.color ?? ""}`;
   if (!force && key === lastNarrationKey) return;
   lastNarrationKey = key;
-  if (marker) setActionCaption(marker.label, marker.note);
+  if (marker) setActionCaption(marker.label, marker.note, marker.color);
   else document.querySelector("#caption")?.classList.remove("is-visible");
 }
 function revealTabs(manifest: Manifest, time: number) {
@@ -951,13 +952,17 @@ function revealTabs(manifest: Manifest, time: number) {
     button.hidden = Boolean(segment && (openedAt > time || closedAt(manifest, segment.id, time)));
   });
 }
-function setActionCaption(title: string, copy?: string) {
+function setActionCaption(title: string, copy?: string, color?: Marker["color"]) {
   const caption = document.querySelector<HTMLElement>("#caption");
   if (!caption) return;
   caption.querySelector("strong")!.textContent = title;
   const detail = caption.querySelector("p")!;
   detail.textContent = copy ?? "";
   detail.hidden = !copy;
+  // Reflect the active marker's color so the banner draws the eye the same way
+  // the timeline dot and chapters entry do. Absent color clears the accent.
+  if (color) caption.dataset.color = color;
+  else delete caption.dataset.color;
   caption.classList.add("is-visible");
   scheduleCaptionFade();
 }
