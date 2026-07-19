@@ -211,7 +211,8 @@ export class ChatManager {
     });
     response.write(`retry: 2000\n\n`);
     chat.clients.add(response);
-    sendEvent(response, "ready", { chat_id: chat.id, provider: selection.provider, busy: Boolean(chat.turn) });
+    const model = selection.provider === "openai" ? (selection.model ?? OPENAI_DEFAULT_MODEL) : selection.model;
+    sendEvent(response, "ready", { chat_id: chat.id, provider: selection.provider, ...(model ? { model } : {}), busy: Boolean(chat.turn) });
     sendEvent(response, "history", { events: chat.history });
     const heartbeat = setInterval(() => response.write(`: ping\n\n`), 25_000);
     heartbeat.unref();

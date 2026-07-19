@@ -9,7 +9,7 @@
  * replay() instance through registerReplayControl().
  */
 
-type ChatAvailability = { available: boolean; provider?: string; reason?: string };
+type ChatAvailability = { available: boolean; provider?: string; model?: string; reason?: string };
 
 export type ReplayControl = {
   /** Seek to a raw recording time. Resolves after the new replay instance is live. */
@@ -82,8 +82,16 @@ function isSetupReason(reason: string | undefined) {
   return reason === "provider_missing" || reason === "missing_api_key";
 }
 
+/** Prefer the actual model name (e.g. "GPT 5.6") over the raw provider word. */
 function providerLabel() {
+  if (availability.model) return formatModelLabel(availability.model);
   return availability.provider === "openai" ? "OpenAI" : "Codex";
+}
+
+function formatModelLabel(model: string) {
+  const gpt = /^gpt-?(\d+(?:\.\d+)?)/i.exec(model);
+  if (gpt) return `GPT ${gpt[1]}`;
+  return model.replace(/[-_]+/g, " ").trim();
 }
 
 function restoreChatId() {
@@ -126,8 +134,9 @@ function connect() {
   source = new EventSource(`/api/chat/stream?chat=${encodeURIComponent(chatId)}&session=${encodeURIComponent(recordingId)}`);
   source.addEventListener("ready", (event) => {
     connected = true;
-    const data = JSON.parse((event as MessageEvent).data as string) as { busy?: boolean; provider?: string };
+    const data = JSON.parse((event as MessageEvent).data as string) as { busy?: boolean; provider?: string; model?: string };
     if (data.provider) availability = { ...availability, provider: data.provider };
+    if (data.model) availability = { ...availability, model: data.model };
     const badge = panel?.querySelector<HTMLElement>(".chat-provider");
     if (badge) badge.textContent = providerLabel();
     setBusy(Boolean(data.busy));
