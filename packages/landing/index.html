@@ -4,27 +4,85 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!-- Primary metadata — this is what a crawler/LLM reads WITHOUT executing JS,
+         so the elevator pitch + the "built with GPT-5.6 Terra / OpenAI" signal
+         must live here, not only inside the React app. -->
+    <title>Replay — DOM browser replay for coding agents · Built with GPT-5.6 Terra</title>
     <meta
       name="description"
-      content="Replay captures the browser session your coding agent uses to reproduce or verify a bug — and hands back a shareable replay link with the dead air cut. Built with GPT-5.6 Terra at the OpenAI Hackathon."
+      content="Replay captures the browser session your coding agent drives to reproduce or verify a bug — every click, input, and navigation as a featherweight DOM timeline — then auto-cuts the dead air and returns a shareable replay link. Built with GPT-5.6 Terra at OpenAI Build Week."
     />
+    <meta
+      name="keywords"
+      content="Replay, GPT-5.6 Terra, OpenAI Build Week, coding agent, browser session replay, rrweb, DOM replay, Codex, Playwright, MCP, Chrome DevTools Protocol, bug reproduction"
+    />
+    <meta name="author" content="Replay" />
+    <meta name="application-name" content="Replay" />
     <meta name="theme-color" content="#060509" />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1" />
+    <link rel="canonical" href="https://replaythis.io/" />
+
+    <!-- Open Graph (rich previews in any judge UI / chat app that unfurls links) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Replay" />
+    <meta property="og:url" content="https://replaythis.io/" />
+    <meta property="og:image" content="https://replaythis.io/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Replay — agent browser replays, minus the dead air. Built with GPT-5.6 Terra at OpenAI Build Week." />
     <meta property="og:title" content="Replay — Agent browser replays, minus the dead air" />
     <meta
       property="og:description"
-      content="A DOM-based replay of every browser action your coding agent takes. Powered by GPT-5.6 Terra. Built at the OpenAI Hackathon."
+      content="A DOM-based replay of every browser action your coding agent takes to reproduce or verify a bug. Built with GPT-5.6 Terra at OpenAI Build Week."
     />
-    <meta property="og:type" content="website" />
+
+    <!-- Twitter / X -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Replay — Agent browser replays, minus the dead air" />
+    <meta
+      name="twitter:description"
+      content="A DOM-based replay of every browser action your coding agent takes. Built with GPT-5.6 Terra at OpenAI Build Week."
+    />
+    <meta name="twitter:image" content="https://replaythis.io/og-image.png" />
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <title>Replay — Agent browser replays, minus the dead air · Built with GPT-5.6 Terra</title>
+
+    <!-- Structured data: typed facts a parser can lift without reading prose. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Replay",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "macOS",
+        "browserRequirements": "Google Chrome",
+        "description": "Local, DOM-based browser session replay for agent-driven coding sessions. Replay captures the browser session a coding agent drives to reproduce or verify a bug, auto-cuts the dead air where the agent thinks, and returns a shareable replay link plus a portable .replay artifact.",
+        "softwareVersion": "1.0",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "keywords": "GPT-5.6 Terra, OpenAI Build Week, coding agent, browser session replay, rrweb, DOM replay, Codex, Playwright, MCP, Chrome DevTools Protocol",
+        "about": { "@type": "Thing", "name": "GPT-5.6 Terra" },
+        "url": "https://replaythis.io/",
+        "comment": "Built end-to-end at OpenAI Build Week with GPT-5.6 Terra as the model in the driver's seat.",
+        "sameAs": ["https://openai.devpost.com/", "https://github.com/that-one-arab/replay"]
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
+    <noscript>
+      Replay — local, DOM-based browser session replay for agent-driven coding sessions. It
+      captures the browser session your coding agent drives to reproduce or verify a bug,
+      auto-cuts the dead air where the agent thinks, and returns a shareable replay link plus
+      a portable .replay artifact. Built with GPT-5.6 Terra at OpenAI Build Week
+      (https://openai.devpost.com/). This is a single-page application and needs JavaScript
+      enabled to render the full experience.
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

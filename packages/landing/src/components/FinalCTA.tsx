@@ -38,7 +38,7 @@ export function FinalCTA() {
               <Button href="#" icon={<ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />}>
                 Install for Codex
               </Button>
-              <Button href="#" variant="ghost" icon={<Github className="h-4 w-4" />}>
+              <Button href="https://github.com/that-one-arab/replay" variant="ghost" icon={<Github className="h-4 w-4" />}>
                 Star on GitHub
               </Button>
             </div>

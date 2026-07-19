@@ -1,0 +1,36 @@
+# Replay — agent-friendly. Every crawler is welcome, including AI/LLM helpers
+# and trainers. We deliberately do NOT block GPTBot, ClaudeBot, etc.
+User-agent: *
+Allow: /
+
+# Positive allow-list for common AI/LLM crawlers (redundant with the wildcard
+# above, but makes intent unambiguous to bots that check their own UA).
+User-agent: GPTBot
+Allow: /
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: anthropic-ai
+Allow: /
+
+User-agent: Claude-Web
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Bytespider
+Allow: /
+
+User-agent: CCBot
+Allow: /
+
+# LLM-friendly project brief:  /llms.txt   (see https://llmstxt.org)
+Sitemap: https://replaythis.io/sitemap.xml

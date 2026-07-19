@@ -1,0 +1,47 @@
+# Replay
+
+> Local, DOM-based browser session replay for agent-driven coding sessions.
+
+Replay captures the exact browser session a coding agent (e.g. OpenAI Codex) drives to
+reproduce or verify a bug — every click, typed input, tab switch, and navigation — as a
+featherweight DOM timeline. It auto-cuts the "dead air" where the agent thinks, and returns
+a shareable replay link plus a portable `.replay` artifact. Built end-to-end at
+[OpenAI Build Week](https://openai.devpost.com/) with **GPT-5.6 Terra** as the model in the
+driver's seat; OpenAI's credits and early access made it possible.
+
+## The problem
+"It works on my machine." A bug ticket arrives with steps and a screenshot — but never what
+the agent actually did in the browser to reproduce it. Reviewers can't see the reproduction,
+so they can't trust the fix. Raw screen recordings are ~90% dead air because agents pause
+for long stretches to think between actions.
+
+## How it works
+1. The agent drives a managed Chrome (Playwright over the Chrome DevTools Protocol). Replay
+   observes the same browser — it never proxies or interferes with the agent's workflow.
+2. Every DOM event, tab change, and navigation is recorded as a lightweight timeline. The
+   agent drops atomic markers ("Submitting checkout", "Verified ✓") bound to the exact action
+   at capture time.
+3. Stopping finalizes a portable `.replay` artifact and hands back a replay URL. Idle gaps
+   where the agent thought are auto-cut, so reviewers watch the seconds that matter.
+
+## Key features
+- DOM-based, not video — featherweight, pixel-faithful, inspectable, no giant recordings
+- Dead-air auto-cut with three treatments: cut, fast-forward (8×), or keep
+- Narrative markers bound atomically to the actions they describe
+- Portable, checksummed `.replay` artifacts (offline, archivable, verifiable)
+- One shareable link to a hosted player — reviewers install nothing
+- Tabs, focus changes, and navigation modeled on a single shared timeline
+- In-player "Ask AI" assistant that can seek, pause, and highlight elements — powered by GPT-5.6 Terra
+- Local-first capture; passwords masked; the only network hop is the optional upload you choose
+
+## Built with
+GPT-5.6 Terra · rrweb · Playwright · Model Context Protocol (MCP) · Chrome DevTools Protocol · React · Vite
+
+## Audience
+Developers and reviewers who need to see — and trust — what an autonomous coding agent did
+in the browser to reproduce a bug or verify a fix.
+
+## Links
+- Website: https://replaythis.io/
+- Source: https://github.com/that-one-arab/replay
+- Hackathon (OpenAI Build Week): https://openai.devpost.com/

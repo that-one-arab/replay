@@ -16,8 +16,8 @@ const cols = [
     links: [
       { label: "GPT-5.6 Terra", href: "#terra" },
       { label: "OpenAI Build Week", href: "https://openai.devpost.com/" },
-      { label: "rrweb", href: "#" },
-      { label: "Playwright", href: "#" },
+      { label: "rrweb", href: "https://www.rrweb.io/" },
+      { label: "Playwright", href: "https://playwright.dev/" },
     ],
   },
   {
@@ -83,7 +83,7 @@ export function Footer() {
           </p>
           <div className="flex items-center gap-3">
             <a
-              href="https://github.com"
+              href="https://github.com/that-one-arab/replay"
               target="_blank"
               rel="noreferrer"
               aria-label="GitHub"

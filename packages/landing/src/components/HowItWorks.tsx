@@ -43,21 +43,21 @@ export function HowItWorks() {
 
         <div className="relative mt-16">
           {/* connecting line */}
-          <div className="absolute left-0 right-0 top-[3.25rem] hidden h-px bg-gradient-to-r from-transparent via-brand-500/40 to-transparent md:block" />
+          <div className="absolute left-0 right-0 top-[3.75rem] hidden h-px bg-gradient-to-r from-transparent via-brand-500/40 to-transparent md:block" />
 
           <div className="grid gap-6 md:grid-cols-3">
             {steps.map((s, i) => {
               const Icon = s.icon;
               return (
-                <Reveal key={s.n} delay={i * 0.12}>
-                  <div className="relative h-full">
+                <Reveal key={s.n} delay={i * 0.12} className="h-full">
+                  <div className="relative flex h-full flex-col">
                     <div className="relative z-10 mx-auto grid h-[3.25rem] w-[3.25rem] place-items-center rounded-2xl border border-white/10 bg-ink-900 shadow-glow">
                       <Icon className="h-6 w-6 text-brand-200" />
                       <span className="absolute -right-2 -top-2 grid h-6 w-6 place-items-center rounded-full bg-gradient-to-br from-brand-500 to-fuchsia-600 font-mono text-[10px] font-bold text-white">
                         {s.n}
                       </span>
                     </div>
-                    <div className="mt-6 rounded-2xl border border-white/8 bg-white/[0.02] p-6 text-center">
+                    <div className="mt-6 flex-1 rounded-2xl border border-white/8 bg-white/[0.02] p-6 text-center">
                       <h3 className="font-display text-lg font-semibold text-white">{s.title}</h3>
                       <p className="mt-2.5 text-sm leading-relaxed text-white/55">{s.body}</p>
                       <div className="mt-4 flex flex-wrap justify-center gap-1.5">
