@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 
-export type ShareUploadResult = { shareUrl: string; sessionId?: string; shareId?: string };
+export type ShareUploadResult = { shareUrl: string; sessionId?: string; shareId?: string; summaryUrl?: string };
 
 export type ShareUploadOptions = {
   timeoutMs?: number;
@@ -46,7 +46,7 @@ export async function uploadReplay(shareEndpoint: string, artifactPath: string, 
     if (response.ok) {
       const shareUrl = text(result.shareUrl);
       if (!shareUrl) throw new Error(`The share server at ${endpoint} accepted the replay but returned no share link.`);
-      return { shareUrl, sessionId: text(result.sessionId), shareId: text(result.shareId) };
+      return { shareUrl, sessionId: text(result.sessionId), shareId: text(result.shareId), summaryUrl: text(result.summaryUrl) };
     }
     const detail = text(result.error) ?? response.statusText ?? `HTTP ${response.status}`;
     if (retriable(response.status) && attempt < attempts) {

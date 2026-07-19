@@ -125,6 +125,13 @@ replay. A resulting link is currently an unlisted bearer link—anyone with it
 can view the replay—so use only non-sensitive replays. Deployment, agent
 usage, and limitations are in the [Railway sharing guide](docs/phase-4-railway-sharing.md).
 
+A share link is also agent-readable: `GET /r/<id>.md` (or the bare link with
+`Accept: text/markdown`) returns a prompt-ready summary any coding agent can
+fetch, `/r/<id>.json` returns it structured, and the `replay_overview`,
+`replay_steps`, and `replay_fetch` MCP tools read or import a shared replay
+straight from the pasted link. See the
+[remote query design](docs/phase-4b-remote-query.md).
+
 ## Documentation
 
 - [Architecture](ARCHITECTURE.md)

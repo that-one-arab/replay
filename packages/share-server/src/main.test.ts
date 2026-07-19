@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +23,8 @@ test("uploads a portable artifact and serves its replay data", async () => {
     });
     store.segment("seg_1", "http://fixture.test", 0);
     await store.append("seg_1", [{ type: 2, timestamp: 1 }, { type: 3, timestamp: 2 }], Date.now());
+    store.addMarker({ t_ms: 1, label: "Bug reproduced", note: "The save button did nothing" });
+    store.addAction({ id: "act_1", tool: "browser_click", args_summary: "#save", started_at_ms: 0, finished_at_ms: 1, ok: false });
     await store.finalize();
     const artifact = join(source, "fixture.replay");
     await exportSession("replay_share_fixture", artifact);
@@ -30,8 +32,9 @@ test("uploads a portable artifact and serves its replay data", async () => {
     await waitForHealth(endpoint);
     const upload = await fetch(`${endpoint}/v1/replays`, { method: "POST", body: await readFile(artifact) });
     assert.equal(upload.status, 201);
-    const handoff = await upload.json() as { shareUrl: string; sessionId: string };
+    const handoff = await upload.json() as { shareId: string; shareUrl: string; sessionId: string; summaryUrl: string };
     assert.equal(handoff.sessionId, "replay_share_fixture");
+    assert.equal(handoff.summaryUrl, `${handoff.shareUrl}.md`);
     // Re-sharing the same replay is idempotent: it must not fail on the
     // duplicate import and should hand back the replay's existing link.
     const reupload = await fetch(`${endpoint}/v1/replays`, { method: "POST", body: await readFile(artifact) });
@@ -42,6 +45,66 @@ test("uploads a portable artifact and serves its replay data", async () => {
     const redirect = await fetch(handoff.shareUrl, { redirect: "manual" });
     assert.equal(redirect.status, 302);
     assert.equal(redirect.headers.get("location"), "/replay?id=replay_share_fixture");
+    // The same share link is agent-readable: explicit .md, or content
+    // negotiation when the client prefers markdown over the player redirect.
+    const markdown = await fetch(handoff.summaryUrl);
+    assert.equal(markdown.status, 200);
+    assert.match(markdown.headers.get("content-type") ?? "", /text\/markdown/);
+    const markdownBody = await markdown.text();
+    assert.match(markdownBody, /Shared fixture/);
+    assert.match(markdownBody, /Opened http:\/\/fixture\.test/);
+    assert.match(markdownBody, /Marker: Bug reproduced — The save button did nothing/);
+    assert.match(markdownBody, /Agent browser actions \(1, 1 FAILED\):/);
+    assert.match(markdownBody, /browser_click #save — FAILED/);
+    assert.ok(markdownBody.includes(`${handoff.shareUrl}.json`));
+    // The public summary identifies the replay by share id, never the spool session id.
+    assert.ok(!markdownBody.includes("replay_share_fixture"));
+    const negotiated = await fetch(handoff.shareUrl, { headers: { accept: "text/markdown" }, redirect: "manual" });
+    assert.equal(negotiated.status, 200);
+    assert.match(negotiated.headers.get("content-type") ?? "", /text\/markdown/);
+    const summaryResponse = await fetch(`${handoff.shareUrl}.json`);
+    assert.equal(summaryResponse.status, 200);
+    const summary = await summaryResponse.json() as { id: string; title: string; steps: { kind: string }[] };
+    assert.equal(summary.title, "Shared fixture");
+    assert.equal(`${endpoint}/r/${summary.id}`, handoff.shareUrl);
+    assert.ok(summary.steps.some((step) => step.kind === "page"));
+    const missingSummary = await fetch(`${endpoint}/r/${"0".repeat(24)}.md`);
+    assert.equal(missingSummary.status, 404);
+    // The scoped query API is keyed by share id only.
+    const apiSummary = await fetch(`${endpoint}/v1/replays/${handoff.shareId}/summary`);
+    assert.equal(apiSummary.status, 200);
+    assert.equal((await apiSummary.json() as { id: string }).id, handoff.shareId);
+    const stepsByMarker = await fetch(`${endpoint}/v1/replays/${handoff.shareId}/steps?marker=Bug reproduced`);
+    assert.equal(stepsByMarker.status, 200);
+    const window = await stepsByMarker.json() as { from_ms: number; to_ms: number; steps: { kind: string }[] };
+    assert.ok(window.steps.some((step) => step.kind === "marker"));
+    assert.equal((await fetch(`${endpoint}/v1/replays/${handoff.shareId}/steps?from_ms=abc`)).status, 400);
+    assert.equal((await fetch(`${endpoint}/v1/replays/${handoff.shareId}/steps?marker=no such marker`)).status, 404);
+    const actions = await fetch(`${endpoint}/v1/replays/${handoff.shareId}/actions`);
+    assert.deepEqual(await actions.json(), [{ id: "act_1", tool: "browser_click", args_summary: "#save", started_at_ms: 0, finished_at_ms: 1, ok: false }]);
+    const markers = await fetch(`${endpoint}/v1/replays/${handoff.shareId}/markers`);
+    assert.equal((await markers.json() as { label: string }[])[0]?.label, "Bug reproduced");
+    const bundle = await fetch(`${endpoint}/v1/replays/${handoff.shareId}/bundle`);
+    assert.equal(bundle.status, 200);
+    assert.equal(bundle.headers.get("content-type"), "application/vnd.replay");
+    const bundleBytes = Buffer.from(await bundle.arrayBuffer());
+    assert.ok(bundleBytes.byteLength > 2 && bundleBytes[0] === 0x1f && bundleBytes[1] === 0x8b, "bundle should be a gzipped .replay artifact");
+    // Revoking a share kills the link everywhere — player redirect, summaries,
+    // query API, and the session data routes the player depends on — and a
+    // later re-upload mints a fresh share instead of resurrecting the dead one.
+    const sharesFile = join(data, "shares.json");
+    const shareRows = JSON.parse(await readFile(sharesFile, "utf8")) as { id: string; revoked?: boolean }[];
+    shareRows.find((entry) => entry.id === handoff.shareId)!.revoked = true;
+    await writeFile(sharesFile, JSON.stringify(shareRows));
+    assert.equal((await fetch(handoff.shareUrl, { redirect: "manual" })).status, 404);
+    assert.equal((await fetch(handoff.summaryUrl)).status, 404);
+    assert.equal((await fetch(`${endpoint}/v1/replays/${handoff.shareId}/summary`)).status, 404);
+    assert.equal((await fetch(`${endpoint}/api/sessions/replay_share_fixture/manifest`)).status, 404);
+    const reissued = await fetch(`${endpoint}/v1/replays`, { method: "POST", body: await readFile(artifact) });
+    assert.equal(reissued.status, 201);
+    const fresh = await reissued.json() as { shareId: string };
+    assert.notEqual(fresh.shareId, handoff.shareId);
+    assert.equal((await fetch(`${endpoint}/v1/replays/${fresh.shareId}/summary`)).status, 200);
     const manifest = await fetch(`${endpoint}/api/sessions/replay_share_fixture/manifest`);
     assert.equal(manifest.status, 200);
     assert.equal((await manifest.json() as { title: string }).title, "Shared fixture");

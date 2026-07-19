@@ -74,8 +74,15 @@ returns the local artifact and `shareError` rather than losing the replay.
    navigation transitions.
 5. Redeploy the Railway service and reopen the link to verify the `/data` volume.
 
+## Agent-readable links (phase 4B)
+
+Every share link also serves coding agents: `/r/<id>.md` and `/r/<id>.json`
+return the replay summary, and `/v1/replays/<id>/...` exposes scoped query
+endpoints. Shares carry a `revoked` flag that 404s the link everywhere. See
+[phase-4b-remote-query.md](phase-4b-remote-query.md).
+
 ## Deferred work
 
 Before any use beyond controlled testing, add access control, retention/expiry,
-revocation, ownership, upload controls, auditability, and stronger capture
+a revocation UI, ownership, upload controls, auditability, and stronger capture
 masking. Review comments and marker discussion remain outside this slice.

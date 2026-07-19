@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
+import { rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
-import { exportSession, uploadReplay } from "@replay/core";
+import { exportSession, importSession, uploadReplay } from "@replay/core";
 import { embeddedPlaywrightEnabled, PlaywrightBridge } from "./playwright-bridge.js";
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -95,6 +97,42 @@ const tools: JsonObject[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "replay_overview",
+    description: "Read a remotely shared replay without downloading it: title, duration, pages visited, the step timeline with timestamps, markers, and agent browser actions with failures highlighted. Use this first when handed a replay share link.",
+    inputSchema: {
+      type: "object",
+      required: ["url"],
+      properties: { url: { type: "string", description: "The replay share link as pasted, for example https://host/r/<id>." } },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "replay_steps",
+    description: "Zoom into a moment of a remotely shared replay. Pass from_ms/to_ms (raw replay milliseconds from replay_overview), or a marker label to center a window on that marker.",
+    inputSchema: {
+      type: "object",
+      required: ["url"],
+      properties: {
+        url: { type: "string", description: "The replay share link as pasted, for example https://host/r/<id>." },
+        from_ms: { type: "number", description: "Window start in raw replay milliseconds. Defaults to 0." },
+        to_ms: { type: "number", description: "Window end in raw replay milliseconds. Defaults to the replay duration." },
+        marker: { type: "string", description: "Marker label to center the window on, instead of from_ms/to_ms." },
+        window_ms: { type: "number", description: "Half-width of the marker-centered window in milliseconds. Defaults to 10000." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "replay_fetch",
+    description: "Download a remotely shared replay into the local Replay home for deep inspection. After fetching, the local player (and its assistant, which can read the rendered screen at any moment) works on it like any local replay.",
+    inputSchema: {
+      type: "object",
+      required: ["url"],
+      properties: { url: { type: "string", description: "The replay share link as pasted, for example https://host/r/<id>." } },
+      additionalProperties: false,
+    },
+  },
 ];
 
 const captureToolNames = new Set(tools.map((tool) => String(tool.name)));
@@ -181,6 +219,9 @@ async function callTool(name: string, argumentsValue: JsonObject): Promise<JsonO
       case "capture_status": return toolResult(await captureStatus());
       case "capture_stop": return toolResult(await stopCapture(argumentsValue));
       case "replay_share": return toolResult(await shareReplay(argumentsValue));
+      case "replay_overview": return textResult(await replayOverview(argumentsValue));
+      case "replay_steps": return toolResult(await replaySteps(argumentsValue));
+      case "replay_fetch": return toolResult(await fetchSharedReplay(argumentsValue));
       default: return await callBrowserTool(name, argumentsValue);
     }
   } catch (error) {
@@ -387,11 +428,72 @@ async function shareReplay(argumentsValue: JsonObject) {
   const home = process.env.REPLAY_HOME ?? join(process.env.HOME ?? process.cwd(), ".replay");
   const artifact = join(home, "exports", `${sessionId}.replay`);
   if (!existsSync(artifact)) throw new Error(`Portable artifact ${artifact} was not found. Call capture_stop before replay_share.`);
-  const { shareUrl } = await uploadReplay(shareEndpoint, artifact);
-  return { sessionId, shareUrl };
+  const { shareUrl, summaryUrl } = await uploadReplay(shareEndpoint, artifact);
+  // summaryUrl is the agent-readable form of the link — include it in tickets or
+  // handoffs so a coding agent can read the replay without the player.
+  return { sessionId, shareUrl, ...(summaryUrl ? { summaryUrl } : {}) };
 }
 
 function configuredShareEndpoint() { return process.env.REPLAY_SHARE_URL?.replace(/\/$/, "") || undefined; }
+
+// The remote-read tools take the share link exactly as it is pasted into a
+// ticket or chat message and derive the server's query endpoints from it, so
+// reading never requires REPLAY_SHARE_URL to be configured.
+function parseShareUrl(value: Json | undefined) {
+  const raw = requiredString(value, "Replay share URL");
+  let parsed: URL;
+  try { parsed = new URL(raw); } catch { throw new Error(`"${raw}" is not a valid URL.`); }
+  const match = /^\/r\/([a-f0-9]{24})(?:\.(?:md|json))?$/.exec(parsed.pathname);
+  if (!match) throw new Error(`"${raw}" is not a replay share link. Expected a URL like https://host/r/<id>.`);
+  return { origin: parsed.origin, shareId: match[1]! };
+}
+
+async function replayOverview(argumentsValue: JsonObject) {
+  const { origin, shareId } = parseShareUrl(argumentsValue.url);
+  return (await fetchShare(`${origin}/r/${shareId}.md`)).text();
+}
+
+async function replaySteps(argumentsValue: JsonObject) {
+  const { origin, shareId } = parseShareUrl(argumentsValue.url);
+  const params = new URLSearchParams();
+  for (const name of ["from_ms", "to_ms", "window_ms"] as const) {
+    const value = argumentsValue[name];
+    if (value === undefined) continue;
+    if (typeof value !== "number") throw new Error(`${name} must be a number of milliseconds.`);
+    params.set(name, String(value));
+  }
+  const marker = optionalString(argumentsValue.marker);
+  if (marker) params.set("marker", marker);
+  const query = params.toString();
+  const response = await fetchShare(`${origin}/v1/replays/${shareId}/steps${query ? `?${query}` : ""}`);
+  return object(await response.json());
+}
+
+async function fetchSharedReplay(argumentsValue: JsonObject) {
+  const { origin, shareId } = parseShareUrl(argumentsValue.url);
+  const response = await fetchShare(`${origin}/v1/replays/${shareId}/bundle`);
+  const bundle = Buffer.from(await response.arrayBuffer());
+  const temporary = join(tmpdir(), `replay-fetch-${randomUUID()}.replay`);
+  await writeFile(temporary, bundle, { flag: "wx" });
+  try {
+    // Fetching the same share twice is idempotent: the installed copy wins.
+    const imported = await importSession(temporary, { reuseExisting: true });
+    await ensureDaemon();
+    return { sessionId: imported.sessionId, replayUrl: replayUrl(imported.sessionId) };
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+async function fetchShare(url: string): Promise<Response> {
+  let response: Response;
+  try { response = await fetch(url); } catch (error) { throw new Error(`Could not reach the share server at ${new URL(url).origin}: ${messageOf(error)}`); }
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(`The share server answered ${response.status} for ${url}: ${detail.error ?? response.statusText}`);
+  }
+  return response;
+}
 
 async function ensureDaemon(): Promise<JsonObject> {
   const running = await probeDaemon();
@@ -494,6 +596,10 @@ async function api(method: string, path: string, body?: unknown, ensure = true):
 
 function toolResult(value: JsonObject): JsonObject {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
+}
+
+function textResult(text: string): JsonObject {
+  return { content: [{ type: "text", text }] };
 }
 
 function toolError(error: unknown): JsonObject {

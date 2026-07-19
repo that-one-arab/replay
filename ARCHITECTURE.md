@@ -294,6 +294,9 @@ The Replay MCP server is stdio JSON-RPC and exposes seven tools:
 | `capture_status` | Read daemon, browser, and capture state | Diagnostics and readiness |
 | `capture_stop` | Finalize, export, and optionally upload | Normal terminal handoff |
 | `replay_share` | Upload a completed artifact | Retry/recovery for an earlier replay |
+| `replay_overview` | Fetch a shared replay's summary from its link | Reading a replay handed off in a ticket or chat |
+| `replay_steps` | Fetch a step slice of a shared replay | Zooming into a moment or marker remotely |
+| `replay_fetch` | Download a shared replay into the local home | Deep local inspection of a remote replay |
 
 The normal agent sequence is:
 

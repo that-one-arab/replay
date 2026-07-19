@@ -2,8 +2,9 @@
 
 `replay-mcp` is a local stdio MCP server. It gives an MCP-capable coding agent one
 place to drive and capture a browser: the stock Playwright MCP browser tools
-(embedded from a pinned `@playwright/mcp`) plus seven structured replay
-tools. It never exposes the capture beyond the local machine.
+(embedded from a pinned `@playwright/mcp`) plus ten structured replay
+tools. It never exposes the capture beyond the local machine; the `replay_*`
+read tools below consume replays that were already explicitly shared.
 
 | Tool | Purpose |
 | --- | --- |
@@ -14,7 +15,10 @@ tools. It never exposes the capture beyond the local machine.
 | `capture_marker` | Adds a labelled checkpoint that belongs to no single browser action. |
 | `capture_status` | Returns browser ownership, endpoint, page readiness, and active capture counts. |
 | `capture_stop` | Stops capture and returns its ID, local bundle details, portable artifact path, and replay URL. With `REPLAY_SHARE_URL`, it also publishes automatically and returns `shareUrl`; `shareError` preserves the local handoff if upload fails. |
-| `replay_share` | Explicitly uploads a stopped replay to `REPLAY_SHARE_URL` and returns its public bearer link. |
+| `replay_share` | Explicitly uploads a stopped replay to `REPLAY_SHARE_URL` and returns its public bearer link plus `summaryUrl`, the agent-readable form of the same link. |
+| `replay_overview` | Reads a remotely shared replay from its pasted share link: title, duration, pages, step timeline, markers, and agent actions with failures highlighted. Needs no configuration. |
+| `replay_steps` | Zooms into a moment of a shared replay by `from_ms`/`to_ms` window or by marker label. |
+| `replay_fetch` | Downloads a shared replay into the local Replay home so the local player and its assistant work on it like any local replay. |
 
 ## Single-server workflow
 

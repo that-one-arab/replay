@@ -5,6 +5,22 @@ is immutable and is named `replay-<version>-darwin-arm64.tar.gz`.
 
 ## [Unreleased]
 
+- Make share links agent-readable (phase 4B, layer 1): `GET /r/<id>.md`
+  returns a prompt-ready markdown summary of the shared replay (timeline,
+  markers, agent actions with failures highlighted), `GET /r/<id>.json`
+  returns the structured summary, and a client that prefers `text/markdown`
+  gets the summary from the bare share link instead of the player redirect.
+  Summaries are cached per share and identify the replay by share id only.
+  Upload responses and the share tools now also return `summaryUrl`.
+- Add a scoped remote query API for shared replays (phase 4B, layer 2):
+  `GET /v1/replays/:shareId/{summary,steps,actions,markers,bundle}`, keyed by
+  share id only. Shares gain a `revoked` flag that 404s the link everywhere,
+  including the player's session data routes; re-uploading a revoked replay
+  mints a fresh link.
+- Add remote-read MCP tools (phase 4B, layer 3): `replay_overview` and
+  `replay_steps` read a shared replay from its pasted link with no
+  configuration, and `replay_fetch` imports the shared bundle into the local
+  Replay home for deep inspection in the local player.
 - Add an OpenAI Responses API backend for the replay assistant with true
   token streaming, server-side conversation state, and direct tool calling.
   `chat.provider` selects it ("auto" prefers OpenAI when a key is configured,

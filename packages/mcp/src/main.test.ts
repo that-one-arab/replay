@@ -3,13 +3,14 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { exportSession, SessionStore } from "@replay/core";
 
 test("MCP tools make browser setup explicit and preserve ordered marker metadata", async () => {
   const calls: { method: string; path: string; body?: Record<string, unknown> }[] = [];
@@ -28,6 +29,26 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
     assets: [],
     markers: [],
   }));
+  // A real portable bundle, built in its own home so replay_fetch performs a
+  // genuine import into the MCP child's REPLAY_HOME rather than a reuse hit.
+  const shareId = "0123456789abcdef01234567";
+  const bundleHome = await mkdtemp(join(tmpdir(), "replay-mcp-bundle-"));
+  const previousHome = process.env.REPLAY_HOME;
+  let bundleBytes: Buffer;
+  try {
+    process.env.REPLAY_HOME = bundleHome;
+    const store = await SessionStore.create({
+      format_version: 1, id: "replay_fetched", title: "Fetched fixture", created_at: new Date().toISOString(),
+      capture: { version: "test", rrweb: "test", capture_canvas: false, capture_cross_origin_iframes: false }, origins: ["http://fixture.test"], masking: { mask_all_inputs: false, passwords: true }, segments: [], tab_events: [], markers: [], assets: [],
+    });
+    store.segment("seg_1", "http://fixture.test", 0);
+    await store.append("seg_1", [{ type: 2, timestamp: 1 }], Date.now());
+    await store.finalize();
+    bundleBytes = await readFile((await exportSession("replay_fetched")).path);
+  } finally {
+    if (previousHome === undefined) delete process.env.REPLAY_HOME;
+    else process.env.REPLAY_HOME = previousHome;
+  }
   const daemon = createServer(async (request, response) => {
     const path = request.url ?? "/";
     let raw = "";
@@ -56,6 +77,10 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
     if (request.method === "POST" && path === "/api/sessions/marker") return empty(response);
     if (request.method === "POST" && path === "/api/sessions/stop") return json(response, { sessionId: "replay_test", path: "/tmp/replay_test", rawDurationMs: 1200, activeDurationMs: 900, markers: [] });
     if (request.method === "POST" && path === "/v1/replays") return json(response, { shareUrl: "https://share.fixture/r/abc123" }, 201);
+    // The same fixture doubles as the remote share server for the read tools.
+    if (request.method === "GET" && path === `/r/${shareId}.md`) { response.writeHead(200, { "content-type": "text/markdown; charset=utf-8" }); response.end("Replay: Fetched fixture\n- [0:00] Opened http://fixture.test\n"); return; }
+    if (request.method === "GET" && path.startsWith(`/v1/replays/${shareId}/steps`)) return json(response, { from_ms: 0, to_ms: 5000, steps: [{ t_ms: 0, kind: "page", description: "Opened http://fixture.test" }] });
+    if (request.method === "GET" && path === `/v1/replays/${shareId}/bundle`) { response.writeHead(200, { "content-type": "application/vnd.replay" }); response.end(bundleBytes); return; }
     return json(response, { error: "not found" }, 404);
   });
   daemon.listen(0, "127.0.0.1");
@@ -70,7 +95,7 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
     const initialized = await client.request("initialize", { protocolVersion: "2025-03-26" });
     assert.equal(initialized.result.serverInfo.name, "replay-mcp");
     const listed = await client.request("tools/list", {});
-    assert.deepEqual(listed.result.tools.map((tool: { name: string }) => tool.name), ["capture_browser_ensure", "capture_attach_browser", "capture_start", "capture_marker", "capture_status", "capture_stop", "replay_share"]);
+    assert.deepEqual(listed.result.tools.map((tool: { name: string }) => tool.name), ["capture_browser_ensure", "capture_attach_browser", "capture_start", "capture_marker", "capture_status", "capture_stop", "replay_share", "replay_overview", "replay_steps", "replay_fetch"]);
     const noBrowser = await client.request("tools/call", { name: "capture_start", arguments: { title: "No browser" } });
     assert.equal(noBrowser.result.isError, true);
     assert.match(noBrowser.result.content[0].text, /capture_browser_ensure/);
@@ -93,6 +118,23 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
     const shared = await client.request("tools/call", { name: "replay_share", arguments: { sessionId: "replay_test" } });
     assert.match(shared.result.content[0].text, /https:\/\/share\.fixture\/r\/abc123/);
     assert.equal(calls.filter((call) => call.path === "/v1/replays").length, 1);
+    // The remote-read tools take the share link as pasted and derive the query
+    // endpoints from it; no REPLAY_SHARE_URL is involved in reading.
+    const shareLink = `http://127.0.0.1:${address.port}/r/${shareId}`;
+    const overview = await client.request("tools/call", { name: "replay_overview", arguments: { url: shareLink } });
+    assert.match(overview.result.content[0].text, /Fetched fixture/);
+    const steps = await client.request("tools/call", { name: "replay_steps", arguments: { url: shareLink, marker: "Bug", window_ms: 5000 } });
+    assert.match(steps.result.content[0].text, /Opened http:\/\/fixture\.test/);
+    const stepsCall = calls.find((call) => call.path.includes("/steps"));
+    assert.match(String(stepsCall?.path), /marker=Bug/);
+    assert.match(String(stepsCall?.path), /window_ms=5000/);
+    const badUrl = await client.request("tools/call", { name: "replay_overview", arguments: { url: "https://example.test/not-a-share" } });
+    assert.equal(badUrl.result.isError, true);
+    assert.match(badUrl.result.content[0].text, /not a replay share link/);
+    const fetched = await client.request("tools/call", { name: "replay_fetch", arguments: { url: shareLink } });
+    assert.match(fetched.result.content[0].text, /replay_fetched/);
+    assert.match(fetched.result.content[0].text, /replayUrl/);
+    assert.equal(existsSync(join(replayHome, "sessions", "replay_fetched", "manifest.json")), true);
     const status = await client.request("tools/call", { name: "capture_status", arguments: {} });
     assert.match(status.result.content[0].text, /page_ready/);
     const external = await client.request("tools/call", { name: "capture_attach_browser", arguments: { cdpEndpoint: "http://127.0.0.1:9222" } });
@@ -106,6 +148,7 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
     daemon.close();
     await once(daemon, "close");
     await rm(replayHome, { recursive: true, force: true });
+    await rm(bundleHome, { recursive: true, force: true });
   }
 });
 

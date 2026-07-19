@@ -448,8 +448,8 @@ async function shareReplay(id: string) {
   // stop already exported the artifact; reuse it. exportSession writes exclusively
   // and would otherwise fail with EEXIST when sharing an already-stopped replay.
   const artifact = existsSync(exportPath(id)) ? exportPath(id) : (await exportSession(id)).path;
-  const { shareUrl } = await uploadReplay(endpoint, artifact);
-  return { sessionId: id, shareUrl };
+  const { shareUrl, summaryUrl } = await uploadReplay(endpoint, artifact);
+  return { sessionId: id, shareUrl, ...(summaryUrl ? { summaryUrl } : {}) };
 }
 
 function shareEndpoint() { return process.env.REPLAY_SHARE_URL?.replace(/\/$/, "") || undefined; }

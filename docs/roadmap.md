@@ -39,6 +39,12 @@ The current Phase 4A Railway implementation is intentionally limited to public
 bearer links; deployment and known deferrals are documented in
 [phase-4-railway-sharing.md](phase-4-railway-sharing.md).
 
+Phase 4B makes a shared replay queryable by coding agents — agent-readable
+share links, a scoped query API over the summary layer, and MCP tools with a
+local deep-dive escape hatch. The design and its deliberate omissions (notably
+server-side screen reconstruction) are in
+[phase-4b-remote-query.md](phase-4b-remote-query.md).
+
 ## Phase 5 — production hardening (intentionally late)
 
 The previously proposed real-world capture-hardening work belongs here, after the
