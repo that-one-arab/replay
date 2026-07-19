@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { exportSession, uploadRecording } from "@rec/core";
+import { embeddedPlaywrightEnabled, PlaywrightBridge } from "./playwright-bridge.js";
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type JsonObject = { [key: string]: Json };
@@ -53,7 +55,7 @@ const tools: JsonObject[] = [
   },
   {
     name: "recording_marker",
-    description: "Add a labelled checkpoint to the active recording.",
+    description: "Add a labelled checkpoint to the active recording that is not tied to a browser action. For a checkpoint on an action itself, pass rec_marker on that browser tool call instead.",
     inputSchema: {
       type: "object",
       required: ["label"],
@@ -94,6 +96,27 @@ const tools: JsonObject[] = [
     },
   },
 ];
+
+const recordingToolNames = new Set(tools.map((tool) => String(tool.name)));
+const bridge = new PlaywrightBridge();
+let embeddedToolsError: string | undefined;
+
+/**
+ * Rec's checkpoint parameter, injected into every embedded browser tool
+ * schema. It is stripped before the call reaches Playwright, so association
+ * with the action is atomic: same request, same identity.
+ */
+const REC_MARKER_SCHEMA: JsonObject = {
+  type: "object",
+  description: "Optional Rec replay checkpoint recorded atomically with this browser action. Provide it when this action is a meaningful, confirmed step worth labelling in the session replay.",
+  required: ["label"],
+  properties: {
+    label: { type: "string", description: "Short checkpoint label." },
+    note: { type: "string", description: "Optional context for the checkpoint." },
+    color: { type: "string", enum: ["default", "yellow", "green"], description: "Set to yellow or green for a distinct, highlighted checkpoint." },
+  },
+  additionalProperties: false,
+};
 
 void run();
 
@@ -139,7 +162,7 @@ async function dispatch(method: string, params: unknown): Promise<JsonObject> {
   }
   if (method === "notifications/initialized") return {};
   if (method === "ping") return {};
-  if (method === "tools/list") return { tools };
+  if (method === "tools/list") return { tools: [...tools, ...await embeddedTools()] };
   if (method === "tools/call") {
     const call = object(params);
     const name = requiredString(call.name, "Tool name");
@@ -158,11 +181,107 @@ async function callTool(name: string, argumentsValue: JsonObject): Promise<JsonO
       case "recording_status": return toolResult(await recordingStatus());
       case "recording_stop": return toolResult(await stopRecording(argumentsValue));
       case "recording_share": return toolResult(await shareRecording(argumentsValue));
-      default: throw new Error(`Unknown tool: ${name}`);
+      default: return await callBrowserTool(name, argumentsValue);
     }
   } catch (error) {
     return toolError(error);
   }
+}
+
+/**
+ * The embedded browser tool surface is stock Playwright MCP with one addition:
+ * an optional rec_marker parameter on every tool. Listing failures degrade to
+ * the recording tools alone instead of breaking the server.
+ */
+async function embeddedTools(): Promise<JsonObject[]> {
+  if (!embeddedPlaywrightEnabled()) return [];
+  try {
+    const listed = await bridge.listTools();
+    embeddedToolsError = undefined;
+    return listed.filter((tool) => !recordingToolNames.has(String(tool.name))).map(injectRecMarker);
+  } catch (error) {
+    embeddedToolsError = messageOf(error);
+    process.stderr.write(`rec-mcp: embedded Playwright MCP tools are unavailable: ${embeddedToolsError}\n`);
+    return [];
+  }
+}
+
+function injectRecMarker(tool: JsonObject): JsonObject {
+  const schema = object(tool.inputSchema);
+  if (schema.type !== "object") return tool;
+  return { ...tool, inputSchema: { ...schema, properties: { ...object(schema.properties), rec_marker: REC_MARKER_SCHEMA } } };
+}
+
+async function callBrowserTool(name: string, argumentsValue: JsonObject): Promise<JsonObject> {
+  if (!embeddedPlaywrightEnabled()) throw new Error(`Unknown tool: ${name}. Embedded browser tools are disabled by REC_EMBEDDED_PLAYWRIGHT=0.`);
+  if (embeddedToolsError) throw new Error(`Unknown tool: ${name}. Embedded Playwright MCP is unavailable: ${embeddedToolsError}`);
+  const marker = extractRecMarker(argumentsValue);
+  const cleaned = { ...argumentsValue };
+  delete cleaned.rec_marker;
+  const endpoint = await ensureDrivableBrowser();
+  const actionId = `act_${randomUUID()}`;
+  const startedAtEpochMs = Date.now();
+  let result: JsonObject;
+  try {
+    result = await bridge.callTool(endpoint, name, cleaned);
+  } catch (error) {
+    await postAction({ actionId, tool: name, cleaned, startedAtEpochMs, ok: false, marker });
+    throw error;
+  }
+  const outcome = await postAction({ actionId, tool: name, cleaned, startedAtEpochMs, ok: result.isError !== true, marker });
+  if (marker && outcome.warning) {
+    const content = Array.isArray(result.content) ? result.content : [];
+    return { ...result, content: [...content, { type: "text", text: `rec_marker was not recorded: ${outcome.warning}` }] };
+  }
+  return result;
+}
+
+/** Mirror the launcher's rendezvous: reuse an attached browser, else ensure Rec's managed Chrome. */
+async function ensureDrivableBrowser(): Promise<string> {
+  const health = await ensureDaemon();
+  const attached = optionalString(health.cdp_endpoint as Json);
+  if (attached) return attached;
+  const ensured = object(await api("POST", "/api/browser/ensure", {}));
+  return requiredString(ensured.cdp_endpoint as Json, "Rec browser CDP endpoint");
+}
+
+/**
+ * Report the action (and its optional atomic marker) to the daemon. This must
+ * never fail the browser action itself: a daemon hiccup or an idle recorder
+ * degrades to a warning on the tool result, not a failed drive.
+ */
+async function postAction(input: { actionId: string; tool: string; cleaned: JsonObject; startedAtEpochMs: number; ok: boolean; marker?: JsonObject }): Promise<{ warning?: string }> {
+  try {
+    const result = object(await api("POST", "/api/sessions/action", {
+      id: input.actionId,
+      tool: input.tool,
+      args_summary: summarizeArguments(input.cleaned),
+      started_at_epoch_ms: input.startedAtEpochMs,
+      finished_at_epoch_ms: Date.now(),
+      ok: input.ok,
+      ...(input.marker ? { marker: input.marker } : {}),
+    }, false));
+    if (input.marker && result.recorded !== true) return { warning: "no recording is active. Call recording_start first." };
+    return {};
+  } catch (error) {
+    return { warning: messageOf(error) };
+  }
+}
+
+function extractRecMarker(argumentsValue: JsonObject): JsonObject | undefined {
+  const raw = argumentsValue.rec_marker;
+  if (raw === undefined) return undefined;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new Error("rec_marker must be an object with a label.");
+  const marker = raw as JsonObject;
+  const label = requiredString(marker.label, "rec_marker label");
+  const color = optionalColor(marker.color);
+  return { label, ...(optionalString(marker.note) ? { note: optionalString(marker.note) } : {}), ...(color ? { color } : {}) };
+}
+
+function summarizeArguments(argumentsValue: JsonObject) {
+  const rendered = JSON.stringify(argumentsValue);
+  if (rendered === "{}") return undefined;
+  return rendered.length > 300 ? `${rendered.slice(0, 297)}...` : rendered;
 }
 
 async function startRecording(argumentsValue: JsonObject) {

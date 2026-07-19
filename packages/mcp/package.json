@@ -10,6 +10,7 @@
     "rec-mcp": "./dist/main.js"
   },
   "dependencies": {
+    "@playwright/mcp": "0.0.78",
     "@rec/core": "workspace:*"
   },
   "scripts": {

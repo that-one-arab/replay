@@ -57,8 +57,8 @@ workflow is the optional upload performed after a recording has been finalized.
 | --- | --- | --- | --- |
 | Core | `packages/core` | CDP recorder, rrweb event capture, session storage, assets, configuration, export/import | HTTP, MCP, player UI |
 | Daemon | `packages/daemon` | One local recorder, Chrome lifecycle, local replay/data endpoints, automatic final export, replay-assistant chat backend (Codex provider, tool bridge) | Agent protocol and browser automation |
-| Rec MCP | `packages/mcp` | Stdio MCP protocol, recording lifecycle tools, optional automatic upload handoff | Playwright tools or browser actions |
-| Playwright launcher | `packages/playwright-launcher` | Starting stock Playwright MCP against Rec's managed Chrome | Recording or interpreting MCP traffic |
+| Rec MCP | `packages/mcp` | Stdio MCP protocol, recording lifecycle tools, the embedded stock Playwright tool surface (pinned `@playwright/mcp` behind an in-process bridge, `rec_marker` injection, action reporting), optional automatic upload handoff | Implementing browser tools itself |
+| Playwright launcher | `packages/playwright-launcher` | Escape hatch: starting a separately installed stock Playwright MCP against Rec's managed Chrome when embedding is disabled | Recording or interpreting MCP traffic |
 | Player | `packages/player` | Rendering a stored recording, timeline controls and reviewer-facing UI | Capture, persistence, sharing policy |
 | CLI | `packages/cli` | Contributor/troubleshooting commands and manual artifact recovery | Normal coding-agent orchestration |
 | Runtime | `packages/runtime` | Stable entry points and asset paths in a packaged distribution | Source builds or release delivery |
@@ -70,32 +70,40 @@ workflow is the optional upload performed after a recording has been finalized.
 ### Browser rendezvous
 
 The browser is the shared boundary between Playwright and Rec. A coding agent
-can use Playwright before it decides to record. Chrome is provisioned lazily:
-the launcher starts the Rec daemon, then starts stock `@playwright/mcp` against
-Rec's fixed loopback CDP endpoint without launching Chrome. Because Playwright
-MCP connects to that endpoint only on its first browser tool, the launcher
-watches the forwarded stdio stream and asks the daemon to ensure Rec's Chrome
-just before the first `tools/call` reaches Playwright MCP. Chrome therefore
-stays closed until the browser is actually used, not merely because an MCP
-client started.
+can browse before it decides to record. Rec MCP embeds the pinned stock
+`@playwright/mcp` in-process and forwards `browser_*` tool calls to it over an
+in-memory bridge, injecting an optional `rec_marker` parameter into each tool
+schema and stripping it before Playwright sees the call. Chrome is provisioned
+lazily: before forwarding a browser tool call, Rec MCP asks the daemon for the
+attached CDP endpoint and ensures Rec's managed Chrome only if none is
+attached. Because embedded Playwright connects to that endpoint on its first
+browser action, Chrome stays closed until the browser is actually used, not
+merely because an MCP client started. Each forwarded call is reported to the
+daemon with its request/response bracket; a call carrying `rec_marker` records
+that checkpoint atomically with the action, so marker-action association never
+depends on call ordering. The separate launcher provides the same rendezvous
+for an external Playwright MCP when embedding is disabled
+(`REC_EMBEDDED_PLAYWRIGHT=0`): it watches the forwarded stdio stream and asks
+the daemon to ensure Rec's Chrome just before the first `tools/call` reaches
+Playwright MCP.
 
 ```mermaid
 sequenceDiagram
   participant Agent
-  participant Launcher as Rec Playwright launcher
+  participant Rec as Rec MCP
   participant Daemon as Local daemon
   participant Chrome as Managed Chrome
-  participant PW as Stock Playwright MCP
+  participant PW as Embedded stock Playwright MCP
 
-  Agent->>Launcher: Codex starts playwright MCP
-  Launcher->>Daemon: GET /health, start if absent
-  Launcher->>PW: start with fixed --cdp-endpoint (Chrome not launched)
-  Agent->>Launcher: first tools/call (a browser action)
-  Launcher->>Daemon: POST /api/browser/ensure
+  Agent->>Rec: Codex starts the rec MCP server
+  Rec->>Daemon: GET /health, start if absent (Chrome not launched)
+  Agent->>Rec: browser_* tools/call, optionally carrying rec_marker
+  Rec->>Daemon: POST /api/browser/ensure (only if no browser attached)
   Daemon->>Chrome: launch or reuse local Chrome with CDP
-  Daemon-->>Launcher: loopback CDP endpoint
-  Launcher->>PW: forward the tool call
+  Daemon-->>Rec: loopback CDP endpoint
+  Rec->>PW: forward the call over the in-process bridge, rec_marker stripped
   PW->>Chrome: connect over CDP and automate
+  Rec->>Daemon: POST /api/sessions/action (bracket timestamps, atomic marker)
 ```
 
 Rec owns a Chrome it launches itself. It can alternatively attach to a supplied
@@ -406,7 +414,8 @@ more platforms, authenticated downloads, and a hardened native launcher.
 | On-disk sessions or `.rec` validation | `packages/core/src/storage.ts`, `packages/core/src/bundle.ts` | [recording format](docs/format.md) |
 | Local endpoints or Chrome lifecycle | `packages/daemon/src/main.ts` | MCP/CLI calls and player API |
 | Agent-facing tool behavior | `packages/mcp/src/main.ts` | [MCP guide](docs/mcp.md) |
-| Shared Playwright browser startup | `packages/playwright-launcher/src/main.ts` | `@playwright/mcp` command and arguments |
+| Embedded Playwright bridge, `rec_marker`, action reporting | `packages/mcp/src/playwright-bridge.ts`, `packages/mcp/src/main.ts` | pinned `@playwright/mcp` dependency |
+| External Playwright startup (escape hatch) | `packages/playwright-launcher/src/main.ts` | `@playwright/mcp` command and arguments |
 | Playback/timeline UX | `packages/player/src/main.ts`, `packages/player/src/style.css` | persisted manifest metadata |
 | Hosted links or release feed | `packages/share-server/src/main.ts` | portable artifact and Railway volume |
 | Packaging or bootstrap | `scripts/package-macos.mjs`, `plugins/rec-mcp/scripts/rec-bootstrap.mjs` | release version and SHA-256 feed |

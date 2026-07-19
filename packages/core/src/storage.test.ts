@@ -55,6 +55,8 @@ test("persists marker placement and reports captured event counts", async () => 
     store.segment("seg_1", "http://example.test", 0);
     await store.append("seg_1", [{ type: 2, timestamp: 10 }, { type: 3, timestamp: 20 }], Date.now());
     store.addMarker({ t_ms: 25, label: "Ready to submit", placement: "before_next" });
+    store.addAction({ id: "act_1", tool: "browser_click", args_summary: "{\"selector\":\"#submit\"}", started_at_ms: 15, finished_at_ms: 22, ok: true });
+    store.addMarker({ t_ms: 22, label: "Submitted", action_id: "act_1" });
     store.addNavigationEvent({
       segment_id: "seg_1",
       kind: "reload",
@@ -66,8 +68,10 @@ test("persists marker placement and reports captured event counts", async () => 
     });
     await store.finalize();
     assert.deepEqual(store.captureSummary(), { segmentCount: 1, chunkCount: 1, eventCount: 2 });
-    const manifest = JSON.parse(await readFile(join(root, "sessions", "rec_marker_fixture", "manifest.json"), "utf8")) as { markers: { placement?: string }[]; navigation_events?: { kind: string; ready_at_ms: number }[] };
+    const manifest = JSON.parse(await readFile(join(root, "sessions", "rec_marker_fixture", "manifest.json"), "utf8")) as { markers: { placement?: string; action_id?: string }[]; actions?: { id: string; tool: string; ok: boolean }[]; navigation_events?: { kind: string; ready_at_ms: number }[] };
     assert.equal(manifest.markers[0]?.placement, "before_next");
+    assert.equal(manifest.markers[1]?.action_id, "act_1");
+    assert.deepEqual(manifest.actions, [{ id: "act_1", tool: "browser_click", args_summary: "{\"selector\":\"#submit\"}", started_at_ms: 15, finished_at_ms: 22, ok: true }]);
     assert.deepEqual(manifest.navigation_events, [{
       segment_id: "seg_1",
       kind: "reload",

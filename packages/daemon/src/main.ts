@@ -5,7 +5,7 @@ import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
-import { Recorder, exportPath, exportSession, recHome, resolveRecConfig, sessionsDir, sessionPath, uploadRecording, type BrowserConfig, type Outcome, type RecordingManifest, type StartOptions } from "@rec/core";
+import { Recorder, exportPath, exportSession, recHome, resolveRecConfig, sessionsDir, sessionPath, uploadRecording, type ActionInput, type BrowserConfig, type Outcome, type RecordingManifest, type StartOptions } from "@rec/core";
 import { ChatManager, CHAT_TOOLS } from "./chat.js";
 
 const port = Number(process.env.REC_PORT ?? 7717);
@@ -64,6 +64,9 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   if (request.method === "POST" && url.pathname === "/api/sessions/marker") {
     await recorder.marker(String(body?.label ?? ""), optionalString(body?.note), markerPlacement(body?.placement), markerColor(body?.color));
     return reply(response, 204);
+  }
+  if (request.method === "POST" && url.pathname === "/api/sessions/action") {
+    return reply(response, 200, await recorder.action(actionInput(body)));
   }
   if (request.method === "POST" && url.pathname === "/api/sessions/stop") {
     const stopped = await recorder.stop(outcomeOf(body?.outcome), optionalString(body?.notes));
@@ -526,6 +529,27 @@ function configuredDuration(name: string, fallback: number) {
 }
 function outcomeOf(value: unknown): Outcome | undefined { return value === "reproduced" || value === "verified" || value === "other" ? value : undefined; }
 function markerPlacement(value: unknown) { if (value === undefined || value === "after_previous" || value === "before_next") return value ?? "after_previous"; throw new Error("Marker placement must be after_previous or before_next."); }
+function actionInput(body: Record<string, unknown> | undefined): ActionInput {
+  const id = optionalString(body?.id);
+  const tool = optionalString(body?.tool);
+  const started = Number(body?.started_at_epoch_ms);
+  const finished = Number(body?.finished_at_epoch_ms);
+  if (!id || !tool || !Number.isFinite(started) || !Number.isFinite(finished)) {
+    throw new Error("An action requires id, tool, started_at_epoch_ms, and finished_at_epoch_ms.");
+  }
+  const rawMarker = asObject(body?.marker);
+  const label = optionalString(rawMarker.label);
+  if (body?.marker !== undefined && !label) throw new Error("An action marker requires a label.");
+  return {
+    id,
+    tool,
+    argsSummary: optionalString(body?.args_summary),
+    startedAtEpochMs: started,
+    finishedAtEpochMs: finished,
+    ok: body?.ok !== false,
+    ...(label ? { marker: { label, note: optionalString(rawMarker.note), color: markerColor(rawMarker.color) } } : {}),
+  };
+}
 function markerColor(value: unknown): "yellow" | "green" | undefined { if (value === undefined || value === "default") return undefined; if (value === "yellow" || value === "green") return value; throw new Error("Marker color must be yellow or green."); }
 function isLoopbackEndpoint(value: string) {
   try { const url = new URL(value); return url.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(url.hostname); } catch { return false; }

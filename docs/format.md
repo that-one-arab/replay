@@ -30,10 +30,19 @@ source/destination URLs. The player uses this durable metadata for refresh and
 navigation transitions, so seeking does not mistake rrweb's historical document
 rebuild for a new refresh.
 
-Markers have a timestamp, label, optional note, and optional `placement`:
-`after_previous` (the default) describes a confirmed result after the previous
-agent action, while `before_next` describes a precondition or chapter boundary.
-Placement is narrative ordered metadata, not a browser-action ID.
+Browser tool calls the agent issued while recording are stored in
+`manifest.json` as `actions`. Each action records its ID, tool name, a compact
+argument summary, its request/response bracket (`started_at_ms`,
+`finished_at_ms` relative to recording start), and whether it succeeded.
+
+Markers have a timestamp, label, optional note, and either an `action_id` or an
+optional `placement`. A marker created through a browser tool's `rec_marker`
+parameter carries the `action_id` of the action it was recorded atomically
+with; the player anchors it on that action's bracket deterministically.
+Standalone markers use `placement` instead: `after_previous` (the default)
+describes a confirmed result after the previous agent action, while
+`before_next` describes a precondition or chapter boundary. Placement is
+narrative ordered metadata, not a browser-action ID.
 
 ## Portable `.rec` artifact (v1)
 

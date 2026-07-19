@@ -72,7 +72,7 @@ function installedPlugin(output, plugin) {
 }
 
 async function assertDevelopmentBuild() {
-  for (const path of [join(repositoryRoot, "packages", "mcp", "dist", "main.js"), join(repositoryRoot, "packages", "playwright-launcher", "dist", "main.js")]) {
+  for (const path of [join(repositoryRoot, "packages", "mcp", "dist", "main.js")]) {
     try { await readFile(path); }
     catch { throw new Error(`Development build is missing ${path}. Run pnpm build first.`); }
   }
@@ -97,17 +97,14 @@ export function developmentMcpConfig(root, home, port) {
     REC_DAEMON_URL: `http://127.0.0.1:${port}`,
     REC_SHARE_URL: developmentShareUrl,
   };
+  // A single server: rec-mcp embeds the pinned stock Playwright MCP tool
+  // surface itself. A separate playwright entry would show duplicate browser
+  // tools, and an agent driving the duplicate would not bind rec_marker.
   return {
     mcpServers: {
       rec: {
         command: process.execPath,
         args: [join(root, "packages", "mcp", "dist", "main.js")],
-        cwd: root,
-        env: environment,
-      },
-      playwright: {
-        command: process.execPath,
-        args: [join(root, "packages", "playwright-launcher", "dist", "main.js")],
         cwd: root,
         env: environment,
       },

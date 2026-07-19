@@ -5,7 +5,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { CaptureSummary, Marker, NavigationEvent, RecordedAsset, RecordingManifest, Segment, TabEvent } from "./types.js";
+import type { AgentAction, CaptureSummary, Marker, NavigationEvent, RecordedAsset, RecordingManifest, Segment, TabEvent } from "./types.js";
 
 export const recHome = () => process.env.REC_HOME ?? join(process.env.HOME ?? process.cwd(), ".rec");
 export const sessionsDir = () => join(recHome(), "sessions");
@@ -110,6 +110,11 @@ export class SessionStore {
 
   addMarker(marker: Marker) {
     this.manifest.markers.push(marker);
+  }
+
+  addAction(action: AgentAction) {
+    const actions = this.manifest.actions ?? (this.manifest.actions = []);
+    actions.push(action);
   }
 
   captureSummary(): CaptureSummary {

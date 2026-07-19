@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Manifest, ReplayEvent } from "./types.js";
-import { eventEndTime, recordingViewport, resolveMarkerTimes, segmentAtTime, segmentLabel, tabEvents } from "./manifest.js";
+import { describeAction, eventEndTime, recordingViewport, resolveMarkerTimes, segmentAtTime, segmentLabel, tabEvents } from "./manifest.js";
 
 function twoTabManifest(): { manifest: Manifest; eventSets: Map<string, ReplayEvent[]> } {
   const manifest: Manifest = {
@@ -72,6 +72,43 @@ test("resolveMarkerTimes snaps markers to the nearest visible step", () => {
   assert.equal(resolved[1]!.t_ms, 3_000);
   // No step at or after the marker: it keeps its authored time.
   assert.equal(resolved[2]!.t_ms, 9_000);
+});
+
+test("resolveMarkerTimes anchors action-bound markers on the action's own bracket", () => {
+  const manifest: Manifest = {
+    id: "r1",
+    title: "Recording",
+    segments: [{ id: "s1", page_url: "https://example.test/", clock_offset_ms: 0 }],
+    actions: [
+      { id: "a1", tool: "browser_click", started_at_ms: 900, finished_at_ms: 3_500, ok: true },
+      { id: "a2", tool: "browser_wait_for", started_at_ms: 5_000, finished_at_ms: 6_000, ok: true },
+    ],
+    markers: [
+      { t_ms: 3_600, label: "clicked", action_id: "a1" },
+      { t_ms: 6_100, label: "waited", action_id: "a2" },
+      { t_ms: 100, label: "unknown binding", action_id: "missing" },
+    ],
+  };
+  const eventSets = new Map<string, ReplayEvent[]>([["s1", [
+    { type: 2, timestamp: 0 },
+    { type: 3, timestamp: 1_000, data: { source: 2, type: 2 } },
+    { type: 3, timestamp: 3_000, data: { source: 5, text: "x" } },
+  ]]]);
+  const resolved = resolveMarkerTimes(manifest, eventSets);
+  // The last visible step the action caused, inside its bracket.
+  assert.equal(resolved[0]!.t_ms, 3_000);
+  // No step inside the bracket: the action's completion anchors the marker.
+  assert.equal(resolved[1]!.t_ms, 6_000);
+  // A binding to an unknown action falls back to ordinary snapping.
+  assert.equal(resolved[2]!.t_ms, 100);
+});
+
+test("describeAction renders a compact caption from the tool and its first argument", () => {
+  assert.equal(describeAction({ id: "a1", tool: "browser_click", args_summary: "{\"selector\":\"#submit\"}", started_at_ms: 0, finished_at_ms: 1, ok: true }), "click · #submit");
+  assert.equal(describeAction({ id: "a2", tool: "browser_wait_for", started_at_ms: 0, finished_at_ms: 1, ok: true }), "wait for");
+  assert.equal(describeAction({ id: "a3", tool: "browser_navigate", args_summary: "not json", started_at_ms: 0, finished_at_ms: 1, ok: false }), "navigate · not json (failed)");
+  const long = describeAction({ id: "a4", tool: "browser_type", args_summary: JSON.stringify({ text: "x".repeat(80) }), started_at_ms: 0, finished_at_ms: 1, ok: true });
+  assert.ok(long.length < 75 && long.endsWith("…"));
 });
 
 test("segmentLabel shortens URLs to host and path", () => {

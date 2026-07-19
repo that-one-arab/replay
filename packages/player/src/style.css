@@ -533,6 +533,7 @@ body.chat-open #app { width: calc(100% - 404px); }
 .chapters-panel ol button[data-chapter-color="green"] > b { color: #5ad19a; }
 .chapters-panel ol button strong { display: block; color: #f2f1fa; font-size: 12px; line-height: 1.35; }
 .chapters-panel ol button p { margin: 3px 0 0; color: #a9abb9; font-size: 11px; line-height: 1.45; }
+.chapters-panel ol button code { display: block; margin-top: 3px; overflow: hidden; color: #8c8fa3; font: 10px "DM Mono"; white-space: nowrap; text-overflow: ellipsis; }
 
 /* Timeline. Visual hierarchy, most prominent first: markers, the chaptered
    baseline and progress, activity density, then idle and navigation hints. */

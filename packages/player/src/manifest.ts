@@ -2,7 +2,7 @@
  * Pure derivations over the manifest and its event sets: timeline activity,
  * navigation and tab metadata, marker resolution, and segment lookup. No DOM.
  */
-import { EventType, IncrementalSource, type Manifest, type NavigationEvent, type ReplayEvent } from "./types.js";
+import { EventType, IncrementalSource, type AgentAction, type Manifest, type NavigationEvent, type ReplayEvent } from "./types.js";
 import { clamp } from "./format.js";
 
 // A local reload commonly finishes in a few milliseconds. Preserve that exact
@@ -52,7 +52,16 @@ export function resolveMarkerTimes(manifest: Manifest, eventSets: Map<string, Re
     const started = events[0]?.timestamp ?? 0;
     return events.filter((event, index) => isMarkerStep(event, index)).map((event) => segment.clock_offset_ms + event.timestamp - started);
   }).sort((left, right) => left - right);
+  const actions = new Map((manifest.actions ?? []).map((action) => [action.id, action]));
   return manifest.markers.map((marker) => {
+    // An action-bound marker anchors deterministically on its own action's
+    // request/response bracket: the last visible step the action caused, or
+    // the action's completion when its effects produced no step of their own.
+    const action = marker.action_id ? actions.get(marker.action_id) : undefined;
+    if (action) {
+      const within = steps.filter((time) => time >= action.started_at_ms && time <= action.finished_at_ms);
+      return { ...marker, t_ms: within.at(-1) ?? action.finished_at_ms };
+    }
     const related = marker.placement === "before_next"
       ? steps.find((time) => time >= marker.t_ms)
       : [...steps].reverse().find((time) => time <= marker.t_ms);
@@ -82,6 +91,28 @@ export function nextFocusForSegment(manifest: Manifest, segmentId: string, after
 export function closedAt(manifest: Manifest, segmentId: string, time: number) {
   return tabEvents(manifest).some((event) => event.type === "closed" && event.segment_id === segmentId && event.t_ms <= time);
 }
+/** A compact, human-readable rendering of an agent action for marker UI. */
+export function describeAction(action: AgentAction) {
+  const verb = action.tool.replace(/^browser_/, "").replaceAll("_", " ");
+  const detail = action.args_summary ? firstArgumentValue(action.args_summary) : undefined;
+  const base = detail ? `${verb} · ${detail}` : verb;
+  return action.ok ? base : `${base} (failed)`;
+}
+
+/**
+ * The first primitive argument is almost always the one a viewer recognizes —
+ * a URL, selector, or typed text — so prefer it over raw JSON.
+ */
+function firstArgumentValue(summary: string) {
+  let rendered = summary;
+  try {
+    const parsed = JSON.parse(summary) as Record<string, unknown>;
+    const value = Object.values(parsed).find((item) => typeof item === "string" || typeof item === "number");
+    if (value !== undefined) rendered = String(value);
+  } catch { /* A truncated summary is not valid JSON; show it as captured. */ }
+  return rendered.length > 60 ? `${rendered.slice(0, 57)}…` : rendered;
+}
+
 export function segmentLabel(pageUrl: string) {
   try {
     const url = new URL(pageUrl);

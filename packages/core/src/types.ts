@@ -6,11 +6,35 @@ export interface Marker {
   note?: string;
   /**
    * Narrative placement relative to the agent's ordered browser actions.
-   * It is deliberately not a cross-server Playwright action identifier.
+   * Only meaningful for standalone markers; action-bound markers carry
+   * `action_id` instead and are anchored on the action's own bracket.
    */
   placement?: "after_previous" | "before_next";
   /** Optional visual emphasis. A yellow or green marker stands out from the default checkpoints. */
   color?: "yellow" | "green";
+  /** The agent action this marker was recorded atomically with, when it was. */
+  action_id?: string;
+}
+
+/** One embedded browser tool call the agent issued while recording. */
+export interface AgentAction {
+  id: string;
+  tool: string;
+  /** Compact single-line rendering of the tool arguments. */
+  args_summary?: string;
+  started_at_ms: number;
+  finished_at_ms: number;
+  ok: boolean;
+}
+
+export interface ActionInput {
+  id: string;
+  tool: string;
+  argsSummary?: string;
+  startedAtEpochMs: number;
+  finishedAtEpochMs: number;
+  ok: boolean;
+  marker?: { label: string; note?: string; color?: Marker["color"] };
 }
 
 export interface Segment {
@@ -71,6 +95,8 @@ export interface RecordingManifest {
   /** Optional for compatibility with recordings created before navigation capture. */
   navigation_events?: NavigationEvent[];
   markers: Marker[];
+  /** Optional for compatibility with recordings created before action capture. */
+  actions?: AgentAction[];
   assets: RecordedAsset[];
 }
 

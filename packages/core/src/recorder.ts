@@ -6,7 +6,7 @@ import type { Browser, BrowserContext, Frame, Page, Request as PlaywrightRequest
 import { chromium } from "playwright-core";
 import { SessionStore } from "./storage.js";
 import { evaluateViewportFit, type ViewportFit } from "./viewport.js";
-import type { BrowserStatus, Marker, NavigationEvent, RecordingManifest, StartOptions, StopResult } from "./types.js";
+import type { ActionInput, BrowserStatus, Marker, NavigationEvent, RecordingManifest, StartOptions, StopResult } from "./types.js";
 
 const require = createRequire(import.meta.url);
 const FLUSH_MS = 500;
@@ -102,6 +102,7 @@ export class Recorder {
       tab_events: [],
       navigation_events: [],
       markers: [],
+      actions: [],
       assets: [],
     };
     this.store = await SessionStore.create(manifest);
@@ -123,6 +124,40 @@ export class Recorder {
     if (!this.store) throw new Error("No recording is active");
     const marker: Marker = { t_ms: Date.now() - this.startedAt, label, note, placement, ...(color ? { color } : {}) };
     this.store.addMarker(marker);
+    await this.broadcastMarker(label, note, placement);
+  }
+
+  /**
+   * Log one agent browser action, optionally with a marker recorded atomically
+   * with it. Actions issued while no recording is active are ignored rather
+   * than failed: driving the browser is never gated on the recorder's state.
+   */
+  async action(input: ActionInput): Promise<{ recorded: boolean }> {
+    if (!this.store) return { recorded: false };
+    const started = Math.max(0, input.startedAtEpochMs - this.startedAt);
+    const finished = Math.max(started, input.finishedAtEpochMs - this.startedAt);
+    this.store.addAction({
+      id: input.id,
+      tool: input.tool,
+      ...(input.argsSummary ? { args_summary: input.argsSummary } : {}),
+      started_at_ms: started,
+      finished_at_ms: finished,
+      ok: input.ok,
+    });
+    if (input.marker) {
+      this.store.addMarker({
+        t_ms: finished,
+        label: input.marker.label,
+        note: input.marker.note,
+        action_id: input.id,
+        ...(input.marker.color ? { color: input.marker.color } : {}),
+      });
+      await this.broadcastMarker(input.marker.label, input.marker.note, undefined);
+    }
+    return { recorded: true };
+  }
+
+  private async broadcastMarker(label: string, note?: string, placement?: Marker["placement"]) {
     await Promise.all([...this.pages.values()].map(async ({ page }) => {
       await page.evaluate(({ label, note, placement }) => {
         const api = window as typeof window & { __recAddMarker?: (label: string, note?: string, placement?: Marker["placement"]) => void };

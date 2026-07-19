@@ -5,15 +5,14 @@ a change, then hand back a replay link and a portable `.rec` artifact.
 
 ## Install for Codex
 
-Rec is installed as one ready-to-run package: the Rec runtime, its Codex plugin,
-and the Playwright launcher. You do not clone this repository or manually wire
-MCP paths.
+Rec is installed as one ready-to-run package: the Rec runtime and its Codex
+plugin, with the stock Playwright browser tools embedded. You do not clone this
+repository, manually wire MCP paths, or configure a separate Playwright server.
 
 Install **Rec browser recordings** from the approved Codex marketplace, then
 open a new Codex task. On its first use, the plugin downloads the correct
 verified runtime into `~/.rec` and starts it automatically. Google Chrome is
-required. The launcher obtains the separate `@playwright/mcp` dependency on
-first use.
+required.
 
 ### Ask normally
 
@@ -25,8 +24,9 @@ For a fix:
 
 > Fix the issue, verify it in the browser, and record a Rec replay of the verified result.
 
-Codex uses Playwright for every browser action and Rec for recording lifecycle
-and optional markers. It returns a local replay URL and a portable artifact path
+Codex drives the browser and records through the one Rec server, labelling
+milestones with atomic `rec_marker` checkpoints on the actions themselves. It
+returns a local replay URL and a portable artifact path
 when finished. With `REC_SHARE_URL` configured, `recording_stop` also publishes
 the artifact automatically and returns a share URL. You do not need to start
 Chrome, choose a port, or describe the recording workflow.
@@ -50,9 +50,9 @@ larger than 10 MiB.
 
 - **No page available:** have the agent navigate the target app through
   Playwright, then start the recording.
-- **Empty replay or the wrong browser:** make sure the `playwright` MCP entry
-  points to `packages/playwright-launcher/dist/main.js`, not stock Playwright
-  MCP directly.
+- **Empty replay or the wrong browser:** make sure the agent drives Rec's own
+  `browser_*` tools. A separately configured stock Playwright MCP controls a
+  browser Rec never captures.
 - **Chrome cannot start:** install Google Chrome or set `REC_BROWSER_EXECUTABLE`
   to its executable path.
 

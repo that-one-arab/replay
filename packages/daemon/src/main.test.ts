@@ -32,6 +32,16 @@ test("daemon reports an unattached browser and rejects unsafe or premature captu
     const unavailableAttach = await request(endpoint, "/api/browser/attach", { cdp_endpoint: "http://127.0.0.1:1" });
     assert.equal(unavailableAttach.status, 500);
     assert.match(String(unavailableAttach.body.error), /127\.0\.0\.1:1/);
+
+    // Driving the browser is never gated on the recorder: an action reported
+    // while nothing records is acknowledged and dropped, not failed.
+    const idleAction = await request(endpoint, "/api/sessions/action", { id: "act_1", tool: "browser_click", started_at_epoch_ms: Date.now() - 5, finished_at_epoch_ms: Date.now(), ok: true, marker: { label: "ignored" } });
+    assert.equal(idleAction.status, 200);
+    assert.equal(idleAction.body.recorded, false);
+
+    const invalidAction = await request(endpoint, "/api/sessions/action", { tool: "browser_click" });
+    assert.equal(invalidAction.status, 500);
+    assert.match(String(invalidAction.body.error), /requires id, tool/);
   } finally {
     await stop(daemon);
     await rm(home, { recursive: true, force: true });
@@ -163,7 +173,7 @@ async function request(endpoint: string, path: string, body: Record<string, unkn
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  return { status: response.status, body: await response.json() as { error?: string; lease_id?: string } };
+  return { status: response.status, body: await response.json() as { error?: string; lease_id?: string; recorded?: boolean } };
 }
 
 async function stop(child: ChildProcess) {
