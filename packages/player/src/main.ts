@@ -31,11 +31,13 @@ const TIMELINE_TOOLTIP_DELAY_MS = 550;
 const CAPTION_LINGER_MS = 4_500;
 const UI_IDLE_MS = 3_200;
 const SEEK_STEP_MS = 5_000;
-// Tolerance for treating a marker as the one the playhead is "on" during arrow
-// navigation. It only needs to absorb a slight under-shoot when landing on a
-// marker — drift where playback runs *past* a marker is handled by anchoring on
-// the current marker's index rather than a fixed distance.
-const MARKER_EPSILON_MS = 450;
+// Arrow-key marker navigation buffers. Going back, treat any marker within this
+// distance at or behind the playhead as the one we're "on" and skip it, so a
+// playhead that has drifted just past a marker still steps to the genuinely
+// previous one instead of snapping back onto it. Going forward only skips the
+// marker we're sitting on so an upcoming marker stays reachable.
+const MARKER_BACK_BUFFER_MS = 600;
+const MARKER_FWD_SLOP_MS = 60;
 const CAMERA_ZOOM = 1.45;
 const CAMERA_HOLD_MS = 3_800;
 const CAMERA_EASE_PER_S = 4.2;
@@ -542,19 +544,26 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   };
   const seekBy = (delta: number) => jumpTo(currentSessionTime + delta);
   // Arrow keys hop between chapter markers so viewers land on the moments that
-  // matter; with no markers they fall back to a fixed jog. Playback drifts the
-  // playhead past a marker over time (a few ms up to seconds), so instead of a
-  // fixed time epsilon — which would let a left-arrow snap back onto the drifted
-  // current marker — anchor on the current marker's index and step off it.
+  // matter; with no markers they fall back to a fixed jog. Playback keeps
+  // nudging the playhead past the marker just landed on, which used to make a
+  // left press snap back onto that same marker. Handle each direction on its own
+  // side of the playhead instead: "previous" skips any marker within a buffer at
+  // or behind the playhead (absorbing the drift) and takes the one before it,
+  // while "next" takes the first marker ahead. A left press never lands forward,
+  // and a right press never lands back.
   const jumpToMarker = (direction: -1 | 1) => {
     const times = manifest.markers
       .map((marker) => marker.t_ms)
       .filter((time) => time > 0 && time < duration)
       .sort((left, right) => left - right);
     if (!times.length) { seekBy(direction * SEEK_STEP_MS); return; }
-    const current = times.reduce((last, time, index) => time <= currentSessionTime + MARKER_EPSILON_MS ? index : last, -1);
-    const next = times[current + direction];
-    jumpTo(next ?? (direction > 0 ? duration : 0));
+    if (direction < 0) {
+      const previous = [...times].reverse().find((time) => time < currentSessionTime - MARKER_BACK_BUFFER_MS);
+      jumpTo(previous ?? 0);
+    } else {
+      const next = times.find((time) => time > currentSessionTime + MARKER_FWD_SLOP_MS);
+      jumpTo(next ?? duration);
+    }
   };
   const onPlaybackKey = (event: KeyboardEvent) => {
     // The replayed page is a passive playback, so keystrokes must never reach its
