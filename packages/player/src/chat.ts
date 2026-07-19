@@ -121,6 +121,8 @@ function togglePanel() {
     panel.querySelector<HTMLTextAreaElement>(".chat-composer textarea")?.focus();
   }
   syncToggles();
+  // The stage width changed; let fitReplay and the camera re-measure.
+  window.dispatchEvent(new Event("resize"));
 }
 
 function syncToggles() {
