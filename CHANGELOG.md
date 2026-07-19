@@ -5,6 +5,10 @@ is immutable and is named `rec-<version>-darwin-arm64.tar.gz`.
 
 ## [Unreleased]
 
+- Add an OpenAI Responses API backend for the replay assistant with true
+  token streaming, server-side conversation state, and direct tool calling.
+  `chat.provider` selects it ("auto" prefers OpenAI when a key is configured,
+  falling back to the Codex CLI).
 - Add a replay assistant chat panel to the local player, powered by the Codex
   CLI. The assistant reads a distilled action timeline of the recording and can
   drive the player while it answers: seeking, pausing, highlighting elements,

@@ -18,12 +18,21 @@ export interface BrowserConfig {
   executable?: string;
 }
 
+export type ChatProviderName = "auto" | "codex" | "openai";
+
 export interface ChatConfig {
   enabled: boolean;
-  /** Executable used as the chat provider. Only the Codex CLI protocol is supported. */
+  /**
+   * Which backend answers the chat. "auto" (default) prefers the OpenAI API
+   * when a key is available and falls back to the Codex CLI otherwise.
+   */
+  provider: ChatProviderName;
+  /** Executable used when the Codex CLI is the provider. */
   command: string;
-  /** Optional model override passed to the provider (`codex exec -m`). */
+  /** Optional model override (Codex `-m`, or the OpenAI Responses model). */
   model?: string;
+  /** OpenAI API key; OPENAI_API_KEY and REC_CHAT_API_KEY also work. */
+  api_key?: string;
 }
 
 export interface ResolvedRecConfig {
@@ -44,12 +53,12 @@ export interface ResolveConfigOptions {
 type PartialConfig = {
   browser?: Partial<{ headless: boolean; viewport: string; executable: string }>;
   replay?: Partial<{ idle_mode: IdleMode; idle_retained_ms: number; idle_fast_forward_speed: number; default_speed: number }>;
-  chat?: Partial<{ enabled: boolean; command: string; model: string }>;
+  chat?: Partial<{ enabled: boolean; provider: string; command: string; model: string; api_key: string }>;
 };
 
 const DEFAULT_BROWSER: BrowserConfig = { headless: false, viewport: { width: 1280, height: 720 } };
 const DEFAULT_REPLAY: ReplayDefaults = { idle_mode: "cut", idle_retained_ms: 2_000, idle_fast_forward_speed: 8, default_speed: 1.15 };
-const DEFAULT_CHAT: ChatConfig = { enabled: true, command: "codex" };
+const DEFAULT_CHAT: ChatConfig = { enabled: true, provider: "auto", command: "codex" };
 
 /** Resolve Rec's small TOML configuration surface without tying it to an MCP client. */
 export async function resolveRecConfig(options: ResolveConfigOptions = {}): Promise<ResolvedRecConfig> {
@@ -88,8 +97,10 @@ export async function resolveRecConfig(options: ResolveConfigOptions = {}): Prom
   };
   const chat: ChatConfig = {
     enabled: merged.chat?.enabled ?? DEFAULT_CHAT.enabled,
+    provider: validateChatProvider(merged.chat?.provider ?? DEFAULT_CHAT.provider, sourceFor("chat.provider", sources)),
     command: merged.chat?.command || DEFAULT_CHAT.command,
     ...(merged.chat?.model ? { model: merged.chat.model } : {}),
+    ...(merged.chat?.api_key ? { api_key: merged.chat.api_key } : {}),
   };
   const fingerprint = JSON.stringify({ browser });
   return { browser, replay, chat, sources, warnings, fingerprint };
@@ -121,7 +132,7 @@ function parseToml(text: string, source: string): { value: PartialConfig; warnin
       ? ["headless", "viewport", "executable"]
       : section === "replay"
         ? ["idle_mode", "idle_retained_ms", "idle_fast_forward_speed", "default_speed"]
-        : ["enabled", "command", "model"];
+        : ["enabled", "provider", "command", "model", "api_key"];
     if (!known.includes(key)) { warnings.push(`${source}:${index + 1}: unknown key ${section}.${key} ignored`); continue; }
     const parsed = valueOf(assignment[2]!, `${source}:${index + 1}`);
     if (section === "browser") {
@@ -137,7 +148,7 @@ function parseToml(text: string, source: string): { value: PartialConfig; warnin
     } else {
       const chat = value.chat ?? (value.chat = {});
       if (key === "enabled" && typeof parsed !== "boolean") throw new Error(`${source}:${index + 1}: chat.enabled must be true or false`);
-      if ((key === "command" || key === "model") && typeof parsed !== "string") throw new Error(`${source}:${index + 1}: chat.${key} must be a quoted string`);
+      if (key !== "enabled" && typeof parsed !== "string") throw new Error(`${source}:${index + 1}: chat.${key} must be a quoted string`);
       Object.assign(chat, { [key]: parsed });
     }
   }
@@ -149,8 +160,10 @@ function environmentConfig(env: NodeJS.ProcessEnv): PartialConfig {
   const replay: PartialConfig["replay"] = {};
   const chat: PartialConfig["chat"] = {};
   if (env.REC_CHAT_ENABLED !== undefined) chat.enabled = booleanValue(env.REC_CHAT_ENABLED, "REC_CHAT_ENABLED");
+  if (env.REC_CHAT_PROVIDER !== undefined) chat.provider = env.REC_CHAT_PROVIDER;
   if (env.REC_CHAT_COMMAND !== undefined) chat.command = env.REC_CHAT_COMMAND;
   if (env.REC_CHAT_MODEL !== undefined) chat.model = env.REC_CHAT_MODEL;
+  if (env.REC_CHAT_API_KEY !== undefined) chat.api_key = env.REC_CHAT_API_KEY;
   if (env.REC_BROWSER_HEADLESS !== undefined) browser.headless = booleanValue(env.REC_BROWSER_HEADLESS, "REC_BROWSER_HEADLESS");
   if (env.REC_BROWSER_VIEWPORT !== undefined) browser.viewport = env.REC_BROWSER_VIEWPORT;
   if (env.REC_BROWSER_EXECUTABLE !== undefined) browser.executable = env.REC_BROWSER_EXECUTABLE;
@@ -184,6 +197,10 @@ function parseViewport(value: string, source: string) {
   const match = /^(\d{2,5})x(\d{2,5})$/.exec(value);
   if (!match || Number(match[1]) < 1 || Number(match[2]) < 1) throw new Error(`${source}: browser.viewport must be WIDTHxHEIGHT`);
   return { width: Number(match[1]), height: Number(match[2]) };
+}
+function validateChatProvider(value: string, source: string): ChatProviderName {
+  if (value === "auto" || value === "codex" || value === "openai") return value;
+  throw new Error(`${source}: chat.provider must be auto, codex, or openai`);
 }
 function validateIdleMode(value: string, source: string): IdleMode {
   if (value === "cut" || value === "fast_forward" || value === "preserve") return value;

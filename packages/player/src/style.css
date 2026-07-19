@@ -759,6 +759,13 @@ body.chat-open #app { width: calc(100% - 404px); }
   overflow-x: auto;
 }
 .chat-assistant a { color: #b5aaff; }
+.chat-assistant.is-streaming::after {
+  content: "▍";
+  margin-left: 2px;
+  color: #b7abff;
+  animation: chat-caret 1s steps(2) infinite;
+}
+@keyframes chat-caret { 50% { opacity: 0; } }
 .chat-time {
   padding: 0 4px;
   color: #b5aaff;

@@ -38,6 +38,7 @@ let recordingId = "";
 let chatId = "";
 let source: EventSource | undefined;
 let transcript: TranscriptEntry[] = [];
+let streamingText = "";
 let busy = false;
 let connected = false;
 let onOpenPanel: (() => void) | undefined;
@@ -50,7 +51,7 @@ export async function initChat(id: string, onOpen?: () => void) {
   recordingId = id;
   onOpenPanel = onOpen;
   availability = await probeAvailability();
-  if (!availability.available && availability.reason !== "provider_missing") return;
+  if (!availability.available && !isSetupReason(availability.reason)) return;
   chatId = restoreChatId();
   buildPanel();
   if (availability.available) connect();
@@ -74,6 +75,15 @@ async function probeAvailability(): Promise<ChatAvailability> {
     if (!response.ok) return { available: false };
     return await response.json() as ChatAvailability;
   } catch { return { available: false }; }
+}
+
+/** Unavailable states worth explaining in the panel instead of hiding the feature. */
+function isSetupReason(reason: string | undefined) {
+  return reason === "provider_missing" || reason === "missing_api_key";
+}
+
+function providerLabel() {
+  return availability.provider === "openai" ? "OpenAI" : "Codex";
 }
 
 function restoreChatId() {
@@ -108,7 +118,7 @@ function togglePanel() {
 function syncToggles() {
   const button = document.querySelector<HTMLButtonElement>("#chat-toggle");
   if (!button) return;
-  button.hidden = !availability.available && availability.reason !== "provider_missing";
+  button.hidden = !availability.available && !isSetupReason(availability.reason);
   button.classList.toggle("is-open", isChatOpen());
   button.setAttribute("aria-expanded", isChatOpen() ? "true" : "false");
 }
@@ -118,9 +128,17 @@ function connect() {
   source = new EventSource(`/api/chat/stream?chat=${encodeURIComponent(chatId)}&session=${encodeURIComponent(recordingId)}`);
   source.addEventListener("ready", (event) => {
     connected = true;
-    const data = JSON.parse((event as MessageEvent).data as string) as { busy?: boolean };
+    const data = JSON.parse((event as MessageEvent).data as string) as { busy?: boolean; provider?: string };
+    if (data.provider) availability = { ...availability, provider: data.provider };
+    const badge = panel?.querySelector<HTMLElement>(".chat-provider");
+    if (badge) badge.textContent = providerLabel();
     setBusy(Boolean(data.busy));
     setConnectionNote(undefined);
+  });
+  source.addEventListener("message_delta", (event) => {
+    const data = JSON.parse((event as MessageEvent).data as string) as { text?: string };
+    streamingText += data.text ?? "";
+    renderTranscript();
   });
   source.addEventListener("history", (event) => {
     const data = JSON.parse((event as MessageEvent).data as string) as { events?: TranscriptEntry[] };
@@ -132,6 +150,8 @@ function connect() {
   for (const type of ["user_message", "message", "activity", "turn"] as const) {
     source.addEventListener(type, (event) => {
       const entry = JSON.parse((event as MessageEvent).data as string) as TranscriptEntry;
+      // A finished message (or turn boundary) supersedes the streamed preview.
+      if (entry.type === "message" || entry.type === "turn") streamingText = "";
       transcript.push(entry);
       if (entry.type === "turn") setBusy(entry.status === "started");
       renderTranscript();
@@ -189,7 +209,7 @@ function buildPanel() {
   panel.innerHTML = `
     <header class="chat-header">
       <span class="chat-kicker"><i aria-hidden="true"></i>Replay assistant</span>
-      <span class="chat-provider">Codex</span>
+      <span class="chat-provider"></span>
       <button class="chat-icon-button" id="chat-reset" type="button" title="New conversation" aria-label="Start a new conversation"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"></path><path d="M3 4v5h5"></path></svg></button>
       <button class="chat-icon-button" id="chat-close" type="button" title="Close" aria-label="Close the assistant"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19"></path></svg></button>
     </header>
@@ -200,6 +220,7 @@ function buildPanel() {
       <button class="chat-send" type="submit" aria-label="Send"><svg class="chat-send-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V6M6 11l6-6 6 6"></path></svg><span class="chat-stop-icon" aria-hidden="true"></span></button>
     </form>`;
   document.body.appendChild(panel);
+  panel.querySelector<HTMLElement>(".chat-provider")!.textContent = providerLabel();
   panel.querySelector<HTMLButtonElement>("#chat-close")!.onclick = () => togglePanel();
   panel.querySelector<HTMLButtonElement>("#chat-reset")!.onclick = () => resetConversation();
   const form = panel.querySelector<HTMLFormElement>("#chat-composer")!;
@@ -234,6 +255,7 @@ function busyTextEntry(event: KeyboardEvent) {
 
 function resetConversation() {
   transcript = [];
+  streamingText = "";
   chatId = newChatId();
   try { sessionStorage.setItem(`rec-chat:${recordingId}`, chatId); } catch { /* private browsing */ }
   setBusy(false);
@@ -244,7 +266,7 @@ function resetConversation() {
 async function send(text: string, isRetry = false) {
   const clean = text.trim();
   if (!clean || busy) return;
-  if (availability.reason === "provider_missing") return;
+  if (isSetupReason(availability.reason)) return;
   lastUserMessage = clean;
   const input = panel?.querySelector<HTMLTextAreaElement>(".chat-composer textarea");
   if (input) { input.value = ""; input.style.height = "auto"; }
@@ -302,8 +324,10 @@ function renderTranscript() {
   const scroll = panel?.querySelector<HTMLElement>("#chat-scroll");
   if (!scroll) return;
   const nearBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 60;
-  if (availability.reason === "provider_missing") {
-    scroll.innerHTML = `<div class="chat-empty"><b>Codex is not installed</b><p>The replay assistant is powered by the Codex CLI. Install it and sign in, then reopen this replay.</p><code>npm install -g @openai/codex\ncodex login</code></div>`;
+  if (isSetupReason(availability.reason)) {
+    scroll.innerHTML = availability.reason === "missing_api_key"
+      ? `<div class="chat-empty"><b>No OpenAI API key</b><p>The replay assistant is set to the OpenAI API but no key is configured. Add one, then reopen this replay.</p><code>export OPENAI_API_KEY=sk-…\n# or in ~/.rec/config.toml\n[chat]\napi_key = "sk-…"</code></div>`
+      : `<div class="chat-empty"><b>Codex is not installed</b><p>The replay assistant is powered by the Codex CLI. Install it and sign in, then reopen this replay.</p><code>npm install -g @openai/codex\ncodex login</code></div>`;
     panel?.querySelector<HTMLTextAreaElement>(".chat-composer textarea")?.setAttribute("disabled", "");
     panel?.querySelector<HTMLButtonElement>(".chat-send")?.setAttribute("disabled", "");
     return;
@@ -323,7 +347,8 @@ function renderTranscript() {
     else if (entry.type === "turn" && entry.status === "failed") parts.push(`<div class="chat-error"><b>Something went wrong</b><p>${escapeHtml(entry.error ?? "The assistant could not answer.")}</p><button type="button" class="chat-retry">Try again</button></div>`);
     else if (entry.type === "turn" && entry.status === "canceled") parts.push(`<div class="chat-activity is-failed"><i aria-hidden="true"></i>Stopped</div>`);
   }
-  if (busy) parts.push(`<div class="chat-thinking" aria-label="The assistant is thinking"><span></span><span></span><span></span></div>`);
+  if (busy && streamingText) parts.push(`<div class="chat-message chat-assistant is-streaming">${renderMarkdown(streamingText)}</div>`);
+  else if (busy) parts.push(`<div class="chat-thinking" aria-label="The assistant is thinking"><span></span><span></span><span></span></div>`);
   scroll.innerHTML = parts.join("");
   // Collapse stale "running" states: only the newest activity may spin.
   const running = scroll.querySelectorAll(".chat-activity.is-running");

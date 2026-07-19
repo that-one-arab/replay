@@ -21,10 +21,13 @@ idle_fast_forward_speed = 8
 default_speed = 1.15
 
 [chat]
-# The replay assistant in the local player. Requires the Codex CLI.
+# The replay assistant in the local player.
 enabled = true
+# "auto" uses the OpenAI API when a key is available, else the Codex CLI.
+provider = "auto"
 command = "codex"
-# model = "gpt-5.1"
+# model = "gpt-5.6-terra"
+# api_key = "sk-…"   # or set OPENAI_API_KEY / REC_CHAT_API_KEY
 ```
 
 Settings merge per key in this order: built-in defaults, user file, project file,
@@ -42,16 +45,26 @@ between **Cut**, **8×**, and **Keep** in the player without changing the artifa
 
 ## Replay assistant
 
-The local player includes an **Ask AI** panel backed by the OpenAI Codex CLI.
-It is local-only: the daemon runs `codex exec` on your machine, shared replays
-never show the panel, and nothing about the recording is sent anywhere except
-to your own Codex account. Set `chat.enabled = false` (or
-`REC_CHAT_ENABLED=false`) to remove the panel entirely, `chat.command` to point
-at a specific Codex binary, and `chat.model` to override the model. The
-matching environment variables are `REC_CHAT_ENABLED`, `REC_CHAT_COMMAND`, and
-`REC_CHAT_MODEL`. If the Codex CLI is missing or signed out, the panel explains
-how to install it (`npm install -g @openai/codex`, then `codex login`) instead
-of failing silently.
+The local player includes an **Ask AI** panel with two interchangeable
+backends. It is local-only either way: shared replays never show the panel,
+and nothing about the recording is sent anywhere except to the model provider
+you configured.
+
+- **OpenAI API** (preferred when a key is available): the daemon calls the
+  Responses API directly, streams tokens as they arrive, and keeps the
+  conversation in an OpenAI Conversations object. Supply a key via
+  `chat.api_key`, `OPENAI_API_KEY`, or `REC_CHAT_API_KEY`. The default model
+  is `gpt-5.6-terra`; override it with `chat.model`.
+- **Codex CLI**: the daemon runs `codex exec` using your existing Codex
+  sign-in — no key needed. `chat.command` points at a specific binary.
+
+`chat.provider` chooses explicitly (`"openai"` or `"codex"`); the default
+`"auto"` picks OpenAI when a key is configured and Codex otherwise. Set
+`chat.enabled = false` (or `REC_CHAT_ENABLED=false`) to remove the panel
+entirely. The matching environment variables are `REC_CHAT_ENABLED`,
+`REC_CHAT_PROVIDER`, `REC_CHAT_COMMAND`, `REC_CHAT_MODEL`, and
+`REC_CHAT_API_KEY`. If the chosen backend is missing its CLI or key, the panel
+explains how to set it up instead of failing silently.
 
 ## Local runtime lifecycle
 

@@ -60,11 +60,16 @@ process.exit(1);
   await chmod(path, 0o755);
 }
 
-async function startDaemon(home: string, port: number, pathPrefix: string) {
-  const daemon = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], {
-    env: { ...process.env, REC_HOME: home, REC_PORT: String(port), PATH: `${pathPrefix}:${process.env.PATH ?? ""}` },
-    stdio: "ignore",
-  });
+async function startDaemon(home: string, port: number, pathPrefix: string, extraEnv: Record<string, string> = {}) {
+  // The host machine may carry an OPENAI_API_KEY; strip it so "auto" provider
+  // selection inside these fixtures stays deterministic.
+  const env: NodeJS.ProcessEnv = { ...process.env, REC_HOME: home, REC_PORT: String(port), PATH: `${pathPrefix}:${process.env.PATH ?? ""}` };
+  delete env.OPENAI_API_KEY;
+  delete env.REC_CHAT_API_KEY;
+  delete env.OPENAI_BASE_URL;
+  delete env.REC_CHAT_PROVIDER;
+  Object.assign(env, extraEnv);
+  const daemon = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], { env, stdio: "ignore" });
   await waitForHealth(`http://127.0.0.1:${port}`);
   return daemon;
 }
@@ -164,6 +169,144 @@ test("chat surfaces provider failures and honors disabled config", async () => {
     await rm(home, { recursive: true, force: true });
   }
 });
+
+test("openai provider streams deltas, resolves tool calls, and reuses one conversation", async () => {
+  const home = await mkdtemp(join(tmpdir(), "rec-chat-openai-"));
+  await seedRecording(home, "rec_fixture");
+  const fake = await startFakeOpenAi();
+  const port = await unusedPort();
+  const endpoint = `http://127.0.0.1:${port}`;
+  const daemon = await startDaemon(home, port, join(home, "bin-none"), {
+    REC_CHAT_PROVIDER: "openai",
+    OPENAI_API_KEY: "sk-test",
+    OPENAI_BASE_URL: fake.url,
+  });
+  try {
+    const availability = await request(endpoint, "GET", "/api/chat/availability");
+    assert.equal(availability.body.available, true);
+    assert.equal(availability.body.provider, "openai");
+
+    const chatId = "chat-openai-0001";
+    const stream = await startStream(endpoint, chatId, "rec_fixture");
+    await request(endpoint, "POST", "/api/chat/message", { chat_id: chatId, text: "What happened?" });
+    await stream.waitFor((events) => events.some((event) => event.event === "turn" && event.data.status === "completed"));
+    const deltas = stream.events.filter((event) => event.event === "message_delta").map((event) => event.data.text).join("");
+    assert.equal(deltas, "Hello from the fixture.");
+    const message = stream.events.find((event) => event.event === "message");
+    assert.equal(message?.data.text, "Hello from the fixture.");
+
+    // Second turn: the fixture responds with a function_call for a server-side
+    // tool, then answers with text that echoes the tool output.
+    await request(endpoint, "POST", "/api/chat/message", { chat_id: chatId, text: "use the tool" });
+    await stream.waitFor((events) => events.filter((event) => event.event === "turn" && event.data.status === "completed").length >= 2);
+    const activity = stream.events.find((event) => event.event === "activity");
+    assert.equal(activity?.data.label, "Reviewed the timeline");
+    assert.equal(activity?.data.status, "completed");
+    const final = stream.events.filter((event) => event.event === "message").at(-1);
+    assert.match(String(final?.data.text), /tool result received/);
+    assert.match(fake.state.lastToolOutput, /Chat fixture/, "the real overview reached the fixture as function_call_output");
+    assert.equal(fake.state.conversationsCreated, 1, "one conversation for the whole chat");
+    assert.ok(fake.state.sawConversationId, "responses carry the conversation id");
+    assert.match(fake.state.lastInstructions, /replay assistant/i, "instructions travel on every request");
+    stream.close();
+  } finally {
+    await stop(daemon);
+    await fake.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("openai provider maps a rejected key to an unauthenticated failure", async () => {
+  const home = await mkdtemp(join(tmpdir(), "rec-chat-openai-401-"));
+  await seedRecording(home, "rec_fixture");
+  const fake = await startFakeOpenAi({ reject: true });
+  const port = await unusedPort();
+  const endpoint = `http://127.0.0.1:${port}`;
+  const daemon = await startDaemon(home, port, join(home, "bin-none"), {
+    REC_CHAT_PROVIDER: "openai",
+    OPENAI_API_KEY: "sk-bad",
+    OPENAI_BASE_URL: fake.url,
+  });
+  try {
+    const chatId = "chat-openai-0002";
+    const stream = await startStream(endpoint, chatId, "rec_fixture");
+    await request(endpoint, "POST", "/api/chat/message", { chat_id: chatId, text: "hello" });
+    await stream.waitFor((events) => events.some((event) => event.event === "turn" && event.data.status === "failed"));
+    const failed = stream.events.find((event) => event.event === "turn" && event.data.status === "failed")!;
+    assert.equal(failed.data.error_code, "unauthenticated");
+    assert.match(String(failed.data.error), /API key/);
+    stream.close();
+
+    // Without any key, an explicit openai provider reports why it is unavailable.
+    const keylessPort = await unusedPort();
+    const keyless = await startDaemon(home, keylessPort, join(home, "bin-none"), { REC_CHAT_PROVIDER: "openai" });
+    const keylessAvailability = await request(`http://127.0.0.1:${keylessPort}`, "GET", "/api/chat/availability");
+    assert.equal(keylessAvailability.body.available, false);
+    assert.equal(keylessAvailability.body.reason, "missing_api_key");
+    await stop(keyless);
+  } finally {
+    await stop(daemon);
+    await fake.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+/**
+ * A minimal Responses API stand-in: /conversations mints ids; /responses
+ * streams SSE. First call answers in text deltas; a call whose latest input
+ * mentions "use the tool" emits a function_call for get_replay_overview, and
+ * the follow-up (function_call_output input) answers with text.
+ */
+async function startFakeOpenAi(options: { reject?: boolean } = {}) {
+  const state = { conversationsCreated: 0, sawConversationId: false, lastInstructions: "", lastToolOutput: "" };
+  const server = createServer((request, response) => {
+    let raw = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => { raw += chunk; });
+    request.on("end", () => {
+      if (options.reject) {
+        response.writeHead(401, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "Incorrect API key provided." } }));
+        return;
+      }
+      if (request.url === "/conversations") {
+        state.conversationsCreated += 1;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ id: `conv_${state.conversationsCreated}` }));
+        return;
+      }
+      const body = JSON.parse(raw) as { conversation?: string; instructions?: string; input?: { role?: string; content?: string; type?: string; output?: string }[] };
+      state.sawConversationId ||= Boolean(body.conversation);
+      state.lastInstructions = body.instructions ?? "";
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      const send = (event: string, data: unknown) => response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      const toolOutput = body.input?.find((item) => item.type === "function_call_output");
+      if (toolOutput) {
+        state.lastToolOutput = toolOutput.output ?? "";
+        send("response.output_item.done", { item: { type: "message", content: [{ type: "output_text", text: "tool result received" }] } });
+        send("response.completed", { response: { id: "resp_3" } });
+      } else if (body.input?.some((item) => String(item.content ?? "").includes("use the tool"))) {
+        send("response.output_item.done", { item: { type: "function_call", call_id: "call_1", name: "get_replay_overview", arguments: "{}" } });
+        send("response.completed", { response: { id: "resp_2" } });
+      } else {
+        send("response.output_text.delta", { delta: "Hello from " });
+        send("response.output_text.delta", { delta: "the fixture." });
+        send("response.output_item.done", { item: { type: "message", content: [{ type: "output_text", text: "Hello from the fixture." }] } });
+        send("response.completed", { response: { id: "resp_1" } });
+      }
+      response.end();
+    });
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Fake OpenAI server has no port.");
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    state,
+    close: () => new Promise<void>((resolveClose) => server.close(() => resolveClose())),
+  };
+}
 
 test("chat availability reflects a disabled config and a missing provider", async () => {
   const home = await mkdtemp(join(tmpdir(), "rec-chat-config-"));
