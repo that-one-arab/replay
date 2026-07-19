@@ -109,6 +109,32 @@ test("closing the managed browser shuts the daemon down even while agent leases 
   }
 });
 
+test("the daemon exits with a clear error when its port is already taken", async () => {
+  const home = await mkdtemp(join(tmpdir(), "rec-daemon-port-"));
+  const squatter = createServer((_, response) => { response.writeHead(200); response.end("not rec"); });
+  squatter.listen(0, "127.0.0.1");
+  await once(squatter, "listening");
+  const address = squatter.address();
+  if (!address || typeof address === "string") throw new Error("Could not reserve a fixture port.");
+  const daemon = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], {
+    env: { ...process.env, REC_HOME: home, REC_PORT: String(address.port) },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  let stderr = "";
+  daemon.stderr?.setEncoding("utf8");
+  daemon.stderr?.on("data", (chunk: string) => { stderr += chunk; });
+  try {
+    const [code] = await once(daemon, "exit") as [number | null];
+    assert.equal(code, 1);
+    assert.match(stderr, /already in use/);
+    assert.match(stderr, new RegExp(`127\\.0\\.0\\.1:${address.port}`));
+  } finally {
+    await stop(daemon);
+    await new Promise<void>((resolveClose) => squatter.close(() => resolveClose()));
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 async function unusedPort() {
   const server = createServer();
   server.listen(0, "127.0.0.1");

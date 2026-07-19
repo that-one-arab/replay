@@ -158,16 +158,43 @@ async function api(method: string, path: string, body?: unknown): Promise<unknow
 }
 
 async function ensureDaemon() {
-  try { if ((await fetch(`${endpoint}/health`)).ok) return; } catch { /* start below */ }
+  const running = await probeDaemon();
+  if (running.health) return;
+  if (running.listening) throw new Error(portConflict());
   const entry = process.env.REC_DAEMON_ENTRY ?? resolve(process.cwd(), "packages/daemon/dist/main.js");
   if (!existsSync(entry)) throw new Error("Rec's runtime is unavailable. Reinstall Rec or set REC_DAEMON_ENTRY.");
   const child = spawn(process.execPath, [entry], { detached: true, stdio: "ignore", cwd: process.cwd(), env: { ...process.env, REC_CONFIG_CWD: process.cwd() } });
   child.unref();
+  let daemonGone = false;
+  child.once("exit", () => { daemonGone = true; });
+  child.once("error", () => { daemonGone = true; });
   for (let attempt = 0; attempt < 25; attempt += 1) {
     await new Promise((resolveWait) => setTimeout(resolveWait, 100));
-    try { if ((await fetch(`${endpoint}/health`)).ok) return; } catch { /* wait */ }
+    const probe = await probeDaemon();
+    if (probe.health) return;
+    if (probe.listening) throw new Error(portConflict());
+    // A daemon that lost a startup race leaves the winner answering health
+    // above; an exit with nothing listening means the daemon itself failed.
+    if (daemonGone) throw new Error(`The rec daemon exited during startup. Run \`node ${entry}\` to see why.`);
   }
-  throw new Error("Daemon did not start on 127.0.0.1:7717");
+  throw new Error(`The rec daemon did not respond at ${endpoint} within 2.5s of spawning.`);
+}
+
+/**
+ * A valid /health body is the only proof a rec daemon owns the endpoint.
+ * Anything else answering there is a foreign process: spawning a daemon behind
+ * it would die on the taken port, and treating it as the daemon (the old
+ * response.ok check did) would misroute recording calls into it.
+ */
+async function probeDaemon(): Promise<{ health?: Record<string, unknown>; listening: boolean }> {
+  let response: Response;
+  try { response = await fetch(`${endpoint}/health`); } catch { return { listening: false }; }
+  const health = await response.json().catch(() => undefined) as Record<string, unknown> | undefined;
+  return response.ok && health?.ok === true ? { health, listening: true } : { listening: true };
+}
+
+function portConflict() {
+  return `Something that is not a rec daemon is already listening at ${endpoint}. Stop that process or point REC_PORT / REC_DAEMON_URL at a free port.`;
 }
 
 function option(values: string[], name: string) { const index = values.indexOf(name); if (index < 0) return undefined; const value = values[index + 1]; values.splice(index, value === undefined ? 1 : 2); return value; }

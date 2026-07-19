@@ -27,6 +27,15 @@ let lifecycleCheckRunning = false;
 let shuttingDown = false;
 
 const server = createServer((request, response) => void route(request, response).catch((error: unknown) => reply(response, 500, { error: messageOf(error) })));
+// Clients probe /health before spawning a daemon, so hitting a taken port here
+// means a foreign process (or a racing daemon) owns it. Exit with a pointer
+// instead of crashing on an unhandled 'error' event.
+server.on("error", (error: NodeJS.ErrnoException) => {
+  console.error(error.code === "EADDRINUSE"
+    ? `rec daemon: 127.0.0.1:${port} is already in use by another process. Stop it or set REC_PORT to a free port.`
+    : `rec daemon: could not listen on 127.0.0.1:${port}: ${messageOf(error)}`);
+  process.exit(1);
+});
 server.listen(port, "127.0.0.1", () => console.log(`rec daemon listening on http://127.0.0.1:${port}`));
 const lifecycleTimer = setInterval(() => void enforceLifecycle(), 1_000);
 lifecycleTimer.unref();

@@ -107,6 +107,30 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
   }
 });
 
+test("a foreign process on the daemon endpoint fails fast with a conflict error instead of a blind spawn", async () => {
+  // Worst case: the squatter answers 200 with JSON on every path. A connection
+  // refusal already takes the spawn path; this must neither be mistaken for a
+  // healthy daemon nor trigger a doomed daemon spawn behind it.
+  const squatter = createServer((_, response) => json(response, { hello: "world" }));
+  squatter.listen(0, "127.0.0.1");
+  await once(squatter, "listening");
+  const address = squatter.address();
+  if (!address || typeof address === "string") throw new Error("Fixture squatter did not expose a TCP port.");
+  const server = spawn(process.execPath, [resolve(dirname(fileURLToPath(import.meta.url)), "main.js")], { env: { ...process.env, REC_DAEMON_URL: `http://127.0.0.1:${address.port}` } });
+  try {
+    const client = new McpClient(server);
+    await client.request("initialize", { protocolVersion: "2025-03-26" });
+    const status = await client.request("tools/call", { name: "recording_status", arguments: {} });
+    assert.equal(status.result.isError, true);
+    assert.match(status.result.content[0].text, /not a rec daemon/);
+    assert.match(status.result.content[0].text, new RegExp(`127\\.0\\.0\\.1:${address.port}`));
+  } finally {
+    server.kill();
+    squatter.close();
+    await once(squatter, "close");
+  }
+});
+
 class McpClient {
   private readonly lines;
   private nextId = 1;

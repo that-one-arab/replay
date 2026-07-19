@@ -275,16 +275,42 @@ async function shareRecording(argumentsValue: JsonObject) {
 function configuredShareEndpoint() { return process.env.REC_SHARE_URL?.replace(/\/$/, "") || undefined; }
 
 async function ensureDaemon(): Promise<JsonObject> {
-  try { return object(await api("GET", "/health", undefined, false)); } catch { /* start below */ }
+  const running = await probeDaemon();
+  if (running.health) return running.health;
+  if (running.listening) throw new Error(portConflict());
   if (!existsSync(daemonEntry)) throw new Error("rec is not built. Run pnpm build before starting the MCP server.");
   const child = spawn(process.execPath, [daemonEntry], { detached: true, stdio: "ignore", cwd: resolve(moduleDirectory, "../../.."), env: { ...process.env, REC_CONFIG_CWD: process.cwd() } });
   child.unref();
-  let lastError: unknown;
+  let daemonGone = false;
+  child.once("exit", () => { daemonGone = true; });
+  child.once("error", () => { daemonGone = true; });
   for (let attempt = 0; attempt < 25; attempt += 1) {
     await delay(100);
-    try { return object(await api("GET", "/health", undefined, false)); } catch (error) { lastError = error; }
+    const probe = await probeDaemon();
+    if (probe.health) return probe.health;
+    if (probe.listening) throw new Error(portConflict());
+    // A daemon that lost a startup race leaves the winner answering health
+    // above; an exit with nothing listening means the daemon itself failed.
+    if (daemonGone) throw new Error(`The rec daemon exited during startup. Run \`node ${daemonEntry}\` to see why.`);
   }
-  throw new Error(`rec daemon did not start: ${messageOf(lastError)}`);
+  throw new Error(`The rec daemon did not respond at ${endpoint} within 2.5s of spawning.`);
+}
+
+/**
+ * A valid /health body is the only proof a rec daemon owns the endpoint.
+ * Anything else answering there is a foreign process: spawning a daemon behind
+ * it would die on the taken port, and treating it as the daemon (the old
+ * response.ok check did) would misroute recording calls into it.
+ */
+async function probeDaemon(): Promise<{ health?: JsonObject; listening: boolean }> {
+  let response: Response;
+  try { response = await fetch(`${endpoint}/health`); } catch { return { listening: false }; }
+  const health = object(await response.json().catch(() => undefined));
+  return response.ok && health.ok === true ? { health, listening: true } : { listening: true };
+}
+
+function portConflict() {
+  return `Something that is not a rec daemon is already listening at ${endpoint}. Stop that process or point REC_PORT / REC_DAEMON_URL at a free port.`;
 }
 
 type DaemonLease = { id: string; renewTimer: NodeJS.Timeout };
