@@ -27,18 +27,19 @@ body.chat-open #app { width: calc(100% - 404px); }
 }
 .replay-screen #replay > .replayer-wrapper { flex: 0 0 auto; transform-origin: center; background: #111218; }
 .replay-screen #replay iframe { border: 0 !important; }
-/* Replayed cursor: a centered dot instead of rrweb's arrow — the driver is an
-   agent, not a hand, and the dot reads cleanly at any replay scale. */
+/* Replayed cursor: a real pointer arrow (screen-recording style) rather than
+   rrweb's default. left/top mark the pointer point, so the arrow's tip — the
+   top-left of the art — sits there with no centering offset. */
 .replay-screen .replayer-mouse {
-  width: 16px;
-  height: 16px;
-  background: #fff;
-  border: 2px solid rgba(23, 23, 32, .85);
-  border-radius: 50%;
-  box-shadow: 0 0 0 3px rgba(185, 172, 255, .5), 0 2px 8px rgba(0, 0, 0, .4);
-  transform: translate(-50%, -50%);
+  width: 21px;
+  height: 30px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='15' height='22' viewBox='0 0 15 22'%3E%3Cpath d='M1 1 L1 17.6 L5.25 13.5 L7.9 19.9 L10.3 18.85 L7.65 12.65 L13.1 12.65 Z' fill='%2318181f' stroke='%23ffffff' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat top left / contain;
+  border: 0;
+  border-radius: 0;
+  transform: none;
   opacity: 0;
   transition: left 90ms cubic-bezier(.22, .61, .36, 1), top 90ms cubic-bezier(.22, .61, .36, 1), opacity .25s ease;
+  filter: drop-shadow(0 2px 2.5px rgba(0, 0, 0, .5));
   will-change: left, top;
 }
 .replay-screen .replayer-wrapper.rec-cursor-live .replayer-mouse { opacity: 1; }
