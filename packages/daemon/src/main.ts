@@ -6,9 +6,11 @@ import { gunzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 import { Recorder, exportPath, exportSession, recHome, resolveRecConfig, sessionsDir, sessionPath, type BrowserConfig, type Outcome, type RecordingManifest, type StartOptions } from "@rec/core";
+import { ChatManager, CHAT_TOOLS } from "./chat.js";
 
 const port = Number(process.env.REC_PORT ?? 7717);
 const recorder = new Recorder();
+const chatManager = new ChatManager(port, async () => (await resolveRecConfig()).chat);
 let cdpEndpoint: string | undefined;
 let managedBrowser = existsSync(join(recHome(), "browser.json"));
 let activeBrowserConfig: BrowserConfig | undefined;
@@ -54,6 +56,19 @@ async function route(request: IncomingMessage, response: ServerResponse) {
     const stopped = await recorder.stop(outcomeOf(body?.outcome), optionalString(body?.notes));
     const portable = await exportSession(stopped.sessionId);
     return reply(response, 200, { ...stopped, portable_bundle: portable.path, portable_bundle_bytes: portable.bytes });
+  }
+  if (request.method === "GET" && url.pathname === "/api/chat/availability") return reply(response, 200, await chatManager.availability());
+  if (request.method === "GET" && url.pathname === "/api/chat/tools") return reply(response, 200, CHAT_TOOLS);
+  if (request.method === "GET" && url.pathname === "/api/chat/stream") {
+    return chatManager.connect(String(url.searchParams.get("chat") ?? ""), String(url.searchParams.get("session") ?? ""), response);
+  }
+  if (request.method === "POST" && url.pathname === "/api/chat/message") return reply(response, 202, await chatManager.message(String(body?.chat_id ?? ""), String(body?.text ?? "")));
+  if (request.method === "POST" && url.pathname === "/api/chat/cancel") return reply(response, 200, chatManager.cancel(String(body?.chat_id ?? "")));
+  if (request.method === "POST" && url.pathname === "/api/chat/tool") {
+    return reply(response, 200, { result: await chatManager.tool(String(body?.chat_id ?? ""), String(body?.name ?? ""), asObject(body?.arguments)) });
+  }
+  if (request.method === "POST" && url.pathname === "/api/chat/tool-result") {
+    return reply(response, 200, chatManager.toolResult(String(body?.chat_id ?? ""), String(body?.call_id ?? ""), body?.ok !== false, body?.result));
   }
   if (request.method === "GET" && url.pathname === "/api/sessions/status") return reply(response, 200, recorder.status());
   if (request.method === "GET" && url.pathname === "/api/sessions") return reply(response, 200, await listSessions());
@@ -163,6 +178,7 @@ async function health() {
   return {
     ok: true,
     share_available: Boolean(shareEndpoint()),
+    chat_available: (await chatManager.availability()).available,
     cdp_endpoint: cdpEndpoint,
     managed_browser: managedBrowser,
     browser_state: browser.attached ? "ready" : "unavailable",
@@ -268,6 +284,7 @@ async function shutdownDaemon() {
   if (shuttingDown || recorder.status().state === "recording") return;
   shuttingDown = true;
   clearInterval(lifecycleTimer);
+  chatManager.dispose();
   if (managedBrowser) await stopBrowser().catch(() => undefined);
   else await recorder.close().catch(() => undefined);
   server.close(() => process.exit(0));
@@ -433,9 +450,13 @@ function serveAsset(response: ServerResponse, pathname: string) {
 function playerRoot() { return resolve(process.env.REC_PLAYER_DIR ?? resolve(process.cwd(), "packages/player/dist")); }
 
 function reply(response: ServerResponse, status: number, value?: unknown) {
+  // A failed SSE stream may already hold sent headers; never double-write them.
+  if (response.headersSent) return response.end();
   response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   response.end(value === undefined ? undefined : JSON.stringify(value));
 }
+
+function asObject(value: unknown): Record<string, unknown> { return typeof value === "object" && value !== null ? value as Record<string, unknown> : {}; }
 
 function jsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolveBody, reject) => {

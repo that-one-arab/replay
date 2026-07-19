@@ -38,6 +38,10 @@ Chrome, choose a port, or describe the recording workflow.
 - Captured DOM events, markers, and static assets needed for local replay.
 - Configurable idle treatment (Cut, fast-forward, or Keep), plus seeking, speed
   controls, and keyboard play/pause.
+- A local-only **Ask AI** replay assistant (powered by your own Codex CLI) that
+  answers questions about the recording and can seek, pause, and highlight
+  elements in the replay while it explains. See
+  [configuration](docs/configuration.md) to disable or tune it.
 
 Passwords are masked. Recordings do not include scripts, API responses, or assets
 larger than 10 MiB.

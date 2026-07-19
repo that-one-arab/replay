@@ -1,6 +1,7 @@
 import { Replayer } from "@rrweb/replay";
 import "rrweb/dist/style.css";
 import "./style.css";
+import { closeChat, initChat, registerReplayControl, wireChatToggle } from "./chat.js";
 
 type Marker = { t_ms: number; label: string; note?: string; placement?: "after_previous" | "before_next"; color?: "yellow" | "green" };
 type Segment = { id: string; page_url: string; clock_offset_ms: number };
@@ -65,6 +66,10 @@ function resolveCameraFlag() {
 }
 let shareAvailable = false;
 let shareUrl: string | undefined;
+// The chat panel and its tools speak raw recording time; the active playback
+// projection translates it. Refreshed by every present().
+let rawToPlayback: (time: number) => number = (time) => time;
+let playbackToRaw: (time: number) => number = (time) => time;
 if (!id) renderError("Choose a recording with `rec open <id>`.");
 else {
   maintainReplayLease();
@@ -122,6 +127,12 @@ async function load(recordingId: string) {
     introDismissed = false;
     shareUrl = undefined;
     shareAvailable = await detectShareAvailability();
+    void initChat(recordingId, () => {
+      // The assistant and the chapters list share the right edge; opening one
+      // yields it to the other.
+      const chapters = document.querySelector<HTMLButtonElement>("#chapters-toggle");
+      if (chapters?.classList.contains("is-open")) chapters.click();
+    });
     const manifest = await request<Manifest>(`/api/sessions/${encodeURIComponent(recordingId)}/manifest`);
     const eventSets = new Map(await Promise.all(manifest.segments.map(async (segment) => [
       segment.id,
@@ -133,11 +144,14 @@ async function load(recordingId: string) {
     let playbackSpeed = replayDefaults.default_speed;
     const present = async (rawTime = 0, autoplay = false) => {
       const projection = projectPlayback(resolvedManifest, eventSets, idleMode, replayDefaults);
+      rawToPlayback = projection.toPlayback;
+      playbackToRaw = projection.toRaw;
       activePlayback?.abort();
       renderShell(projection.manifest, idleMode, replayDefaults, playbackSpeed);
       prepareTimeline(projection.manifest.markers, projection.manifest.navigation_events ?? [], projection.duration, projection.activities, projection.playbackEnd, projection.idleRanges);
       installTimelineTooltips();
       wireShareControl(resolvedManifest.id);
+      wireChatToggle(document.querySelector<HTMLButtonElement>("#chat-toggle"));
       wireChapters();
       wireSessionCards();
       wireDeckMenus();
@@ -173,6 +187,7 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
   const shareControl = shareAvailable
     ? `<div class="share-control" id="share-control"><button class="share-button" id="share" type="button">Share</button></div>`
     : "";
+  const chatToggle = `<button class="chat-toggle" id="chat-toggle" type="button" hidden aria-expanded="false" title="Ask the replay assistant"><svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="M12 2l2.1 6.2a2 2 0 0 0 1.3 1.3L21.5 12l-6.1 2.5a2 2 0 0 0-1.3 1.3L12 22l-2.1-6.2a2 2 0 0 0-1.3-1.3L2.5 12l6.1-2.5a2 2 0 0 0 1.3-1.3z"/></svg>Ask AI</button>`;
   const chaptersToggle = manifest.markers.length
     ? `<button class="chapters-toggle" id="chapters-toggle" type="button" aria-controls="chapters-panel" aria-expanded="false">Chapters<b>${manifest.markers.length}</b></button>`
     : "";
@@ -184,7 +199,7 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
   const chaptersPanel = manifest.markers.length
     ? `<aside class="chapters-panel" id="chapters-panel" aria-label="Recording chapters"><header>Chapters<span>${manifest.markers.length}</span></header><ol>${manifest.markers.map((marker) => `<li><button type="button" data-chapter="${marker.t_ms}"${marker.color ? ` data-chapter-color="${marker.color}"` : ""} aria-current="false"><b>${format(marker.t_ms)}</b><span><strong>${escape(marker.label)}</strong>${marker.note ? `<p>${escape(marker.note)}</p>` : ""}</span></button></li>`).join("")}</ol></aside>`
     : "";
-  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="state-flash" id="state-flash" aria-hidden="true"><span></span></div><b id="stage-status" class="sr-only" role="status">Paused</b>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div>${introCard}${endCard}<section class="control-deck" aria-label="Browser replay controls"><div class="deck-island"><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div>${speedMenu}${settingsMenu}${shareControl}${chaptersToggle}</div></div></section>${chaptersPanel}<div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
+  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="state-flash" id="state-flash" aria-hidden="true"><span></span></div><b id="stage-status" class="sr-only" role="status">Paused</b>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div>${introCard}${endCard}<section class="control-deck" aria-label="Browser replay controls"><div class="deck-island"><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div>${speedMenu}${settingsMenu}${shareControl}${chatToggle}${chaptersToggle}</div></div></section>${chaptersPanel}<div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
 }
 
 async function detectShareAvailability() {
@@ -628,6 +643,57 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     setPlaying(true);
     requestAnimationFrame(advance);
   };
+  // The chat assistant drives playback through this handle. Raw recording
+  // times arrive from the model; the projection maps them onto the timeline.
+  const urlAtTime = (time: number) => {
+    const navigated = [...navigationEvents].reverse().find((event) => event.started_at_ms <= time);
+    return navigated?.to_url ?? segment.page_url;
+  };
+  registerReplayControl({
+    seek: async (rawMs, play) => {
+      dismissIntro();
+      setEndCard(false);
+      const projected = clamp(rawToPlayback(rawMs), 0, duration);
+      const target = segmentAtTime(manifest, eventSets, projected) ?? segment;
+      await replay(manifest, eventSets, duration, target, projected, play, onIdleModeChange, selectedPlaybackSpeed, onPlaybackSpeedChange);
+      syncNarration(manifest.markers, projected, true);
+      return `Playhead moved to recording time ${format(rawMs)} (${play ? "playing" : "paused"}). The viewer is now looking at this moment.`;
+    },
+    setPlayback: (action) => {
+      if (action === "play" && !playing) togglePlayback();
+      else if (action === "pause" && playing) pausePlayback();
+      return action === "play" ? "The replay is playing." : "The replay is paused.";
+    },
+    readScreen: async () => {
+      await settleReplayFrame();
+      const frameDocument = replayer.iframe.contentDocument;
+      const body = frameDocument?.body;
+      if (!body) throw new Error("The replay frame is not ready; try seeking first.");
+      const text = (body.innerText ?? "").replace(/\n{3,}/g, "\n\n").trim();
+      return [
+        `URL: ${urlAtTime(currentSessionTime)}`,
+        // Inside a collapsed idle gap several raw seconds share one playhead
+        // instant, so the mapped-back time is approximate by nature.
+        `Recording time: ~${format(playbackToRaw(currentSessionTime))}`,
+        "",
+        text || "(The page shows no visible text at this moment.)",
+      ].join("\n");
+    },
+    highlight: ({ text, selector }) => {
+      const frameDocument = replayer.iframe.contentDocument;
+      if (!frameDocument) throw new Error("The replay frame is not ready; try seeking first.");
+      let target: Element | null = null;
+      if (selector) { try { target = frameDocument.querySelector(selector); } catch { throw new Error("That CSS selector is not valid."); } }
+      if (!target && text) target = findElementByText(frameDocument, text);
+      if (!target) throw new Error("No matching element is visible at the current moment.");
+      target.scrollIntoView({ block: "center", inline: "center" });
+      target.classList.remove("rec-focus-target");
+      target.classList.add("rec-focus-target");
+      window.setTimeout(() => target?.classList.remove("rec-focus-target"), 2_600);
+      const label = (target.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
+      return `Highlighted <${target.tagName.toLowerCase()}>${label ? ` "${label}"` : ""} for the viewer.`;
+    },
+  });
   syncNarration(manifest.markers, requestedSessionTime);
   const openingFrame = Math.max(0, (events.find((event) => event.type === 2)?.timestamp ?? events[0].timestamp) - events[0].timestamp);
   const localTime = clamp(requestedSessionTime - tabStart, openingFrame, tabDuration);
@@ -816,7 +882,11 @@ function wireChapters() {
     toggle.classList.toggle("is-open", chaptersOpen === true);
     toggle.setAttribute("aria-expanded", chaptersOpen === true ? "true" : "false");
   };
-  toggle.onclick = () => { chaptersOpen = chaptersOpen !== true; apply(); };
+  toggle.onclick = () => {
+    chaptersOpen = chaptersOpen !== true;
+    if (chaptersOpen) closeChat();
+    apply();
+  };
   apply();
 }
 
@@ -1282,6 +1352,27 @@ function isMainDocumentTarget(target: EventTarget | null) {
 }
 type ElementLike = { nodeType: number; classList: DOMTokenList; getAttribute(name: string): string | null; textContent: string | null; tagName: string };
 function isElementLike(value: unknown): value is ElementLike { return typeof value === "object" && value !== null && (value as { nodeType?: number }).nodeType === 1 && "classList" in value; }
+/** Let rrweb finish painting a fresh seek before the assistant reads the frame. */
+function settleReplayFrame() {
+  return new Promise<void>((resolveSettle) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => window.setTimeout(resolveSettle, 120)));
+  });
+}
+/** Deepest visible element whose text contains the query (case-insensitive). */
+function findElementByText(frameDocument: Document, query: string) {
+  const needle = query.replace(/\s+/g, " ").trim().toLowerCase();
+  if (!needle) return null;
+  let best: Element | null = null;
+  let bestLength = Infinity;
+  for (const element of Array.from(frameDocument.body?.querySelectorAll("*") ?? [])) {
+    if (["SCRIPT", "STYLE", "NOSCRIPT"].includes(element.tagName)) continue;
+    const text = (element.textContent ?? "").replace(/\s+/g, " ").trim();
+    if (!text.toLowerCase().includes(needle)) continue;
+    if (element.getClientRects().length === 0) continue;
+    if (text.length < bestLength) { best = element; bestLength = text.length; }
+  }
+  return best;
+}
 async function request<T>(url: string, init?: RequestInit) { const response = await fetch(url, init); if (!response.ok) throw new Error((await response.json().catch(() => ({ error: response.statusText }))).error); return response.json() as Promise<T>; }
 function format(ms?: number) { if (!ms) return "0:00"; const seconds = Math.round(ms / 1000); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`; }
 function formatDuration(ms: number) { return `${(ms / 1_000).toFixed(ms >= 10_000 ? 0 : 1)}s`; }
