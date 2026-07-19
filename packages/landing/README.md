@@ -22,12 +22,13 @@ pnpm dev:landing      # http://127.0.0.1:5175
 
 ## Scripts
 
-| Script                 | What it does                          |
-| ---------------------- | ------------------------------------- |
-| `pnpm dev:landing`     | Vite dev server on port 5175          |
-| `pnpm build:landing`   | Typecheck + production build to `dist` |
-| `pnpm check:landing`   | Typecheck only                        |
-| `pnpm preview:landing` | Preview the production build          |
+| Script                                    | What it does                           |
+| ----------------------------------------- | -------------------------------------- |
+| `pnpm dev:landing` (from repo root)       | Vite dev server on port 5175           |
+| `pnpm --filter @replay/landing build`     | Typecheck + production build to `dist` |
+| `pnpm --filter @replay/landing preview`   | Preview the production build           |
+
+Type-checking is part of the root `pnpm check`.
 
 ## Structure
 

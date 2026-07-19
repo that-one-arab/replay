@@ -90,7 +90,7 @@ demo can also create single- or multi-tab replays:
 
 ```sh
 pnpm demo:capture
-pnpm demo:capture:multi
+pnpm demo:capture --multi-tab
 ```
 
 ## Move a replay to another machine

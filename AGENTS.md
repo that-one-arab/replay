@@ -89,9 +89,9 @@ by `REPLAY_HOME`/`REPLAY_PORT`. See `docs/development-and-releases.md`.
 ## Releases
 
 A git push is not a release. Bump every version with `pnpm release:version
-<version>`, validate (`pnpm release:check && pnpm build && pnpm check && pnpm
-test`), build the archive (`pnpm package:macos`), then publish to the release
-feed. Runtime distribution currently targets `darwin-arm64` only.
+<version>`, validate (`pnpm build && pnpm check && pnpm test`), build the
+archive (`pnpm package:macos` — it asserts the release version as its first
+step), then publish to the release feed. Runtime distribution currently targets `darwin-arm64` only.
 
 ## Conventions
 
