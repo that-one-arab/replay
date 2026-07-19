@@ -23,6 +23,9 @@ const TAB_FOCUS_DELAY_MS = 700;
 const IDLE_THRESHOLD_MS = 3_000;
 const RELOAD_CONTEXT_MS = 750;
 const CURSOR_APPROACH_MS = 420;
+// Beat the synthetic cursor rests on its target after arriving, before the
+// action fires — enough room to read "it's here, about to act."
+const CURSOR_DWELL_MS = 320;
 const KEYSTROKE_PACE_MS = 85;
 const REFRESH_INDICATOR_MS = 1_100;
 const MIN_REFRESH_INDICATOR_MS = 160;
@@ -1319,7 +1322,9 @@ function withCursorLeadIns(events: ReplayEvent[]): ReplayEvent[] {
   let lastTs = -Infinity;
   for (const event of events) {
     if (event.type === 3 && event.data?.source === 2 && [2, 4, 5].includes(event.data.type ?? -1) && typeof event.data.id === "number") {
-      const at = Math.max(lastTs + 1, event.timestamp - CURSOR_APPROACH_MS);
+      // Lead by the glide plus a dwell beat, so the cursor arrives early and
+      // rests on the target before the action fires.
+      const at = Math.max(lastTs + 1, event.timestamp - CURSOR_APPROACH_MS - CURSOR_DWELL_MS);
       if (at < event.timestamp - 40) {
         out.push({ type: 5, timestamp: at, data: { tag: "rec-cursor", id: event.data.id } });
         lastTs = at;
