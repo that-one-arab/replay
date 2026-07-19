@@ -457,9 +457,9 @@ body.chat-open #app { width: calc(100% - 404px); }
 .chapters-panel {
   position: absolute;
   z-index: 4;
-  top: 18px;
+  top: 58px;
   right: 22px;
-  max-height: calc(100vh - 150px);
+  max-height: calc(100vh - 190px);
   width: min(330px, calc(100vw - 44px));
   display: flex;
   flex-direction: column;
@@ -634,21 +634,28 @@ body.chat-open #app { width: calc(100% - 404px); }
 
 /* Replay assistant: a chat island docked on the right, same glass as the deck */
 .chat-toggle {
+  position: absolute;
+  z-index: 6;
+  top: 14px;
+  right: 14px;
   display: flex;
   align-items: center;
-  gap: 6px;
-  color: rgba(255, 255, 255, .75);
-  background: rgba(183, 171, 255, .14);
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: #fff;
+  background: rgba(19, 20, 28, .72);
   border: 1px solid rgba(196, 189, 255, .35);
-  border-radius: 6px;
-  padding: 4px 9px;
-  font: 10px "DM Mono";
+  border-radius: 50%;
   cursor: pointer;
-  white-space: nowrap;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .32);
+  transition: background .15s ease, border-color .15s ease, transform .15s ease;
 }
 .chat-toggle svg { color: #b7abff; }
-.chat-toggle:hover { color: #fff; background: rgba(183, 171, 255, .24); }
-.chat-toggle.is-open { color: #171720; background: #b7abff; }
+.chat-toggle:hover { background: rgba(183, 171, 255, .24); transform: translateY(-1px); }
+.chat-toggle.is-open { background: #b7abff; border-color: #b7abff; }
 .chat-toggle.is-open svg { color: #171720; }
 .chat-toggle[hidden] { display: none; }
 .chat-panel {
