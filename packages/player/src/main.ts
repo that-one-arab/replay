@@ -2,7 +2,7 @@ import { Replayer } from "@rrweb/replay";
 import "rrweb/dist/style.css";
 import "./style.css";
 
-type Marker = { t_ms: number; label: string; note?: string; placement?: "after_previous" | "before_next"; color?: "yellow" };
+type Marker = { t_ms: number; label: string; note?: string; placement?: "after_previous" | "before_next"; color?: "yellow" | "green" };
 type Segment = { id: string; page_url: string; clock_offset_ms: number };
 type TabEvent = { t_ms: number; segment_id: string; type: "opened" | "focused" | "closed" };
 type NavigationEvent = { segment_id: string; kind: "reload" | "navigate"; started_at_ms: number; committed_at_ms: number; ready_at_ms: number; from_url: string; to_url: string };
@@ -30,6 +30,11 @@ const TIMELINE_TOOLTIP_DELAY_MS = 550;
 const CAPTION_LINGER_MS = 4_500;
 const UI_IDLE_MS = 3_200;
 const SEEK_STEP_MS = 5_000;
+// Tolerance for treating a marker as the one the playhead is "on" during arrow
+// navigation. It only needs to absorb a slight under-shoot when landing on a
+// marker — drift where playback runs *past* a marker is handled by anchoring on
+// the current marker's index rather than a fixed distance.
+const MARKER_EPSILON_MS = 450;
 const CAMERA_ZOOM = 1.45;
 const CAMERA_HOLD_MS = 3_800;
 const CAMERA_EASE_PER_S = 4.2;
@@ -166,7 +171,7 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
     : "";
   const settingsMenu = `<div class="deck-menu" id="settings-menu"><button class="menu-button menu-button-icon" id="settings-button" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Replay settings"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button><div class="menu-pop" hidden><span class="menu-label">Idle time</span><div class="menu-options">${idleControls}</div><span class="menu-note" id="idle-summary"></span>${cameraSection}</div></div>`;
   const shareControl = shareAvailable
-    ? `<div class="share-control" id="share-control">${shareUrl ? shareResultMarkup(shareUrl) : `<button class="share-button" id="share" type="button">Share</button>`}</div>`
+    ? `<div class="share-control" id="share-control"><button class="share-button" id="share" type="button">Share</button></div>`
     : "";
   const chaptersToggle = manifest.markers.length
     ? `<button class="chapters-toggle" id="chapters-toggle" type="button" aria-controls="chapters-panel" aria-expanded="false">Chapters<b>${manifest.markers.length}</b></button>`
@@ -177,7 +182,7 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
     : `<div class="session-overlay is-visible" id="intro-card"><div class="session-card"><span class="session-kicker"><i></i>Rec replay</span><h1>${escape(manifest.title)}</h1>${sessionMeta}<p class="session-hint">Press play — or space — to watch the recorded journey</p></div></div>`;
   const endCard = `<div class="session-overlay" id="end-card"><div class="session-card"><span class="session-kicker"><i></i>Replay complete</span><h1>${escape(manifest.title)}</h1>${sessionMeta}${manifest.notes ? `<p class="session-notes">${escape(manifest.notes)}</p>` : ""}<button class="watch-again" id="watch-again" type="button">Watch again</button></div></div>`;
   const chaptersPanel = manifest.markers.length
-    ? `<aside class="chapters-panel" id="chapters-panel" aria-label="Recording chapters"><header>Chapters<span>${manifest.markers.length}</span></header><ol>${manifest.markers.map((marker) => `<li><button type="button" data-chapter="${marker.t_ms}"${marker.color === "yellow" ? " data-chapter-color=\"yellow\"" : ""} aria-current="false"><b>${format(marker.t_ms)}</b><span><strong>${escape(marker.label)}</strong>${marker.note ? `<p>${escape(marker.note)}</p>` : ""}</span></button></li>`).join("")}</ol></aside>`
+    ? `<aside class="chapters-panel" id="chapters-panel" aria-label="Recording chapters"><header>Chapters<span>${manifest.markers.length}</span></header><ol>${manifest.markers.map((marker) => `<li><button type="button" data-chapter="${marker.t_ms}"${marker.color ? ` data-chapter-color="${marker.color}"` : ""} aria-current="false"><b>${format(marker.t_ms)}</b><span><strong>${escape(marker.label)}</strong>${marker.note ? `<p>${escape(marker.note)}</p>` : ""}</span></button></li>`).join("")}</ol></aside>`
     : "";
   app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="state-flash" id="state-flash" aria-hidden="true"><span></span></div><b id="stage-status" class="sr-only" role="status">Paused</b>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div>${introCard}${endCard}<section class="control-deck" aria-label="Browser replay controls"><div class="deck-island"><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div>${speedMenu}${settingsMenu}${shareControl}${chaptersToggle}</div></div></section>${chaptersPanel}<div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
 }
@@ -197,14 +202,26 @@ function wireShareControl(recordingId: string) {
 }
 
 async function shareRecording(recordingId: string, button: HTMLButtonElement) {
+  // The share link is a means to an end, not something to read — swap the button
+  // for a brief spinner, then drop the link straight on the clipboard and confirm
+  // with a caption rather than showing the URL.
   button.disabled = true;
-  button.textContent = "Sharing…";
+  button.innerHTML = `<span class="share-spinner" aria-hidden="true"></span>`;
   try {
     const result = await request<{ shareUrl: string }>(`/api/sessions/${encodeURIComponent(recordingId)}/share`, { method: "POST" });
     shareUrl = result.shareUrl;
-    const control = document.querySelector<HTMLElement>("#share-control");
-    if (control) control.innerHTML = shareResultMarkup(shareUrl);
-    wireShareControl(recordingId);
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      button.textContent = "Share";
+      button.disabled = false;
+      setActionCaption("Link copied", "The share link is on your clipboard.");
+    } catch {
+      // Clipboard blocked (e.g. the browser dropped the click's user activation
+      // across the network wait) — degrade to a copyable link so it isn't lost.
+      const control = document.querySelector<HTMLElement>("#share-control");
+      if (control) control.innerHTML = shareResultMarkup(shareUrl);
+      wireShareControl(recordingId);
+    }
   } catch (error) {
     button.disabled = false;
     button.textContent = "Share";
@@ -390,6 +407,10 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     syncNavigationAt(currentSessionTime, true);
   });
   replayer.on("finish", () => {
+    // A seek (e.g. left-arrow near the end) aborts this replayer and builds a new
+    // one. The old instance can still fire a queued finish afterward; ignore it so
+    // the end card never reappears over resumed playback.
+    if (lifetime.signal.aborted) return;
     if (nextFocus) void bridgeToNewTab(nextFocus);
     else {
       setPlaying(false);
@@ -493,17 +514,18 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   };
   const seekBy = (delta: number) => jumpTo(currentSessionTime + delta);
   // Arrow keys hop between chapter markers so viewers land on the moments that
-  // matter; with no markers they fall back to a fixed jog. A small epsilon keeps
-  // a jump from snapping back onto the marker the playhead is already sitting on.
+  // matter; with no markers they fall back to a fixed jog. Playback drifts the
+  // playhead past a marker over time (a few ms up to seconds), so instead of a
+  // fixed time epsilon — which would let a left-arrow snap back onto the drifted
+  // current marker — anchor on the current marker's index and step off it.
   const jumpToMarker = (direction: -1 | 1) => {
     const times = manifest.markers
       .map((marker) => marker.t_ms)
       .filter((time) => time > 0 && time < duration)
       .sort((left, right) => left - right);
     if (!times.length) { seekBy(direction * SEEK_STEP_MS); return; }
-    const next = direction > 0
-      ? times.find((time) => time > currentSessionTime + 250)
-      : [...times].reverse().find((time) => time < currentSessionTime - 250);
+    const current = times.reduce((last, time, index) => time <= currentSessionTime + MARKER_EPSILON_MS ? index : last, -1);
+    const next = times[current + direction];
     jumpTo(next ?? (direction > 0 ? duration : 0));
   };
   const onPlaybackKey = (event: KeyboardEvent) => {
@@ -725,7 +747,7 @@ function prepareTimeline(markers: Marker[], navigationEvents: NavigationEvent[],
   document.querySelector<HTMLElement>("#idle-summary")!.textContent = projectedIdle.length
     ? `${projectedIdle.length} gap${projectedIdle.length === 1 ? "" : "s"}${removed >= 1_000 ? ` · ${formatDuration(removed)} ${projectedIdle[0]!.mode === "fast_forward" ? "compressed" : "skipped"}` : ""}`
     : "No idle gaps";
-  document.querySelector<HTMLElement>("#timeline-markers")!.innerHTML = markers.map((marker, index) => `<button data-marker="${marker.t_ms}" data-marker-index="${index}"${marker.color === "yellow" ? " data-marker-color=\"yellow\"" : ""} data-timeline-tooltip="${escape(marker.label)}" aria-label="Jump to marker: ${escape(marker.label)}" aria-current="false" style="left:${clamp(marker.t_ms / duration * 100, 1, 99)}%"><span class="marker-dot"></span></button>`).join("");
+  document.querySelector<HTMLElement>("#timeline-markers")!.innerHTML = markers.map((marker, index) => `<button data-marker="${marker.t_ms}" data-marker-index="${index}"${marker.color ? ` data-marker-color="${marker.color}"` : ""} data-timeline-tooltip="${escape(marker.label)}" aria-label="Jump to marker: ${escape(marker.label)}" aria-current="false" style="left:${clamp(marker.t_ms / duration * 100, 1, 99)}%"><span class="marker-dot"></span></button>`).join("");
 }
 
 function updateActiveMarker(time: number) {

@@ -78,6 +78,9 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
     const started = await client.request("tools/call", { name: "recording_start", arguments: { title: "MCP fixture" } });
     assert.match(started.result.content[0].text, /rec_test/);
     await client.request("tools/call", { name: "recording_marker", arguments: { label: "Observed issue", placement: "before_next" } });
+    await client.request("tools/call", { name: "recording_marker", arguments: { label: "Green checkpoint", color: "green" } });
+    const badColor = await client.request("tools/call", { name: "recording_marker", arguments: { label: "Bad", color: "blue" } });
+    assert.equal(badColor.result.isError, true);
     const stopped = await client.request("tools/call", { name: "recording_stop", arguments: { outcome: "reproduced" } });
     assert.match(stopped.result.content[0].text, /replayUrl/);
     assert.match(stopped.result.content[0].text, /portableArtifactPath/);
@@ -95,6 +98,7 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
     assert.equal(calls.filter((call) => call.path === "/api/browser/ensure").length, 1);
     assert.equal(calls.filter((call) => call.path === "/api/sessions/start").length, 1);
     assert.deepEqual(calls.find((call) => call.path === "/api/sessions/marker")?.body, { label: "Observed issue", placement: "before_next" });
+    assert.deepEqual(calls.filter((call) => call.path === "/api/sessions/marker").at(-1)?.body, { label: "Green checkpoint", placement: "after_previous", color: "green" });
   } finally {
     server.kill();
     daemon.close();

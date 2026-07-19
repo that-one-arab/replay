@@ -412,6 +412,16 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
 }
 .share-button:hover { background: #c8bdff; }
 .share-button:disabled { opacity: .6; cursor: default; }
+.share-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(23, 23, 32, .3);
+  border-top-color: #171720;
+  border-radius: 50%;
+  animation: rec-spin .82s linear infinite;
+  vertical-align: -1px;
+}
 .share-link {
   max-width: min(180px, 24vw);
   overflow: hidden;
@@ -491,6 +501,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
 .chapters-panel ol button.is-active { background: rgba(183, 171, 255, .16); box-shadow: inset 2px 0 0 #b7abff; }
 .chapters-panel ol button > b { flex: 0 0 auto; margin-top: 1px; color: #b5aaff; font: 10px "DM Mono"; }
 .chapters-panel ol button[data-chapter-color="yellow"] > b { color: #ffca72; }
+.chapters-panel ol button[data-chapter-color="green"] > b { color: #5ad19a; }
 .chapters-panel ol button strong { display: block; color: #f2f1fa; font-size: 12px; line-height: 1.35; }
 .chapters-panel ol button p { margin: 3px 0 0; color: #a9abb9; font-size: 11px; line-height: 1.45; }
 
@@ -585,6 +596,14 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
 .timeline-markers button[data-marker-color="yellow"].is-active .marker-dot {
   background: #ffd98f;
   box-shadow: 0 0 0 3px rgba(255, 202, 114, .6), 0 0 18px rgba(255, 202, 114, 1);
+}
+.timeline-markers button[data-marker-color="green"] .marker-dot {
+  background: #5ad19a;
+  box-shadow: 0 0 0 2px rgba(90, 209, 154, .55), 0 0 12px rgba(90, 209, 154, .9);
+}
+.timeline-markers button[data-marker-color="green"].is-active .marker-dot {
+  background: #7ee3b4;
+  box-shadow: 0 0 0 3px rgba(90, 209, 154, .6), 0 0 18px rgba(90, 209, 154, 1);
 }
 
 /* Timeline tooltip */

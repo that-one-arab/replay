@@ -72,7 +72,9 @@ async function marker(values: string[]) {
   if (!label) return usage("rec marker requires a label");
   const placement = option(values, "--placement");
   if (placement !== undefined && placement !== "after_previous" && placement !== "before_next") return usage("Marker placement must be after_previous or before_next");
-  await api("POST", "/api/sessions/marker", { label, note: option(values, "--note"), placement });
+  const color = option(values, "--color");
+  if (color !== undefined && color !== "yellow" && color !== "green") return usage("Marker color must be yellow or green");
+  await api("POST", "/api/sessions/marker", { label, note: option(values, "--note"), placement, ...(color ? { color } : {}) });
   console.log(`Marker added: ${label}`);
 }
 
@@ -174,4 +176,4 @@ function flag(values: string[], name: string) { const index = values.indexOf(nam
 function duration(ms?: number) { if (!ms) return "0s"; const seconds = Math.round(ms / 1000); return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`; }
 function size(bytes: number) { return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`; }
 function print(value: unknown) { console.log(JSON.stringify(value, null, 2)); }
-function usage(message?: string): never { if (message) console.error(message); console.error("Usage: rec browser start [--executable <path>] | browser stop | daemon stop | attach --cdp <url> | start [--title <text>] [--origin <url>]... [--mask-all-inputs] [--record-canvas] | marker <label> [--note <text>] [--placement after_previous|before_next] | stop [--outcome reproduced|verified|other] [--notes <text>] | status | list | open <id> | export <id> [--output <file.rec>] | import <file.rec> | share <id> | config show | doctor"); process.exit(2); }
+function usage(message?: string): never { if (message) console.error(message); console.error("Usage: rec browser start [--executable <path>] | browser stop | daemon stop | attach --cdp <url> | start [--title <text>] [--origin <url>]... [--mask-all-inputs] [--record-canvas] | marker <label> [--note <text>] [--placement after_previous|before_next] [--color yellow|green] | stop [--outcome reproduced|verified|other] [--notes <text>] | status | list | open <id> | export <id> [--output <file.rec>] | import <file.rec> | share <id> | config show | doctor"); process.exit(2); }

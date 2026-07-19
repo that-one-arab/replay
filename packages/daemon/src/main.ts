@@ -412,7 +412,7 @@ function configuredDuration(name: string, fallback: number) {
 }
 function outcomeOf(value: unknown): Outcome | undefined { return value === "reproduced" || value === "verified" || value === "other" ? value : undefined; }
 function markerPlacement(value: unknown) { if (value === undefined || value === "after_previous" || value === "before_next") return value ?? "after_previous"; throw new Error("Marker placement must be after_previous or before_next."); }
-function markerColor(value: unknown): "yellow" | undefined { if (value === undefined || value === "default") return undefined; if (value === "yellow") return value; throw new Error("Marker color must be yellow."); }
+function markerColor(value: unknown): "yellow" | "green" | undefined { if (value === undefined || value === "default") return undefined; if (value === "yellow" || value === "green") return value; throw new Error("Marker color must be yellow or green."); }
 function isLoopbackEndpoint(value: string) {
   try { const url = new URL(value); return url.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(url.hostname); } catch { return false; }
 }

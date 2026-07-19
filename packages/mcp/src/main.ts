@@ -62,7 +62,7 @@ const tools: JsonObject[] = [
         label: { type: "string", description: "Short checkpoint label." },
         note: { type: "string", description: "Optional context for the checkpoint." },
         placement: { type: "string", enum: ["after_previous", "before_next"], description: "Narrative placement relative to ordered Playwright actions. Defaults to after_previous." },
-        color: { type: "string", enum: ["default", "yellow"], description: "Set to yellow for a distinct, highlighted checkpoint. Defaults to a standard checkpoint." },
+        color: { type: "string", enum: ["default", "yellow", "green"], description: "Set to yellow or green for a distinct, highlighted checkpoint. Defaults to a standard checkpoint." },
       },
       additionalProperties: false,
     },
@@ -373,7 +373,7 @@ function optionalBoolean(value: Json | undefined) { if (value !== undefined && t
 function optionalStringArray(value: Json | undefined) { if (value === undefined) return undefined; if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error("Origins must be an array of strings."); return value; }
 function optionalOutcome(value: Json | undefined) { if (value === undefined) return undefined; if (value === "reproduced" || value === "verified" || value === "other") return value; throw new Error("Outcome must be reproduced, verified, or other."); }
 function optionalPlacement(value: Json | undefined) { if (value === undefined || value === "after_previous" || value === "before_next") return value; throw new Error("Marker placement must be after_previous or before_next."); }
-function optionalColor(value: Json | undefined) { if (value === undefined || value === "default") return undefined; if (value === "yellow") return value; throw new Error("Marker color must be yellow."); }
+function optionalColor(value: Json | undefined) { if (value === undefined || value === "default") return undefined; if (value === "yellow" || value === "green") return value; throw new Error("Marker color must be yellow or green."); }
 function numberOrZero(value: Json | undefined) { return typeof value === "number" ? value : 0; }
 function messageOf(error: unknown) { return error instanceof Error ? error.message : String(error); }
 function delay(ms: number) { return new Promise((resolveDelay) => setTimeout(resolveDelay, ms)); }

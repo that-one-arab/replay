@@ -32,6 +32,13 @@ test("uploads a portable artifact and serves its replay data", async () => {
     assert.equal(upload.status, 201);
     const handoff = await upload.json() as { shareUrl: string; sessionId: string };
     assert.equal(handoff.sessionId, "rec_share_fixture");
+    // Re-sharing the same recording is idempotent: it must not fail on the
+    // duplicate import and should hand back the recording's existing link.
+    const reupload = await fetch(`${endpoint}/v1/recordings`, { method: "POST", body: await readFile(artifact) });
+    assert.equal(reupload.status, 201);
+    const rehandoff = await reupload.json() as { shareUrl: string; sessionId: string };
+    assert.equal(rehandoff.sessionId, "rec_share_fixture");
+    assert.equal(rehandoff.shareUrl, handoff.shareUrl);
     const redirect = await fetch(handoff.shareUrl, { redirect: "manual" });
     assert.equal(redirect.status, 302);
     assert.equal(redirect.headers.get("location"), "/replay?id=rec_share_fixture");

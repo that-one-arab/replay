@@ -91,10 +91,14 @@ async function upload(request: IncomingMessage, response: ServerResponse, origin
   const temporary = join(uploadsDir, `${randomBytes(12).toString("hex")}.rec`);
   await writeFile(temporary, body, { flag: "wx" });
   try {
-    const imported = await importSession(temporary);
+    // Re-sharing an already-uploaded recording is idempotent: keep the installed
+    // copy and hand back its existing link instead of failing on a duplicate import.
+    const imported = await importSession(temporary, { reuseExisting: true });
+    const shares = await readShares();
+    const existing = shares.find((entry) => entry.session_id === imported.sessionId);
+    if (existing) return reply(response, 201, { shareId: existing.id, sessionId: existing.session_id, shareUrl: `${origin}/r/${existing.id}` });
     const manifest = await readManifest(imported.sessionId);
     const share: Share = { id: randomBytes(12).toString("hex"), session_id: imported.sessionId, title: manifest.title, created_at: new Date().toISOString(), bytes: body.byteLength };
-    const shares = await readShares();
     shares.push(share);
     await writeShares(shares);
     return reply(response, 201, { shareId: share.id, sessionId: share.session_id, shareUrl: `${origin}/r/${share.id}` });

@@ -74,13 +74,18 @@ export async function exportSession(sessionId: string, output = exportPath(sessi
 /**
  * Verify then atomically install a portable recording in the local Rec spool.
  * Existing IDs are never overwritten: an artifact is either wholly imported or
- * rejected with its source recording left intact.
+ * rejected with its source recording left intact. Pass `reuseExisting` when a
+ * re-import of the same recording should be a no-op (e.g. re-sharing) rather
+ * than an error — the already-installed copy is left untouched and returned.
  */
-export async function importSession(input: string): Promise<ImportResult> {
+export async function importSession(input: string, options: { reuseExisting?: boolean } = {}): Promise<ImportResult> {
   const bundle = await readBundle(input);
   validateBundle(bundle);
   const root = sessionPath(bundle.manifest.id);
-  if (existsSync(root)) throw new Error(`A recording named ${bundle.manifest.id} already exists locally.`);
+  if (existsSync(root)) {
+    if (options.reuseExisting) return { sessionId: bundle.manifest.id, path: root, fileCount: bundle.files.length };
+    throw new Error(`A recording named ${bundle.manifest.id} already exists locally.`);
+  }
   await mkdir(sessionsDir(), { recursive: true });
   const temporary = await mkdtemp(join(sessionsDir(), ".import-"));
   try {
