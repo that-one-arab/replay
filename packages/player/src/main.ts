@@ -10,7 +10,7 @@ type NavigationEvent = { segment_id: string; kind: "reload" | "navigate"; starte
 type IdleMode = "cut" | "fast_forward" | "preserve";
 type ReplayDefaults = { idle_mode: IdleMode; idle_retained_ms: number; idle_fast_forward_speed: number; default_speed: number };
 type Manifest = { id: string; title: string; created_at?: string; outcome?: string; notes?: string; markers: Marker[]; segments: Segment[]; tab_events?: TabEvent[]; navigation_events?: NavigationEvent[]; raw_duration_ms?: number; replay_defaults?: ReplayDefaults };
-type ReplayEvent = { timestamp: number; type: number; data?: { source?: number; type?: number; href?: string; width?: number; height?: number; text?: string; id?: number; x?: number; y?: number; recSynthetic?: "approach"; positions?: { x: number; y: number; id?: number; timeOffset?: number }[] } };
+type ReplayEvent = { timestamp: number; type: number; data?: { source?: number; type?: number; href?: string; width?: number; height?: number; text?: string; id?: number; x?: number; y?: number; recSynthetic?: "approach"; tag?: string; positions?: { x: number; y: number; id?: number; timeOffset?: number }[] } };
 type IdleRange = { start: number; end: number };
 type TimelineIdleRange = IdleRange & { originalDuration: number; mode: IdleMode; speed: number };
 type PlaybackProjection = { manifest: Manifest; eventSets: Map<string, ReplayEvent[]>; duration: number; activities: number[]; playbackEnd: number; idleRanges: TimelineIdleRange[]; toPlayback(time: number): number; toRaw(time: number): number };
@@ -278,7 +278,17 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   const viewport = recordingViewport(events);
   let selectedPlaybackSpeed = playbackSpeed;
   let replayDocumentKeyboardHandler: ((event: KeyboardEvent) => void) | undefined;
-  const replayer = new Replayer(events as never[], {
+  // Agent-driven recordings capture interactions without pointer coordinates, so
+  // rrweb has nothing to move the cursor with. When a recording carries no real
+  // pointer data at all, drive the cursor ourselves from the element each
+  // interaction resolves to, and feed the replayer lead-in cues so the cursor
+  // arrives as the action fires. Recordings with real coordinates keep rrweb's.
+  const syntheticCursor = !events.some((event) => event.type === 3 && (
+    (event.data?.source === 1 && (event.data.positions?.length ?? 0) > 0) ||
+    (event.data?.source === 2 && isRealPoint(event.data.x, event.data.y))
+  ));
+  const replayEvents = syntheticCursor ? withCursorLeadIns(events) : events;
+  const replayer = new Replayer(replayEvents as never[], {
     // rrweb only skips when a later mouse/input event exists. Rec owns this
     // policy so navigation, reload, and verification waits are accelerated too.
     root: mount, skipInactive: false, showWarning: false, speed: selectedPlaybackSpeed,
@@ -295,16 +305,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
   const camera = createCamera(mount, replayer, viewport, lifetime);
   revealCursorOnFirstMove(replayer, lifetime);
   window.addEventListener("resize", () => { fitReplay(mount, replayer, viewport); camera.apply(); }, { signal: lifetime.signal });
-  // Agent-driven recordings capture interactions without pointer coordinates, so
-  // rrweb has nothing to move the cursor with. When a recording carries no real
-  // pointer data at all, drive the cursor ourselves from the element each
-  // interaction resolves to — clicks, focus, and typed fields — so the flow
-  // stays visible. Recordings with real coordinates keep rrweb's own cursor.
-  const syntheticCursor = !events.some((event) => event.type === 3 && (
-    (event.data?.source === 1 && (event.data.positions?.length ?? 0) > 0) ||
-    (event.data?.source === 2 && isRealPoint(event.data.x, event.data.y))
-  ));
-  const placeCursorAtElement = makeCursorPlacer(replayer);
+  const moveCursor = makeCursorPlacer(replayer);
   let playing = false;
   let scrubbing = false;
   let resumeAfterScrub = false;
@@ -470,15 +471,30 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     else if (data.source === 1) { const position = data.positions?.at(-1); if (position) camera.trackCursor(position.x, position.y); }
     else if (data.source === 5) camera.refreshHold();
   });
+  // The lead-in cue: glide the synthetic cursor to the upcoming target so it is
+  // arriving as the interaction fires. rrweb skips custom events while seeking,
+  // so this only runs during real playback.
+  replayer.on("custom-event", (payload: unknown) => {
+    if (!syntheticCursor) return;
+    const event = payload as ReplayEvent;
+    if (event.type !== 5 || event.data?.tag !== "rec-cursor" || typeof event.data.id !== "number") return;
+    const center = elementCenter(replayer.getMirror().getNode(event.data.id));
+    if (!center) return;
+    // Match the glide to the wall-clock gap before the interaction (~the lead
+    // divided by playback speed) so it lands on time at any speed.
+    const glideMs = Math.max(60, Math.min(500, (CURSOR_APPROACH_MS / selectedPlaybackSpeed) * 0.9));
+    moveCursor(center.x, center.y, glideMs);
+  });
   replayer.on("mouse-interaction", (payload: unknown) => {
     const interaction = payload as { type?: number; target?: unknown };
     // 2 = click, 4 = double click, 5 = focus in rrweb's MouseInteractions enum.
     const isClick = interaction.type === 2 || interaction.type === 4;
     const isFocus = interaction.type === 5;
     if (!isClick && !isFocus) return;
-    // With no recorded coordinates, put the cursor on the element rrweb resolved
-    // for this interaction (and let the camera follow clicks) so the flow shows.
-    const point = syntheticCursor ? placeCursorAtElement(interaction.target) : undefined;
+    const point = syntheticCursor ? elementCenter(interaction.target) : undefined;
+    // Re-assert the exact landing after rrweb re-parks the cursor at (0,0) on
+    // click; instant, since the lead-in already glided it into place.
+    if (point) queueMicrotask(() => moveCursor(point.x, point.y, 0));
     if (point && isClick && cameraFeature) camera.noteInteraction(point.x, point.y);
     if (!isClick) return;
     spawnClickRipple(replayer, point ?? {});
@@ -1292,36 +1308,55 @@ function revealCursorOnFirstMove(replayer: Replayer, lifetime: AbortController) 
  * placement appears on target rather than gliding in from the corner; later
  * ones ease across so the path between elements reads as intentional movement.
  */
+/**
+ * Insert a lead-in cue before every click/double-click/focus so the synthetic
+ * cursor starts travelling ahead of the action. Works on already-projected
+ * (playback-time) events, so the lead is real screen time — a raw-time lead
+ * would collapse inside a cut idle gap right before the interaction.
+ */
+function withCursorLeadIns(events: ReplayEvent[]): ReplayEvent[] {
+  const out: ReplayEvent[] = [];
+  let lastTs = -Infinity;
+  for (const event of events) {
+    if (event.type === 3 && event.data?.source === 2 && [2, 4, 5].includes(event.data.type ?? -1) && typeof event.data.id === "number") {
+      const at = Math.max(lastTs + 1, event.timestamp - CURSOR_APPROACH_MS);
+      if (at < event.timestamp - 40) {
+        out.push({ type: 5, timestamp: at, data: { tag: "rec-cursor", id: event.data.id } });
+        lastTs = at;
+      }
+    }
+    out.push(event);
+    lastTs = event.timestamp;
+  }
+  return out;
+}
+/** Center of the element an interaction resolved to, in the replay's content
+ *  coordinates (which the cursor overlay shares); undefined if it isn't laid out. */
+function elementCenter(node: unknown): { x: number; y: number } | undefined {
+  if (!isElementLike(node)) return undefined;
+  const rect = node.getBoundingClientRect();
+  if (!rect.width && !rect.height) return undefined;
+  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+}
+/**
+ * Move the synthetic cursor. `durationMs` glides it (a lead-in approach); 0
+ * snaps instantly (the exact landing at interaction time, re-asserted after
+ * rrweb re-parks the cursor at (0,0) on click). The first appearance always
+ * lands on target rather than gliding in from the page corner.
+ */
 function makeCursorPlacer(replayer: Replayer) {
-  const glide = "left .34s cubic-bezier(.22,.61,.36,1), top .34s cubic-bezier(.22,.61,.36,1), opacity .25s ease";
   let placed = false;
-  const apply = (x: number, y: number) => {
+  return (x: number, y: number, durationMs: number) => {
     const mouse = replayer.wrapper.querySelector<HTMLElement>(".replayer-mouse");
     if (!mouse) return;
-    if (!placed) {
-      mouse.style.transition = "none";
-      mouse.style.left = `${x}px`;
-      mouse.style.top = `${y}px`;
-      void mouse.offsetWidth;
-      mouse.style.transition = glide;
-      placed = true;
-    } else {
-      mouse.style.left = `${x}px`;
-      mouse.style.top = `${y}px`;
-    }
+    const duration = placed ? durationMs : 0;
+    mouse.style.transition = duration > 0
+      ? `left ${duration}ms cubic-bezier(.22, .61, .36, 1), top ${duration}ms cubic-bezier(.22, .61, .36, 1), opacity .25s ease`
+      : "opacity .25s ease";
+    mouse.style.left = `${x}px`;
+    mouse.style.top = `${y}px`;
+    placed = true;
     replayer.wrapper.classList.add("rec-cursor-live");
-  };
-  return (node: unknown): { x: number; y: number } | undefined => {
-    if (!isElementLike(node)) return undefined;
-    const rect = node.getBoundingClientRect();
-    if (!rect.width && !rect.height) return undefined;
-    const x = rect.left + rect.width / 2;
-    const y = rect.top + rect.height / 2;
-    // On a click rrweb re-parks the cursor at (d.x, d.y) = (0,0) synchronously
-    // right after emitting the interaction. Apply our position in a microtask so
-    // it lands after that, before the frame paints.
-    queueMicrotask(() => apply(x, y));
-    return { x, y };
   };
 }
 function spawnClickRipple(replayer: Replayer, interaction: { x?: number; y?: number }) {
