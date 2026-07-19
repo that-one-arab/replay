@@ -456,7 +456,7 @@ async function replay(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>,
     const eventTime = sessionEventTime(event, events, tabStart);
     if (eventTime === undefined || Math.abs(eventTime - currentSessionTime) > CAMERA_SYNC_WINDOW_MS) return;
     const data = event.data;
-    if (data.source === 2 && (data.type === 2 || data.type === 4) && typeof data.x === "number" && typeof data.y === "number") camera.noteInteraction(data.x, data.y);
+    if (data.source === 2 && (data.type === 2 || data.type === 4) && isRealPoint(data.x, data.y)) camera.noteInteraction(data.x!, data.y!);
     else if (data.source === 1) { const position = data.positions?.at(-1); if (position) camera.trackCursor(position.x, position.y); }
     else if (data.source === 5) camera.refreshHold();
   });
@@ -1198,14 +1198,20 @@ function humanizeEvents(events: ReplayEvent[]) {
   }
   return output;
 }
+// Agent-driven clicks are often recorded at the page origin (0,0) because the
+// driver dispatches them without pointer coordinates. Treat that as "no real
+// position" so the cursor is never parked, revealed, or zoomed at the top-left.
+function isRealPoint(x: number | undefined, y: number | undefined) {
+  return Number.isFinite(x) && Number.isFinite(y) && !(x === 0 && y === 0);
+}
 function pointerPosition(event: ReplayEvent) {
   if (event.type !== 3) return undefined;
   if (event.data?.source === 1) return event.data.positions?.at(-1);
-  if (event.data?.source === 2 && Number.isFinite(event.data.x) && Number.isFinite(event.data.y)) return { x: event.data.x!, y: event.data.y!, id: event.data.id };
+  if (event.data?.source === 2 && isRealPoint(event.data.x, event.data.y)) return { x: event.data.x!, y: event.data.y!, id: event.data.id };
   return undefined;
 }
 function isDirectPointerInteraction(event: ReplayEvent) {
-  return event.type === 3 && event.data?.source === 2 && Number.isFinite(event.data.x) && Number.isFinite(event.data.y);
+  return event.type === 3 && event.data?.source === 2 && isRealPoint(event.data.x, event.data.y);
 }
 function typeableFill(event: ReplayEvent): string | undefined {
   if (event.type !== 3 || event.data?.source !== 5) return undefined;
@@ -1244,8 +1250,13 @@ function revealCursorOnFirstMove(replayer: Replayer, lifetime: AbortController) 
   const mouse = replayer.wrapper.querySelector<HTMLElement>(".replayer-mouse");
   if (!mouse) return;
   // rrweb parks the cursor at the page origin until the first pointer event
-  // positions it. Keep it invisible until then.
+  // positions it. Keep it invisible until it actually lands somewhere real —
+  // recordings whose only "positions" are origin clicks never reveal a cursor
+  // stranded in the top-left corner.
   const reveal = new MutationObserver(() => {
+    const x = parseFloat(mouse.style.left);
+    const y = parseFloat(mouse.style.top);
+    if (!isRealPoint(x, y)) return;
     replayer.wrapper.classList.add("rec-cursor-live");
     reveal.disconnect();
   });
@@ -1256,7 +1267,7 @@ function spawnClickRipple(replayer: Replayer, interaction: { x?: number; y?: num
   const mouse = replayer.wrapper.querySelector<HTMLElement>(".replayer-mouse");
   const x = typeof interaction.x === "number" ? interaction.x : parseFloat(mouse?.style.left ?? "");
   const y = typeof interaction.y === "number" ? interaction.y : parseFloat(mouse?.style.top ?? "");
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  if (!isRealPoint(x, y)) return;
   const ripple = document.createElement("span");
   ripple.className = "rec-click-ripple";
   ripple.style.left = `${x}px`;
