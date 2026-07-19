@@ -19,6 +19,12 @@ idle_mode = "cut"
 idle_retained_ms = 2000
 idle_fast_forward_speed = 8
 default_speed = 1.15
+
+[chat]
+# The replay assistant in the local player. Requires the Codex CLI.
+enabled = true
+command = "codex"
+# model = "gpt-5.1"
 ```
 
 Settings merge per key in this order: built-in defaults, user file, project file,
@@ -33,6 +39,19 @@ reconfigured.
 
 Replay defaults are copied into each new recording. Reviewers can still switch
 between **Cut**, **8×**, and **Keep** in the player without changing the artifact.
+
+## Replay assistant
+
+The local player includes an **Ask AI** panel backed by the OpenAI Codex CLI.
+It is local-only: the daemon runs `codex exec` on your machine, shared replays
+never show the panel, and nothing about the recording is sent anywhere except
+to your own Codex account. Set `chat.enabled = false` (or
+`REC_CHAT_ENABLED=false`) to remove the panel entirely, `chat.command` to point
+at a specific Codex binary, and `chat.model` to override the model. The
+matching environment variables are `REC_CHAT_ENABLED`, `REC_CHAT_COMMAND`, and
+`REC_CHAT_MODEL`. If the Codex CLI is missing or signed out, the panel explains
+how to install it (`npm install -g @openai/codex`, then `codex login`) instead
+of failing silently.
 
 ## Local runtime lifecycle
 

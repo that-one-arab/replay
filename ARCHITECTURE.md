@@ -56,7 +56,7 @@ workflow is the optional upload performed after a recording has been finalized.
 | Component | Location | Owns | Does not own |
 | --- | --- | --- | --- |
 | Core | `packages/core` | CDP recorder, rrweb event capture, session storage, assets, configuration, export/import | HTTP, MCP, player UI |
-| Daemon | `packages/daemon` | One local recorder, Chrome lifecycle, local replay/data endpoints, automatic final export | Agent protocol and browser automation |
+| Daemon | `packages/daemon` | One local recorder, Chrome lifecycle, local replay/data endpoints, automatic final export, replay-assistant chat backend (Codex provider, tool bridge) | Agent protocol and browser automation |
 | Rec MCP | `packages/mcp` | Stdio MCP protocol, recording lifecycle tools, optional automatic upload handoff | Playwright tools or browser actions |
 | Playwright launcher | `packages/playwright-launcher` | Starting stock Playwright MCP against Rec's managed Chrome | Recording or interpreting MCP traffic |
 | Player | `packages/player` | Rendering a stored recording, timeline controls and reviewer-facing UI | Capture, persistence, sharing policy |
@@ -244,6 +244,34 @@ Configuration is resolved per key in this order: built-in defaults, user
 `REC_*` environment variables. Browser launch settings are fixed for a running
 managed Chrome; a configuration change reports `restart_required` rather than
 interrupting an active browser or recording.
+
+### Replay assistant
+
+The local player embeds an **Ask AI** chat panel; the daemon is its backend and
+the OpenAI Codex CLI is the provider. The pieces and their boundaries:
+
+- `packages/core` (`summary.ts`) distills the raw rrweb stream into a semantic
+  timeline — navigations, labeled clicks, typed input, tab switches, markers,
+  and idle gaps — that becomes the model's grounding context. All times are raw
+  recording milliseconds.
+- `packages/daemon` (`chat.ts`) owns chat sessions. Each user turn spawns
+  `codex exec --json` (resuming the same Codex thread on later turns), parses
+  its JSONL events, and streams the transcript to the player over SSE
+  (`/api/chat/stream`). Availability is surfaced as `chat_available` in
+  `/health`, mirroring `share_available` — the share server never reports it,
+  so shared replays simply have no assistant.
+- `packages/daemon` (`chat-bridge.ts`) is a minimal stdio MCP server that
+  Codex spawns; it proxies every tool call back to the daemon. Read tools
+  (`get_replay_overview`, `get_steps`) answer from the semantic timeline;
+  player tools (`seek`, `set_playback`, `highlight`, `get_screen`) relay
+  through the SSE stream to the player, which executes them against the live
+  replayer and posts results back. Tool definitions carry MCP safety
+  annotations and `execution.approval_mode = "never"`, because Codex otherwise
+  auto-cancels MCP calls needing approval in headless exec runs.
+- The Codex subprocess runs with a read-only sandbox, `--ignore-user-config`
+  for reproducible behavior, and the recording's session directory as its
+  working root. Everything stays on the local machine except the model calls
+  made by the viewer's own Codex account.
 
 ## MCP contracts
 
