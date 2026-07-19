@@ -296,6 +296,11 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
     // policy so navigation, reload, and verification waits are accelerated too.
     root: mount, skipInactive: false, showWarning: false, speed: selectedPlaybackSpeed,
     mouseTail: false,
+    // The replay is passive playback. Letting rrweb move real DOM focus into a
+    // recorded field makes that field typeable and steals focus from the chat
+    // composer, so keep focus in the player's own chrome and paint the focus
+    // ring ourselves (see the mouse-interaction handler below).
+    triggerFocus: false,
     plugins: [{
       onBuild(node: Node) {
         if (node.nodeType !== Node.DOCUMENT_NODE) return;
@@ -495,13 +500,15 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
     // click; instant, since the lead-in already glided it into place.
     if (point) queueMicrotask(() => moveCursor(point.x, point.y, 0));
     if (point && isClick && cameraFeature) camera.noteInteraction(point.x, point.y);
-    if (!isClick) return;
-    spawnClickRipple(replayer, point ?? {});
+    if (isClick) spawnClickRipple(replayer, point ?? {});
     const target = interaction.target;
     if (!isElementLike(target)) return;
+    // With rrweb's triggerFocus off, the recorded field gets no native focus
+    // ring, so stand in the player's own outline for both clicks and focus
+    // events. Focus lingers a beat longer since typing usually follows it.
     target.classList.remove("rec-focus-target");
     target.classList.add("rec-focus-target");
-    window.setTimeout(() => target.classList.remove("rec-focus-target"), 900);
+    window.setTimeout(() => target.classList.remove("rec-focus-target"), isFocus ? 1_400 : 900);
   });
   document.querySelector<HTMLButtonElement>("#play")!.onclick = togglePlayback;
   document.querySelectorAll<HTMLButtonElement>("[data-idle-mode]").forEach((button) => button.onclick = () => {
