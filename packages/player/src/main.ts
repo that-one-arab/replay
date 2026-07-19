@@ -43,12 +43,12 @@ let lastNarrationKey: string | undefined;
 let captionTimer: number | undefined;
 let chaptersOpen: boolean | undefined;
 let introDismissed = false;
-// The auto-zoom camera ships dark: it only exists when the rec-camera flag is
-// switched on, via ?camera=on (persisted) or localStorage rec-camera=on.
-const cameraFeature = resolveCameraFlag();
-let cameraZoomEnabled = cameraFeature && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+// The auto-zoom camera is a viewer setting: off by default, toggled from the
+// play-bar settings menu, and remembered across replays via rec-camera. The
+// ?camera=on/off query param still seeds it for shared links.
+let cameraZoomEnabled = resolveCameraPreference();
 
-function resolveCameraFlag() {
+function resolveCameraPreference() {
   const requested = new URLSearchParams(location.search).get("camera");
   try {
     if (requested === "on" || requested === "1") { localStorage.setItem("rec-camera", "on"); return true; }
@@ -183,9 +183,7 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
     ["fast_forward", `${defaults.idle_fast_forward_speed}×`],
     ["preserve", "Keep"],
   ] as const).map(([mode, label]) => `<button data-idle-mode="${mode}"${mode === idleMode ? " class=\"selected\"" : ""}>${label}</button>`).join("");
-  const cameraSection = cameraFeature
-    ? `<span class="menu-label">Auto zoom</span><div class="menu-options">${([["auto", "Auto"], ["off", "Off"]] as const).map(([mode, label]) => `<button data-camera-mode="${mode}"${(mode === "auto") === cameraZoomEnabled ? " class=\"selected\"" : ""}>${label}</button>`).join("")}</div>`
-    : "";
+  const cameraSection = `<span class="menu-label">Camera</span><div class="menu-options">${([["on", "On"], ["off", "Off"]] as const).map(([mode, label]) => `<button data-camera-mode="${mode}"${(mode === "on") === cameraZoomEnabled ? " class=\"selected\"" : ""}>${label}</button>`).join("")}</div>`;
   const settingsMenu = `<div class="deck-menu" id="settings-menu"><button class="menu-button menu-button-icon" id="settings-button" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Replay settings"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button><div class="menu-pop" hidden><span class="menu-label">Idle time</span><div class="menu-options">${idleControls}</div><span class="menu-note" id="idle-summary"></span>${cameraSection}</div></div>`;
   const shareControl = shareAvailable
     ? `<div class="share-control" id="share-control"><button class="share-button" id="share" type="button">Share</button></div>`
@@ -476,7 +474,7 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
     }
   });
   replayer.on("event-cast", (payload: unknown) => {
-    if (!cameraFeature) return;
+    if (!cameraZoomEnabled) return;
     const event = payload as ReplayEvent;
     if (event.type !== EventType.IncrementalSnapshot || !event.data) return;
     const eventTime = sessionEventTime(event, events, tabStart);
@@ -509,7 +507,7 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
     // Re-assert the exact landing after rrweb re-parks the cursor at (0,0) on
     // click; instant, since the lead-in already glided it into place.
     if (point) queueMicrotask(() => moveCursor(point.x, point.y, 0));
-    if (point && isClick && cameraFeature) camera.noteInteraction(point.x, point.y);
+    if (point && isClick && cameraZoomEnabled) camera.noteInteraction(point.x, point.y);
     if (isClick) spawnClickRipple(replayer, point ?? {});
     const target = interaction.target;
     if (!isElementLike(target)) return;
@@ -526,7 +524,8 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
     onIdleModeChange?.(mode, currentSessionTime, playing);
   });
   document.querySelectorAll<HTMLButtonElement>("[data-camera-mode]").forEach((button) => button.onclick = () => {
-    cameraZoomEnabled = button.dataset.cameraMode === "auto";
+    cameraZoomEnabled = button.dataset.cameraMode === "on";
+    try { localStorage.setItem("rec-camera", cameraZoomEnabled ? "on" : "off"); } catch { /* storage may be unavailable in private mode */ }
     document.querySelectorAll<HTMLButtonElement>("[data-camera-mode]").forEach((item) => item.classList.toggle("selected", item === button));
     camera.setEnabled(cameraZoomEnabled);
   });
