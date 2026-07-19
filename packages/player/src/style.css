@@ -750,6 +750,54 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
 .chat-suggestions button:hover { background: rgba(183, 171, 255, .14); border-color: rgba(196, 189, 255, .45); }
 .chat-message { max-width: 88%; padding: 8px 11px; border-radius: 12px; font-size: 12px; line-height: 1.55; overflow-wrap: break-word; }
 .chat-user { align-self: flex-end; color: #171720; background: #cfc5ff; border-bottom-right-radius: 4px; white-space: pre-wrap; }
+.chat-turn-user { display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
+.chat-turn-user .chat-message { max-width: calc(88% - 28px); }
+.chat-edit {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: rgba(255, 255, 255, .5);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s ease, color .15s ease, background .15s ease;
+}
+.chat-turn-user:hover .chat-edit, .chat-edit:focus-visible { opacity: 1; }
+.chat-edit:hover { color: #fff; background: rgba(255, 255, 255, .1); }
+.chat-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-self: stretch;
+  padding: 10px;
+  background: rgba(255, 255, 255, .05);
+  border: 1px solid rgba(196, 189, 255, .3);
+  border-radius: 12px;
+}
+.chat-edit-form textarea {
+  width: 100%;
+  padding: 8px 10px;
+  color: #f2f1fa;
+  background: rgba(0, 0, 0, .25);
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 8px;
+  font: 12px/1.5 Manrope, ui-sans-serif, system-ui, sans-serif;
+  resize: none;
+  max-height: 160px;
+  overflow-y: hidden;
+}
+.chat-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.chat-edit-actions button { padding: 5px 14px; border: 0; border-radius: 999px; font: 10px "DM Mono"; cursor: pointer; }
+.chat-edit-cancel { color: #d9d6ee; background: rgba(255, 255, 255, .08); }
+.chat-edit-cancel:hover { background: rgba(255, 255, 255, .14); }
+.chat-edit-save { color: #171720; background: #b7abff; }
+.chat-edit-save:hover { background: #c8bdff; }
 .chat-assistant { align-self: flex-start; color: #e7e6f2; background: rgba(255, 255, 255, .055); border: 1px solid rgba(255, 255, 255, .07); border-bottom-left-radius: 4px; }
 .chat-assistant p { margin: 0; }
 .chat-assistant p + p, .chat-assistant ul, .chat-assistant ol, .chat-assistant pre { margin: 7px 0 0; }

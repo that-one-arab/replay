@@ -63,6 +63,7 @@ async function route(request: IncomingMessage, response: ServerResponse) {
     return chatManager.connect(String(url.searchParams.get("chat") ?? ""), String(url.searchParams.get("session") ?? ""), response);
   }
   if (request.method === "POST" && url.pathname === "/api/chat/message") return reply(response, 202, await chatManager.message(String(body?.chat_id ?? ""), String(body?.text ?? "")));
+  if (request.method === "POST" && url.pathname === "/api/chat/edit") return reply(response, 202, await chatManager.editMessage(String(body?.chat_id ?? ""), Number(body?.index), String(body?.text ?? "")));
   if (request.method === "POST" && url.pathname === "/api/chat/cancel") return reply(response, 200, chatManager.cancel(String(body?.chat_id ?? "")));
   if (request.method === "POST" && url.pathname === "/api/chat/tool") {
     return reply(response, 200, { result: await chatManager.tool(String(body?.chat_id ?? ""), String(body?.name ?? ""), asObject(body?.arguments)) });

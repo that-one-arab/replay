@@ -43,6 +43,8 @@ let busy = false;
 let connected = false;
 let onOpenPanel: (() => void) | undefined;
 let lastUserMessage = "";
+// Transcript index of the user message being edited in place, if any.
+let editingIndex: number | undefined;
 
 export function registerReplayControl(value: ReplayControl) { control = value; }
 
@@ -268,11 +270,76 @@ function busyTextEntry(event: KeyboardEvent) {
 function resetConversation() {
   transcript = [];
   streamingText = "";
+  editingIndex = undefined;
   chatId = newChatId();
   try { sessionStorage.setItem(`rec-chat:${recordingId}`, chatId); } catch { /* private browsing */ }
   setBusy(false);
   connect();
   renderTranscript();
+}
+
+function beginEdit(index: number) {
+  if (busy || transcript[index]?.type !== "user_message") return;
+  editingIndex = index;
+  renderTranscript();
+}
+
+/** Wire the in-place edit form (autosize, save/cancel, Enter to save, Escape to cancel). */
+function wireEditForm(scroll: HTMLElement) {
+  const form = scroll.querySelector<HTMLFormElement>(".chat-edit-form");
+  if (!form) return;
+  const index = Number(form.dataset.editIndex);
+  const textarea = form.querySelector<HTMLTextAreaElement>("textarea")!;
+  const cancel = () => { editingIndex = undefined; renderTranscript(); };
+  form.onsubmit = (event) => { event.preventDefault(); void saveEdit(index, textarea.value); };
+  form.querySelector<HTMLButtonElement>(".chat-edit-cancel")!.onclick = cancel;
+  textarea.addEventListener("input", () => autosizeComposer(textarea));
+  textarea.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void saveEdit(index, textarea.value); }
+    else if (event.key === "Escape") { event.preventDefault(); cancel(); }
+    event.stopPropagation();
+  });
+  autosizeComposer(textarea);
+  textarea.focus();
+  textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+}
+
+/** Resubmit an edited message; the daemon drops it and everything after, then re-answers. */
+async function saveEdit(index: number, text: string) {
+  const clean = text.trim();
+  if (!clean || busy) return;
+  if (transcript[index]?.type !== "user_message") return;
+  editingIndex = undefined;
+  lastUserMessage = clean;
+  // Optimistically drop the edited message and everything after it so the
+  // daemon's truncated history event doesn't look like a shrunk transcript.
+  transcript = transcript.slice(0, index);
+  streamingText = "";
+  setBusy(true);
+  try {
+    const response = await fetch("/api/chat/edit", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, index, text: clean }),
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({})) as { error?: string };
+      // A restarted daemon forgets the session and its history; there is nothing
+      // left to trim, so just send the edited text into the recreated chat.
+      if (/not found/i.test(body.error ?? "")) {
+        connect();
+        await new Promise((resolveWait) => setTimeout(resolveWait, 400));
+        setBusy(false);
+        return send(clean);
+      }
+      throw new Error(body.error ?? "The assistant is unavailable right now.");
+    }
+  } catch (error) {
+    setBusy(false);
+    transcript.push({ type: "user_message", text: clean });
+    transcript.push({ type: "turn", status: "failed", error: error instanceof Error ? error.message : String(error) });
+    renderTranscript();
+  }
 }
 
 async function send(text: string, isRetry = false) {
@@ -351,14 +418,19 @@ function renderTranscript() {
     });
     return;
   }
+  if (editingIndex !== undefined && (editingIndex >= transcript.length || transcript[editingIndex]?.type !== "user_message")) editingIndex = undefined;
   const parts: string[] = [];
-  for (const entry of transcript) {
-    if (entry.type === "user_message") parts.push(`<div class="chat-message chat-user">${escapeHtml(entry.text)}</div>`);
-    else if (entry.type === "message") parts.push(`<div class="chat-message chat-assistant">${renderMarkdown(entry.text)}</div>`);
+  transcript.forEach((entry, index) => {
+    if (entry.type === "user_message" && index === editingIndex) {
+      parts.push(`<form class="chat-edit-form" data-edit-index="${index}"><textarea aria-label="Edit your message" maxlength="8000">${escapeHtml(entry.text)}</textarea><div class="chat-edit-actions"><button type="button" class="chat-edit-cancel">Cancel</button><button type="submit" class="chat-edit-save">Save</button></div></form>`);
+    } else if (entry.type === "user_message") {
+      const editable = !busy ? `<button type="button" class="chat-edit" data-edit-index="${index}" title="Edit message" aria-label="Edit message"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg></button>` : "";
+      parts.push(`<div class="chat-turn chat-turn-user">${editable}<div class="chat-message chat-user">${escapeHtml(entry.text)}</div></div>`);
+    } else if (entry.type === "message") parts.push(`<div class="chat-message chat-assistant">${renderMarkdown(entry.text)}</div>`);
     else if (entry.type === "activity") parts.push(`<div class="chat-activity${entry.status === "failed" ? " is-failed" : ""}${entry.status === "started" ? " is-running" : ""}"><i aria-hidden="true"></i>${escapeHtml(entry.label)}</div>`);
     else if (entry.type === "turn" && entry.status === "failed") parts.push(`<div class="chat-error"><b>Something went wrong</b><p>${escapeHtml(entry.error ?? "The assistant could not answer.")}</p><button type="button" class="chat-retry">Try again</button></div>`);
     else if (entry.type === "turn" && entry.status === "canceled") parts.push(`<div class="chat-activity is-failed"><i aria-hidden="true"></i>Stopped</div>`);
-  }
+  });
   if (busy && streamingText) parts.push(`<div class="chat-message chat-assistant is-streaming">${renderMarkdown(streamingText)}</div>`);
   else if (busy) parts.push(`<div class="chat-thinking" aria-label="The assistant is thinking"><span></span><span></span><span></span></div>`);
   scroll.innerHTML = parts.join("");
@@ -371,7 +443,11 @@ function renderTranscript() {
   scroll.querySelectorAll<HTMLButtonElement>("[data-seek-ms]").forEach((button) => {
     button.onclick = () => { void control?.seek(Number(button.dataset.seekMs), false); };
   });
-  if (nearBottom) scroll.scrollTop = scroll.scrollHeight;
+  scroll.querySelectorAll<HTMLButtonElement>(".chat-edit").forEach((button) => {
+    button.onclick = () => beginEdit(Number(button.dataset.editIndex));
+  });
+  wireEditForm(scroll);
+  if (editingIndex === undefined && nearBottom) scroll.scrollTop = scroll.scrollHeight;
 }
 
 /**

@@ -139,6 +139,59 @@ test("chat turns stream over SSE, resume the provider thread, and expose tools",
   }
 });
 
+test("editing a message drops later turns and rebuilds the conversation", async () => {
+  const home = await mkdtemp(join(tmpdir(), "rec-chat-edit-"));
+  const bin = join(home, "bin");
+  await mkdir(bin, { recursive: true });
+  await fakeCodex(bin, "echo");
+  await seedRecording(home, "rec_fixture");
+  const port = await unusedPort();
+  const endpoint = `http://127.0.0.1:${port}`;
+  const daemon = await startDaemon(home, port, bin);
+  try {
+    const chatId = "chat-edit-0001";
+    const stream = await startStream(endpoint, chatId, "rec_fixture");
+    await request(endpoint, "POST", "/api/chat/message", { chat_id: chatId, text: "alpha question" });
+    await stream.waitFor((events) => events.filter((event) => event.event === "turn" && event.data.status === "completed").length >= 1);
+    await request(endpoint, "POST", "/api/chat/message", { chat_id: chatId, text: "bravo question" });
+    await stream.waitFor((events) => events.filter((event) => event.event === "turn" && event.data.status === "completed").length >= 2);
+    assert.ok(String(stream.events.filter((event) => event.event === "message").at(-1)?.data.text).startsWith("resumed:"), "the second turn resumed the thread");
+
+    // Locate the second user message in the ordered transcript.
+    const peek = await startStream(endpoint, chatId, "rec_fixture");
+    await peek.waitFor((events) => events.some((event) => event.event === "history"));
+    const before = peek.events.find((event) => event.event === "history")!.data.events as { type: string; text?: string }[];
+    peek.close();
+    const secondUserIndex = before.map((entry, index) => ({ entry, index })).filter(({ entry }) => entry.type === "user_message")[1]!.index;
+
+    const edit = await request(endpoint, "POST", "/api/chat/edit", { chat_id: chatId, index: secondUserIndex, text: "charlie question" });
+    assert.equal(edit.status, 202, JSON.stringify(edit.body));
+    await stream.waitFor((events) => events.filter((event) => event.event === "turn" && event.data.status === "completed").length >= 3);
+
+    // The rebuilt turn runs on a fresh thread (not a resume) and carries the edited text.
+    const rebuilt = stream.events.filter((event) => event.event === "message").at(-1);
+    assert.ok(String(rebuilt?.data.text).startsWith("first:"), "editing rebuilds the conversation from a clean thread");
+    assert.match(String(rebuilt?.data.text), /charlie question/);
+
+    // Reconnecting shows the transcript truncated: the replaced turn is gone.
+    const after = await startStream(endpoint, chatId, "rec_fixture");
+    await after.waitFor((events) => events.some((event) => event.event === "history"));
+    const events = after.events.find((event) => event.event === "history")!.data.events as { type: string; text?: string }[];
+    after.close();
+    assert.deepEqual(events.filter((entry) => entry.type === "user_message").map((entry) => entry.text), ["alpha question", "charlie question"]);
+    assert.ok(!events.some((entry) => entry.text === "bravo question"), "the replaced message and its answer are removed");
+
+    // A non-user entry cannot be edited.
+    const bad = await request(endpoint, "POST", "/api/chat/edit", { chat_id: chatId, index: 1, text: "nope" });
+    assert.equal(bad.status, 500);
+    assert.match(String(bad.body.error), /your own messages/i);
+    stream.close();
+  } finally {
+    await stop(daemon);
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 test("chat surfaces provider failures and honors disabled config", async () => {
   const home = await mkdtemp(join(tmpdir(), "rec-chat-fail-"));
   const bin = join(home, "bin");

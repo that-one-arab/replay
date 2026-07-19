@@ -57,6 +57,8 @@ type ChatSession = {
   clients: Set<ServerResponse>;
   pendingUiCalls: Map<string, PendingUiCall>;
   history: ChatEvent[];
+  /** Retained transcript to re-seed a rebuilt conversation after an edit. */
+  seedHistory?: ChatEvent[];
   summary?: ReplaySummary;
   lastSeenAt: number;
 };
@@ -237,12 +239,37 @@ export class ChatManager {
     this.record(chat, { type: "user_message", text: clean });
     this.record(chat, { type: "turn", status: "started" });
     if (selection.provider === "openai") {
+      // runOpenAiTurn seeds chat.seedHistory into the fresh conversation itself.
       void this.runOpenAiTurn(chat, selection, clean);
     } else {
-      const prompt = chat.threadId ? clean : `${await this.assistantPreamble(chat)}\n\nViewer's question: ${clean}`;
+      let prompt = clean;
+      if (!chat.threadId) {
+        const prior = chat.seedHistory?.length ? `\n\nEarlier in this conversation:\n${renderSeedTranscript(chat.seedHistory)}` : "";
+        prompt = `${await this.assistantPreamble(chat)}${prior}\n\nViewer's question: ${clean}`;
+      }
+      chat.seedHistory = undefined;
       await this.runCodexTurn(chat, selection, prompt);
     }
     return { accepted: true };
+  }
+
+  /**
+   * Edit an earlier user message: drop that message and everything after it,
+   * rebuild from a clean provider conversation (so the removed turns leave the
+   * model's memory), re-seeding the retained prefix, then run the edited text.
+   */
+  async editMessage(chatId: string, index: number, text: string) {
+    const chat = this.chats.get(chatId);
+    if (!chat) throw new Error("Chat session was not found. Reload the replay.");
+    if (chat.turn) throw new Error("The assistant is still answering. Wait for the reply or stop it first.");
+    if (!Number.isInteger(index) || index < 0 || index >= chat.history.length) throw new Error("That message is no longer available to edit.");
+    if (chat.history[index]?.type !== "user_message") throw new Error("Only your own messages can be edited.");
+    chat.history = chat.history.slice(0, index);
+    chat.seedHistory = [...chat.history];
+    chat.conversationId = undefined;
+    chat.threadId = undefined;
+    this.broadcast(chat, "history", { events: chat.history });
+    return this.message(chatId, text);
   }
 
   cancel(chatId: string) {
@@ -471,13 +498,16 @@ export class ChatManager {
     const turn: ActiveTurn = { canceled: false, stop: () => controller.abort() };
     chat.turn = turn;
     try {
+      let seedInput: unknown[] = [];
       if (!chat.conversationId) {
         const conversation = await this.openAiRequest(selection, "/conversations", {}, controller.signal) as { id?: string };
         if (!conversation.id) throw new Error("OpenAI did not return a conversation id.");
         chat.conversationId = conversation.id;
+        if (chat.seedHistory?.length) seedInput = seedToOpenAiInput(chat.seedHistory);
       }
+      chat.seedHistory = undefined;
       const instructions = await this.assistantPreamble(chat);
-      let input: unknown[] = [{ role: "user", content: text }];
+      let input: unknown[] = [...seedInput, { role: "user", content: text }];
       for (let round = 0; ; round += 1) {
         const calls = await this.streamOpenAiResponse(chat, selection, instructions, input, controller.signal);
         if (!calls.length) break;
@@ -583,6 +613,24 @@ function activityLabel(item: { type?: string; command?: string; server?: string;
   if (item.type === "web_search") return item.query ? `Searched the web for ${clipLabel(item.query)}` : "Searched the web";
   if (item.type === "reasoning") return "Thinking";
   return undefined;
+}
+
+/** Retained turns as OpenAI Responses input items, to re-seed a rebuilt conversation. */
+function seedToOpenAiInput(events: ChatEvent[]): unknown[] {
+  const items: unknown[] = [];
+  for (const event of events) {
+    if (event.type === "user_message") items.push({ role: "user", content: event.text });
+    else if (event.type === "message") items.push({ role: "assistant", content: event.text });
+  }
+  return items;
+}
+
+/** Retained turns as a plain-text transcript, to prime a rebuilt Codex thread. */
+function renderSeedTranscript(events: ChatEvent[]): string {
+  return events
+    .filter((event): event is Extract<ChatEvent, { type: "user_message" | "message" }> => event.type === "user_message" || event.type === "message")
+    .map((event) => (event.type === "user_message" ? `Viewer: ${event.text}` : `Assistant: ${event.text}`))
+    .join("\n\n");
 }
 
 function friendlyToolLabel(tool: string) {
