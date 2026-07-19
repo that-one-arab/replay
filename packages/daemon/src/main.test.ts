@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
@@ -64,6 +65,46 @@ test("replay leases keep the daemon alive while agent leases control browser own
     await waitForExit(daemon);
   } finally {
     await stop(daemon);
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("closing the managed browser shuts the daemon down even while agent leases persist", async () => {
+  const home = await mkdtemp(join(tmpdir(), "rec-daemon-browser-close-"));
+  // A quiet long-lived process stands in for the managed Chrome; a pre-existing
+  // browser.json makes the daemon adopt its pid at startup.
+  const fakeBrowser = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], { stdio: "ignore" });
+  await writeFile(join(home, "browser.json"), JSON.stringify({ pid: fakeBrowser.pid, cdp_endpoint: "http://127.0.0.1:1" }) + "\n");
+  const port = await unusedPort();
+  const daemon = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], {
+    // Idle timeouts far beyond the test window prove any exit comes from the
+    // browser-close path, not the idle timers.
+    env: { ...process.env, REC_HOME: home, REC_PORT: String(port), REC_BROWSER_IDLE_TIMEOUT_MS: "600000", REC_DAEMON_IDLE_TIMEOUT_MS: "600000" },
+    stdio: "ignore",
+  });
+  const endpoint = `http://127.0.0.1:${port}`;
+  try {
+    const health = await waitForHealth(endpoint) as { managed_browser?: boolean };
+    assert.equal(health.managed_browser, true);
+    const agent = await request(endpoint, "/api/leases/acquire", { owner: "agent-test", kind: "agent", ttl_ms: 60_000 });
+    assert.equal(agent.status, 201);
+    const replay = await request(endpoint, "/api/leases/acquire", { owner: "player-test", kind: "replay", ttl_ms: 60_000 });
+    assert.equal(replay.status, 201);
+    // While the browser process lives, the daemon stays up.
+    await new Promise((resolveWait) => setTimeout(resolveWait, 1_500));
+    assert.equal(daemon.exitCode, null);
+    fakeBrowser.kill("SIGKILL");
+    // The closure is noticed and the stale state cleared, but an active replay
+    // viewer defers the shutdown.
+    await new Promise((resolveWait) => setTimeout(resolveWait, 1_500));
+    assert.equal(daemon.exitCode, null, "an active replay viewer keeps the daemon serving");
+    assert.equal(existsSync(join(home, "browser.json")), false, "the stale browser state is cleared as soon as the closure is noticed");
+    await request(endpoint, "/api/leases/release", { lease_id: replay.body.lease_id });
+    // The agent lease is still live — closure of the controlled browser overrides it.
+    await waitForExit(daemon);
+  } finally {
+    await stop(daemon);
+    if (fakeBrowser.exitCode === null) fakeBrowser.kill("SIGKILL");
     await rm(home, { recursive: true, force: true });
   }
 });

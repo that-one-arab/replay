@@ -7,7 +7,9 @@ import { join, resolve } from "node:path";
 // workspace has not been linked by a package manager yet.
 import { exportPath, exportSession, importSession, resolveRecConfig } from "@rec/core";
 
-const endpoint = process.env.REC_DAEMON_URL ?? "http://127.0.0.1:7717";
+// Honor the same lane selection as the daemon itself: an explicit daemon URL
+// wins, otherwise the lane's REC_PORT, otherwise the default port.
+const endpoint = process.env.REC_DAEMON_URL ?? `http://127.0.0.1:${process.env.REC_PORT ?? 7717}`;
 const [command, ...args] = process.argv.slice(2);
 
 try {

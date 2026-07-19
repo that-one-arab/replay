@@ -13,6 +13,10 @@ const recorder = new Recorder();
 const chatManager = new ChatManager(port, async () => (await resolveRecConfig()).chat);
 let cdpEndpoint: string | undefined;
 let managedBrowser = existsSync(join(recHome(), "browser.json"));
+// Set when Rec's controlled Chrome exits without Rec stopping it. Closing that
+// window is the user's explicit "I'm done", so the daemon winds down too —
+// even past agent leases, since idle MCP sessions relaunch it on demand.
+let managedBrowserClosed = false;
 let activeBrowserConfig: BrowserConfig | undefined;
 const leases = new Map<string, DaemonLease>();
 const agentIdleTimeoutMs = configuredDuration("REC_BROWSER_IDLE_TIMEOUT_MS", 30_000);
@@ -102,6 +106,7 @@ async function startBrowser(executable: string) {
       await recorder.attach(saved.cdp_endpoint);
       cdpEndpoint = saved.cdp_endpoint;
       managedBrowser = true;
+      managedBrowserClosed = false;
       activeBrowserConfig = saved.browser_config;
       return browserResponse(false, "ready", browserConfig);
     } catch {
@@ -141,6 +146,7 @@ async function startBrowser(executable: string) {
   }
   await writeFile(statePath, JSON.stringify({ pid: child.pid, cdp_endpoint: cdpEndpoint, config_fingerprint: fingerprint, browser_config: browserConfig }) + "\n");
   managedBrowser = true;
+  managedBrowserClosed = false;
   activeBrowserConfig = browserConfig;
   return browserResponse(true, "ready", browserConfig);
 }
@@ -168,6 +174,7 @@ async function attachBrowser(endpoint: string) {
   await recorder.attach(endpoint);
   cdpEndpoint = endpoint;
   managedBrowser = false;
+  managedBrowserClosed = false;
   activeBrowserConfig = undefined;
   return { managed: false, cdp_endpoint: cdpEndpoint, browser_state: "ready" };
 }
@@ -264,8 +271,13 @@ async function enforceLifecycle() {
   try {
     const now = Date.now();
     expireLeases(now);
+    await releaseClosedManagedBrowser();
     const recording = recorder.status().state === "recording";
-    const { active_lease_count: activeLeases, agent_lease_count: agentLeases } = leaseSummary();
+    const { active_lease_count: activeLeases, agent_lease_count: agentLeases, replay_lease_count: replayLeases } = leaseSummary();
+    if (managedBrowserClosed && !recording && replayLeases === 0) {
+      await shutdownDaemon();
+      return;
+    }
     if (recording || agentLeases > 0) agentIdleSince = undefined;
     else {
       agentIdleSince ??= now;
@@ -279,6 +291,29 @@ async function enforceLifecycle() {
   } finally {
     lifecycleCheckRunning = false;
   }
+}
+
+/**
+ * Notice when the managed Chrome exited without Rec stopping it — the user
+ * closed the controlled window, or it crashed. Finalize any in-flight capture
+ * (what reached disk is kept), clear the browser state, and mark the closure
+ * so the lifecycle check winds the daemon down once nothing is replaying.
+ * Rec-initiated stops (stopBrowser) remove browser.json first and never trip
+ * this; an external attached browser is not Rec's to watch.
+ */
+async function releaseClosedManagedBrowser() {
+  if (!managedBrowser) return;
+  const statePath = join(recHome(), "browser.json");
+  if (!existsSync(statePath)) return;
+  let saved: ManagedBrowserState;
+  try { saved = JSON.parse(await readFile(statePath, "utf8")) as ManagedBrowserState; } catch { return; }
+  try { process.kill(saved.pid, 0); return; } catch { /* the browser process is gone */ }
+  managedBrowserClosed = true;
+  try { await recorder.close(); } catch { /* an empty interrupted capture is intentionally not handed off */ }
+  await unlink(statePath).catch(() => undefined);
+  cdpEndpoint = undefined;
+  managedBrowser = false;
+  activeBrowserConfig = undefined;
 }
 
 async function shutdownDaemon() {
