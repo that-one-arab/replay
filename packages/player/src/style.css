@@ -835,6 +835,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
   font: 12px/1.5 Manrope, ui-sans-serif, system-ui, sans-serif;
   resize: none;
   max-height: 120px;
+  overflow-y: hidden;
 }
 .chat-composer textarea::placeholder { color: rgba(255, 255, 255, .38); }
 .chat-composer textarea:disabled { opacity: .5; }

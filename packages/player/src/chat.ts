@@ -235,14 +235,19 @@ function buildPanel() {
     }
     event.stopPropagation();
   });
-  input.addEventListener("input", () => {
-    input.style.height = "auto";
-    input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
-  });
+  input.addEventListener("input", () => autosizeComposer(input));
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && isChatOpen() && !busyTextEntry(event)) togglePanel();
   }, true);
   renderTranscript();
+}
+
+/** Grow the composer with its content, showing a scrollbar only once it hits the cap. */
+function autosizeComposer(input: HTMLTextAreaElement) {
+  input.style.height = "auto";
+  const capped = Math.min(input.scrollHeight, 120);
+  input.style.height = `${capped}px`;
+  input.style.overflowY = input.scrollHeight > 120 ? "auto" : "hidden";
 }
 
 /** Keep Escape-to-close from stealing an Escape typed while composing text elsewhere. */
@@ -267,7 +272,7 @@ async function send(text: string, isRetry = false) {
   if (isSetupReason(availability.reason)) return;
   lastUserMessage = clean;
   const input = panel?.querySelector<HTMLTextAreaElement>(".chat-composer textarea");
-  if (input) { input.value = ""; input.style.height = "auto"; }
+  if (input) { input.value = ""; autosizeComposer(input); }
   setBusy(true);
   try {
     const response = await fetch("/api/chat/message", {
