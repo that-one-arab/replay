@@ -2,6 +2,8 @@ export { Recorder } from "./recorder.js";
 export { calculateActiveDuration, recHome, sessionPath, sessionsDir, SessionStore } from "./storage.js";
 export { exportPath, exportSession, importSession, PORTABLE_BUNDLE_VERSION } from "./bundle.js";
 export { parseRecToml, resolveRecConfig } from "./config.js";
+export { uploadRecording } from "./share-client.js";
+export type { ShareUploadOptions, ShareUploadResult } from "./share-client.js";
 export { describeNode, formatTime, renderSummaryText, stepsInRange, summarizeReplay } from "./summary.js";
 export type { ReplayStep, ReplaySummary } from "./summary.js";
 export type { ExportResult, ImportResult } from "./bundle.js";

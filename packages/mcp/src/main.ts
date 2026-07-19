@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
-import { exportSession } from "@rec/core";
+import { exportSession, uploadRecording } from "@rec/core";
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type JsonObject = { [key: string]: Json };
@@ -268,16 +267,11 @@ async function shareRecording(argumentsValue: JsonObject) {
   const home = process.env.REC_HOME ?? join(process.env.HOME ?? process.cwd(), ".rec");
   const artifact = join(home, "exports", `${sessionId}.rec`);
   if (!existsSync(artifact)) throw new Error(`Portable artifact ${artifact} was not found. Call recording_stop before recording_share.`);
-  return { sessionId, shareUrl: await uploadArtifact(sessionId, artifact, shareEndpoint) };
+  const { shareUrl } = await uploadRecording(shareEndpoint, artifact);
+  return { sessionId, shareUrl };
 }
 
 function configuredShareEndpoint() { return process.env.REC_SHARE_URL?.replace(/\/$/, "") || undefined; }
-async function uploadArtifact(sessionId: string, artifact: string, shareEndpoint: string) {
-  const response = await fetch(`${shareEndpoint}/v1/recordings`, { method: "POST", headers: { "content-type": "application/vnd.rec" }, body: await readFile(artifact) });
-  const result = object(await response.json().catch(() => ({})));
-  if (!response.ok) throw new Error(optionalString(result.error) ?? response.statusText);
-  return requiredString(result.shareUrl, `Share URL for ${sessionId}`);
-}
 
 async function ensureDaemon(): Promise<JsonObject> {
   try { return object(await api("GET", "/health", undefined, false)); } catch { /* start below */ }

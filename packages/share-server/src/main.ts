@@ -22,7 +22,11 @@ const releasePublishToken = process.env.REC_RELEASE_PUBLISH_TOKEN;
 type Share = { id: string; session_id: string; title: string; created_at: string; bytes: number };
 type Release = { version: string; platform: "darwin-arm64"; archive: string; sha256: string; bytes: number; published_at: string };
 
-const server = createServer((request, response) => void route(request, response).catch((error: unknown) => reply(response, 500, { error: messageOf(error) })));
+// A client fault (oversize body, malformed headers, an artifact that will not
+// import) is reported with its own status; anything unclassified is a genuine
+// 500 the operator needs to see.
+class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
+const server = createServer((request, response) => void route(request, response).catch((error: unknown) => reply(response, error instanceof HttpError ? error.status : 500, { error: messageOf(error) })));
 server.listen(port, "0.0.0.0", () => console.log(`rec share server listening on http://0.0.0.0:${port}`));
 
 async function route(request: IncomingMessage, response: ServerResponse) {
@@ -93,7 +97,9 @@ async function upload(request: IncomingMessage, response: ServerResponse, origin
   try {
     // Re-sharing an already-uploaded recording is idempotent: keep the installed
     // copy and hand back its existing link instead of failing on a duplicate import.
-    const imported = await importSession(temporary, { reuseExisting: true });
+    // The body is client-supplied, so a failed import is a bad upload (422), not
+    // a server fault.
+    const imported = await importSession(temporary, { reuseExisting: true }).catch((error: unknown) => { throw new HttpError(422, `The uploaded artifact is not a valid Rec recording: ${messageOf(error)}`); });
     const shares = await readShares();
     const existing = shares.find((entry) => entry.session_id === imported.sessionId);
     if (existing) return reply(response, 201, { shareId: existing.id, sessionId: existing.session_id, shareUrl: `${origin}/r/${existing.id}` });
@@ -152,7 +158,10 @@ function servePlayerAsset(response: ServerResponse, pathname: string) {
   createReadStream(path).pipe(response);
 }
 
-async function readManifest(id: string) { return JSON.parse(await readFile(join(sessionPath(id), "manifest.json"), "utf8")) as RecordingManifest; }
+async function readManifest(id: string) {
+  try { return JSON.parse(await readFile(join(sessionPath(id), "manifest.json"), "utf8")) as RecordingManifest; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new HttpError(404, "Recording not found"); throw error; }
+}
 async function readShares() { try { return JSON.parse(await readFile(sharesPath, "utf8")) as Share[]; } catch { return []; } }
 async function readReleases() { try { return JSON.parse(await readFile(releasesPath, "utf8")) as Release[]; } catch { return []; } }
 async function writeShares(shares: Share[]) {
@@ -171,8 +180,13 @@ function binaryBody(request: IncomingMessage, maxBytes: number, label: string): 
   return new Promise((resolveBody, reject) => {
     const chunks: Buffer[] = [];
     let bytes = 0;
-    request.on("data", (chunk: Buffer) => { bytes += chunk.byteLength; if (bytes > maxBytes) { request.destroy(new Error(`${label} exceeds the ${maxBytes} byte upload limit.`)); return; } chunks.push(chunk); });
-    request.on("end", () => resolveBody(Buffer.concat(chunks)));
+    let overflowed = false;
+    // Once the limit is passed, stop buffering (so memory stays bounded) but keep
+    // draining the socket to end, then reject with a 413. Destroying the request
+    // mid-upload instead would tear down the socket and the client would see a
+    // dropped connection rather than the status.
+    request.on("data", (chunk: Buffer) => { bytes += chunk.byteLength; if (bytes > maxBytes) { overflowed = true; chunks.length = 0; return; } chunks.push(chunk); });
+    request.on("end", () => overflowed ? reject(new HttpError(413, `${label} exceeds the ${maxBytes} byte upload limit.`)) : resolveBody(Buffer.concat(chunks)));
     request.on("error", reject);
   });
 }
@@ -183,8 +197,8 @@ function validPublishToken(header: string | undefined) {
   const received = Buffer.from(supplied);
   return expected.byteLength === received.byteLength && timingSafeEqual(expected, received);
 }
-function releaseVersion(value: string | string[] | undefined) { if (typeof value === "string" && /^\d+\.\d+\.\d+$/.test(value)) return value; throw new Error("x-rec-release-version must be a semantic version such as 0.1.0."); }
-function releasePlatform(value: string | string[] | undefined): Release["platform"] { if (value === "darwin-arm64") return value; throw new Error("x-rec-release-platform must be darwin-arm64."); }
+function releaseVersion(value: string | string[] | undefined) { if (typeof value === "string" && /^\d+\.\d+\.\d+$/.test(value)) return value; throw new HttpError(400, "x-rec-release-version must be a semantic version such as 0.1.0."); }
+function releasePlatform(value: string | string[] | undefined): Release["platform"] { if (value === "darwin-arm64") return value; throw new HttpError(400, "x-rec-release-platform must be darwin-arm64."); }
 function compareVersions(left: string, right: string) { const a = left.split(".").map(Number); const b = right.split(".").map(Number); return a[0]! - b[0]! || a[1]! - b[1]! || a[2]! - b[2]!; }
 function releaseMetadata(origin: string, release: Release) { return { version: release.version, platform: release.platform, sha256: release.sha256, bytes: release.bytes, archiveUrl: `${origin}/v1/releases/${release.archive}` }; }
 function requestOrigin(request: IncomingMessage) { return process.env.REC_SHARE_PUBLIC_URL?.replace(/\/$/, "") ?? `http://${request.headers.host ?? `127.0.0.1:${port}`}`; }

@@ -5,7 +5,7 @@ import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
-import { Recorder, exportPath, exportSession, recHome, resolveRecConfig, sessionsDir, sessionPath, type BrowserConfig, type Outcome, type RecordingManifest, type StartOptions } from "@rec/core";
+import { Recorder, exportPath, exportSession, recHome, resolveRecConfig, sessionsDir, sessionPath, uploadRecording, type BrowserConfig, type Outcome, type RecordingManifest, type StartOptions } from "@rec/core";
 import { ChatManager, CHAT_TOOLS } from "./chat.js";
 
 const port = Number(process.env.REC_PORT ?? 7717);
@@ -423,15 +423,8 @@ async function shareRecording(id: string) {
   // stop already exported the artifact; reuse it. exportSession writes exclusively
   // and would otherwise fail with EEXIST when sharing an already-stopped recording.
   const artifact = existsSync(exportPath(id)) ? exportPath(id) : (await exportSession(id)).path;
-  const response = await fetch(`${endpoint}/v1/recordings`, {
-    method: "POST",
-    headers: { "content-type": "application/vnd.rec" },
-    body: await readFile(artifact),
-  });
-  const result = await response.json().catch(() => ({})) as { error?: string; shareUrl?: string };
-  if (!response.ok) throw new Error(result.error ?? response.statusText);
-  if (!result.shareUrl) throw new Error("Share service did not return a share URL.");
-  return { sessionId: id, shareUrl: result.shareUrl };
+  const { shareUrl } = await uploadRecording(endpoint, artifact);
+  return { sessionId: id, shareUrl };
 }
 
 function shareEndpoint() { return process.env.REC_SHARE_URL?.replace(/\/$/, "") || undefined; }

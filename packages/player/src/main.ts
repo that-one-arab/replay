@@ -28,6 +28,11 @@ const MARKER_FWD_SLOP_MS = 60;
 // Camera inputs arriving from rrweb's seek reconstruction are historical; only
 // events cast near the live playhead may steer the camera.
 const CAMERA_SYNC_WINDOW_MS = 800;
+// A recording fetch that hasn't answered in this long means the server is gone,
+// not slow — fail with a clear message rather than hanging forever. Sharing
+// uploads to the remote server, so it gets a longer leash.
+const REQUEST_TIMEOUT_MS = 30_000;
+const SHARE_TIMEOUT_MS = 120_000;
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 const id = new URLSearchParams(location.search).get("id");
@@ -112,6 +117,10 @@ async function load(recordingId: string) {
     lastNarrationKey = undefined;
     introDismissed = false;
     shareUrl = undefined;
+    // Fetching the manifest and events crosses the network — over the remote
+    // share server that can be a real wait. Show a loading state so a shared
+    // link never opens to a blank screen while the data streams in.
+    renderLoading();
     shareAvailable = await detectShareAvailability();
     void initChat(recordingId, () => {
       // The assistant and the chapters list share the right edge; opening one
@@ -228,7 +237,7 @@ async function shareRecording(recordingId: string, button: HTMLButtonElement) {
   button.disabled = true;
   button.innerHTML = `<span class="share-spinner" aria-hidden="true"></span>`;
   try {
-    const result = await request<{ shareUrl: string }>(`/api/sessions/${encodeURIComponent(recordingId)}/share`, { method: "POST" });
+    const result = await request<{ shareUrl: string }>(`/api/sessions/${encodeURIComponent(recordingId)}/share`, { method: "POST" }, SHARE_TIMEOUT_MS);
     shareUrl = result.shareUrl;
     try {
       await navigator.clipboard.writeText(shareUrl);
@@ -1022,5 +1031,18 @@ function findElementByText(frameDocument: Document, query: string) {
   }
   return best;
 }
-async function request<T>(url: string, init?: RequestInit) { const response = await fetch(url, init); if (!response.ok) throw new Error((await response.json().catch(() => ({ error: response.statusText }))).error); return response.json() as Promise<T>; }
+async function request<T>(url: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS) {
+  let response: Response;
+  try {
+    response = await fetch(url, { ...init, signal: init?.signal ?? AbortSignal.timeout(timeoutMs) });
+  } catch (error) {
+    // A rejected fetch is a transport failure, not an HTTP status: the server is
+    // unreachable or too slow. Translate it into something a viewer can act on.
+    if (error instanceof DOMException && error.name === "TimeoutError") throw new Error("The recording server took too long to respond. Check your connection and try again.");
+    throw new Error("Could not reach the recording server. Check your connection and try again.");
+  }
+  if (!response.ok) throw new Error((await response.json().catch(() => ({ error: response.statusText }))).error || response.statusText);
+  return response.json() as Promise<T>;
+}
 function renderError(message: string) { app.innerHTML = `<section class=error><p>REC</p><h1>Replay unavailable</h1><p>${escape(message)}</p></section>`; }
+function renderLoading() { app.innerHTML = `<section class="replay-loading" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><p>Loading replay…</p></section>`; }

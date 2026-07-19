@@ -79,6 +79,43 @@ test("uploads a portable artifact and serves its replay data", async () => {
   }
 });
 
+test("maps client faults to their own status instead of a blanket 500", async () => {
+  const data = await mkdtemp(join(tmpdir(), "rec-share-faults-"));
+  const previousHome = process.env.REC_HOME;
+  const port = await unusedPort();
+  const endpoint = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | undefined;
+  try {
+    server = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], { env: { ...process.env, PORT: String(port), REC_SHARE_DATA_DIR: data, REC_SHARE_PUBLIC_URL: endpoint, REC_SHARE_MAX_UPLOAD_BYTES: "1024", REC_RELEASE_PUBLISH_TOKEN: "test-release-token" }, stdio: "ignore" });
+    await waitForHealth(endpoint);
+
+    // Oversize upload → 413, not 500.
+    const oversize = await fetch(`${endpoint}/v1/recordings`, { method: "POST", body: Buffer.alloc(2048) });
+    assert.equal(oversize.status, 413);
+
+    // A body under the limit that is not a valid artifact → 422.
+    const garbage = await fetch(`${endpoint}/v1/recordings`, { method: "POST", body: Buffer.from("not a real .rec bundle") });
+    assert.equal(garbage.status, 422);
+
+    // A recording that was never uploaded → 404.
+    const missing = await fetch(`${endpoint}/api/sessions/rec_absent/manifest`);
+    assert.equal(missing.status, 404);
+
+    // A malformed release header → 400, not 500.
+    const badVersion = await fetch(`${endpoint}/v1/releases`, {
+      method: "PUT",
+      headers: { authorization: "Bearer test-release-token", "x-rec-release-version": "not-a-version", "x-rec-release-platform": "darwin-arm64" },
+      body: Buffer.from("release"),
+    });
+    assert.equal(badVersion.status, 400);
+  } finally {
+    if (server) await stop(server);
+    if (previousHome === undefined) delete process.env.REC_HOME;
+    else process.env.REC_HOME = previousHome;
+    await rm(data, { recursive: true, force: true });
+  }
+});
+
 async function unusedPort() {
   const server = createServer();
   server.listen(0, "127.0.0.1");

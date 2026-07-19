@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 // The CLI build runs immediately after core's build, including when this
 // workspace has not been linked by a package manager yet.
-import { exportPath, exportSession, importSession, resolveRecConfig } from "@rec/core";
+import { exportPath, exportSession, importSession, resolveRecConfig, uploadRecording } from "@rec/core";
 
 // Honor the same lane selection as the daemon itself: an explicit daemon URL
 // wins, otherwise the lane's REC_PORT, otherwise the default port.
@@ -125,10 +125,8 @@ async function shareRecording(values: string[]) {
   if (!shareEndpoint) throw new Error("REC_SHARE_URL is required to share a recording.");
   const artifact = exportPath(id);
   if (!existsSync(artifact)) await exportSession(id, artifact);
-  const response = await fetch(`${shareEndpoint}/v1/recordings`, { method: "POST", headers: { "content-type": "application/vnd.rec" }, body: await readFile(artifact) });
-  const result = await response.json().catch(() => ({})) as { error?: string; shareUrl?: string };
-  if (!response.ok || !result.shareUrl) throw new Error(result.error ?? "Share service did not return a share URL.");
-  console.log(`Shared ${id}: ${result.shareUrl}`);
+  const { shareUrl } = await uploadRecording(shareEndpoint, artifact);
+  console.log(`Shared ${id}: ${shareUrl}`);
 }
 
 async function doctor() {

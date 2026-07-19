@@ -653,6 +653,28 @@ body.chat-open #app { width: calc(100% - 404px); }
 .error { max-width: 620px; margin: 15vh auto; padding: 30px; background: #1d1b25; border: 1px solid #34303e; border-radius: 12px; }
 .error p:last-child { color: #aaa7b6; }
 
+/* Loading state — shown while a (possibly remote) recording streams in */
+.replay-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: #aaa7b6;
+  letter-spacing: -.01em;
+}
+.loading-spinner {
+  width: 52px;
+  height: 52px;
+  border: 4px solid rgba(255, 255, 255, .16);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: rec-spin .82s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) { .loading-spinner { animation-duration: 1.8s; } }
+
 /* Replay assistant: a chat island docked on the right, same glass as the deck */
 .chat-toggle {
   display: flex;
