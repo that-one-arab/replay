@@ -291,6 +291,18 @@ export class Recorder {
   }
 
   private async drain(state: PageState) {
+    const queue = state.queue.splice(0);
+    let base = state.baseUrl;
+    const bases = queue.map((event) => (base = eventUrl(event, base)));
+    state.baseUrl = base;
+    // Stylesheets rrweb inlines into events are the only place some resources
+    // appear: a font declared for glyphs the page never rendered has no network
+    // response to capture. Discover those url() references and fetch them now,
+    // so the rewrite below can point the CSS at recorded copies instead of
+    // persisting absolute URLs the replay must refuse to fetch.
+    queue.forEach((event, index) => {
+      for (const url of collectEventCssUrls(event, bases[index])) void this.captureAssetUrl(url);
+    });
     // Asset copies are captured asynchronously. Rewriting an event before its
     // referenced asset lands in the manifest freezes the original (often
     // private-network) URL into the persisted event forever — that is what makes
@@ -298,10 +310,7 @@ export class Recorder {
     // access prompt. Let pending captures settle so their assets are known first.
     const pending = [...this.assetCaptures.values()];
     if (pending.length > 0) await Promise.allSettled(pending);
-    const events = state.queue.splice(0).map((event) => {
-      state.baseUrl = eventUrl(event, state.baseUrl);
-      return rewriteAssetUrls(event, state.baseUrl, this.store?.manifest.id, this.store?.manifest.assets ?? [], this.origins);
-    });
+    const events = queue.map((event, index) => rewriteAssetUrls(event, bases[index], this.store?.manifest.id, this.store?.manifest.assets ?? [], this.origins));
     if (events.length > 0 && this.store) await this.store.append(state.id, events, Date.now());
   }
 
@@ -550,6 +559,32 @@ function cssUrls(value: string, baseUrl: string) {
   });
   return [...urls].filter(isHttpUrl);
 }
+// Attribute/property keys whose string value is CSS text in a serialized rrweb
+// event: inlined stylesheets, style attributes, and stylesheet-rule insertions.
+const CSS_TEXT_KEYS = new Set(["_cssText", "style", "rule", "cssText"]);
+/** Absolute URLs referenced from CSS text embedded in a serialized rrweb event. */
+export function collectEventCssUrls(event: unknown, baseUrl: string): string[] {
+  const found = new Set<string>();
+  const visit = (value: unknown, parentTag?: string): void => {
+    if (!value || typeof value !== "object") return;
+    if (Array.isArray(value)) { for (const child of value) visit(child, parentTag); return; }
+    const record = value as Record<string, unknown>;
+    const tag = typeof record.tagName === "string" ? record.tagName.toLowerCase() : undefined;
+    if (parentTag === "style" && typeof record.textContent === "string") {
+      for (const url of cssUrls(record.textContent, baseUrl)) found.add(url);
+    }
+    for (const [key, child] of Object.entries(record)) {
+      if (typeof child === "string") {
+        if (CSS_TEXT_KEYS.has(key)) for (const url of cssUrls(child, baseUrl)) found.add(url);
+        continue;
+      }
+      visit(child, key === "childNodes" ? tag ?? parentTag : undefined);
+    }
+  };
+  visit(event);
+  return [...found];
+}
+
 export function rewriteAssetUrls(event: unknown, baseUrl: string, sessionId: string | undefined, assets: { id: string; source_urls: string[] }[], allowedOrigins: Set<string>): unknown {
   const rewrite = (value: unknown): unknown => {
     if (typeof value === "string") {

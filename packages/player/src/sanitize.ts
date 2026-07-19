@@ -39,6 +39,47 @@ function blankUrlForTag(tag: string | undefined): string {
   return tag && IMAGE_LIKE_TAGS.has(tag) ? BLANK_IMAGE : "about:blank";
 }
 
+// An @font-face src that lost all of its captured candidates must resolve to
+// nothing without fetching: a local() lookup that cannot match misses silently,
+// so the text falls back down the font stack with zero network or decode work.
+const UNCAPTURED_FONT_SRC = 'local("rec-uncaptured-font")';
+
+// Split a font-face src list on top-level commas only — url(data:...;base64,...)
+// bodies contain commas that must not break a candidate apart.
+function splitFontSrcCandidates(value: string): string[] {
+  const candidates: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < value.length; index++) {
+    const character = value[index];
+    if (character === "(") depth++;
+    else if (character === ")") depth = Math.max(0, depth - 1);
+    else if (character === "," && depth === 0) {
+      candidates.push(value.slice(start, index));
+      start = index + 1;
+    }
+  }
+  candidates.push(value.slice(start));
+  return candidates.map((candidate) => candidate.trim()).filter(Boolean);
+}
+
+// @font-face sources must never be swapped for the blank image: the browser
+// downloads whatever url() the src names and tries to decode it as a font, so a
+// GIF placeholder yields an OTS parsing error — re-triggered on every stylesheet
+// re-application until the flood hangs the replay. Drop uncaptured candidates
+// from the src list instead.
+function blankFontFaceSources(css: string): string {
+  return css.replace(/@font-face\s*\{[^}]*\}/gi, (block) =>
+    block.replace(/src\s*:\s*([^;}]+)/gi, (whole, value: string) => {
+      const kept = splitFontSrcCandidates(value).filter((candidate) => {
+        const url = /url\(\s*(['"]?)([^'")]+)\1\s*\)/i.exec(candidate);
+        return !url || !isFetchableAbsolute(url[2]);
+      });
+      const next = kept.join(", ") || UNCAPTURED_FONT_SRC;
+      return next === value.trim() ? whole : `src: ${next}`;
+    }));
+}
+
 // Rewrite absolute url(...) and @import targets inside a CSS string. rrweb inlines
 // stylesheets (as `_cssText` attributes and <style> text), so their background
 // images, fonts and imports leak the recorded origin just like element sources.
@@ -46,9 +87,11 @@ function blankCssUrls(css: string): string {
   // Drop absolute @imports first: the generic url() pass below would otherwise
   // rewrite an `@import url(http://...)` into `@import url(data:...)`, leaving a
   // live (if now harmless) import in place. Handles both url() and string forms.
-  return css
+  // Font-face sources go next, before the url() pass can hand a font slot the
+  // blank image — after that pass no absolute URL remains inside those blocks.
+  return blankFontFaceSources(css
     .replace(/@import\s+(?:url\(\s*)?(['"]?)([^'")]+)\1\s*\)?\s*;?/gi, (whole, _quote: string, inner: string) =>
-      isFetchableAbsolute(inner) ? "" : whole)
+      isFetchableAbsolute(inner) ? "" : whole))
     .replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, (whole, _quote: string, inner: string) =>
       isFetchableAbsolute(inner) ? `url(${BLANK_IMAGE})` : whole);
 }
