@@ -13,9 +13,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a99bff; outline-
 
 /* Stage */
 .replay-screen { position: relative; width: 100%; height: 100%; overflow: hidden; background: #111218; }
-/* When the assistant is open the stage yields it a column instead of being covered. */
-#app { transition: width .22s ease; }
-body.chat-open #app { width: calc(100% - 404px); }
+/* The assistant floats over the stage as a glass overlay: opening or closing it
+   leaves the replay exactly where and how big it was, rather than resizing it. */
 .replay-screen #replay {
   position: relative;
   display: flex;
@@ -860,7 +859,6 @@ body.chat-open #app { width: calc(100% - 404px); }
 .chat-panel.is-busy .chat-stop-icon { display: block; }
 
 @media (max-width: 900px) {
-  body.chat-open #app { width: 100%; }
   .chat-panel { top: 10px; right: 10px; bottom: 10px; left: auto; }
 }
 
