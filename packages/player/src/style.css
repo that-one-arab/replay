@@ -491,6 +491,21 @@ body.chat-open #app { width: calc(100% - 404px); }
   letter-spacing: .02em;
 }
 .chapters-panel header span { padding: 1px 6px; color: #171720; background: #b7abff; border-radius: 999px; font: 9px "DM Mono"; }
+.chapters-collapse {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  color: rgba(255, 255, 255, .6);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color .15s ease, background .15s ease;
+}
+.chapters-collapse:hover { color: #fff; background: rgba(255, 255, 255, .1); }
 .chapters-panel ol { flex: 1; margin: 0; padding: 0 8px 10px; overflow-y: auto; list-style: none; }
 .chapters-panel li + li { margin-top: 2px; }
 .chapters-panel ol button {
