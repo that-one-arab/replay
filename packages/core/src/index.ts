@@ -10,4 +10,4 @@ export type { ViewportFit, ViewportMeasurement } from "./viewport.js";
 export type { ReplayStep, ReplaySummary } from "./summary.js";
 export type { ExportResult, ImportResult } from "./bundle.js";
 export type { BrowserConfig, ChatConfig, ChatProviderName, IdleMode, ReplayDefaults, ResolvedReplayConfig } from "./config.js";
-export type { ActionInput, AgentAction, BrowserStatus, CaptureSummary, Marker, NavigationEvent, Outcome, CapturedAsset, ReplayManifest, StartOptions, StopResult, TabEvent } from "./types.js";
+export type { ActionInput, AgentAction, BrowserStatus, CaptureSummary, Defect, Hold, Marker, NavigationEvent, Outcome, CapturedAsset, ReplayManifest, StartOptions, StopResult, TabEvent } from "./types.js";

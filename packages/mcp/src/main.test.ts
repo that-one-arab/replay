@@ -95,7 +95,7 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
     const initialized = await client.request("initialize", { protocolVersion: "2025-03-26" });
     assert.equal(initialized.result.serverInfo.name, "replay-mcp");
     const listed = await client.request("tools/list", {});
-    assert.deepEqual(listed.result.tools.map((tool: { name: string }) => tool.name), ["capture_browser_ensure", "capture_attach_browser", "capture_start", "capture_marker", "capture_status", "capture_stop", "replay_share", "replay_overview", "replay_steps", "replay_fetch"]);
+    assert.deepEqual(listed.result.tools.map((tool: { name: string }) => tool.name), ["capture_browser_ensure", "capture_attach_browser", "capture_start", "capture_marker", "capture_highlight", "capture_status", "capture_stop", "replay_share", "replay_overview", "replay_steps", "replay_fetch"]);
     const noBrowser = await client.request("tools/call", { name: "capture_start", arguments: { title: "No browser" } });
     assert.equal(noBrowser.result.isError, true);
     assert.match(noBrowser.result.content[0].text, /capture_browser_ensure/);

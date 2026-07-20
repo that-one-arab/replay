@@ -71,6 +71,39 @@ const tools: JsonObject[] = [
     },
   },
   {
+    name: "capture_highlight",
+    description: "Point the viewer at a specific element during the replay, optionally with an expected-vs-actual defect claim. The element is resolved to a DOM node at capture time so the player rings (and, if the viewer has the camera on, zooms into) the exact thing that is wrong. Drop one at the defect during the performance pass.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        element: {
+          type: "object",
+          description: "How to identify the target element. Prefer text (the element's visible text, readable from browser_snapshot); selector is a CSS-selector fallback.",
+          properties: {
+            text: { type: "string", description: "Visible text of the target element." },
+            selector: { type: "string", description: "CSS selector for the target element." },
+          },
+          additionalProperties: false,
+        },
+        defect: {
+          type: "object",
+          description: "An expected-vs-actual claim pinned to the element. Mutually exclusive with note.",
+          required: ["expected", "actual"],
+          properties: {
+            expected: { type: "string", description: "What the element should say or be." },
+            actual: { type: "string", description: "What the element actually says or is." },
+          },
+          additionalProperties: false,
+        },
+        note: { type: "string", description: "A freeform caption for the highlight. Mutually exclusive with defect." },
+        hold: { type: "string", enum: ["beat", "until_ack", "none"], description: "Playback behavior at this highlight: beat pauses ~2s, until_ack waits for the viewer to continue, none does not pause. Defaults to beat." },
+        color: { type: "string", enum: ["default", "yellow", "green"], description: "Optional emphasis color." },
+        label: { type: "string", description: "Optional short title; derived from defect/note if omitted." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "capture_status",
     description: "Read local capture and browser attachment status. Includes `viewport` (the live emulated viewport vs. the display); when `viewport.clipped` is true the page renders off-screen, and `viewport.recommendedViewport` is a safe size to resize to. Clipping is also reported in `configWarnings`.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -216,6 +249,7 @@ async function callTool(name: string, argumentsValue: JsonObject): Promise<JsonO
       case "capture_attach_browser": return toolResult(await attachBrowser(argumentsValue));
       case "capture_start": return toolResult(await startCapture(argumentsValue));
       case "capture_marker": return toolResult(await addMarker(argumentsValue));
+      case "capture_highlight": return toolResult(await addHighlight(argumentsValue));
       case "capture_status": return toolResult(await captureStatus());
       case "capture_stop": return toolResult(await stopCapture(argumentsValue));
       case "replay_share": return toolResult(await shareReplay(argumentsValue));
@@ -372,6 +406,21 @@ async function addMarker(argumentsValue: JsonObject) {
   const color = optionalColor(argumentsValue.color);
   await api("POST", "/api/sessions/marker", { label, note: optionalString(argumentsValue.note), placement, ...(color ? { color } : {}) });
   return { ok: true, label, placement, ...(color ? { color } : {}) };
+}
+
+async function addHighlight(argumentsValue: JsonObject) {
+  const element = argumentsValue.element;
+  const defect = argumentsValue.defect;
+  const result = object(await api("POST", "/api/sessions/highlight", {
+    label: optionalString(argumentsValue.label),
+    note: optionalString(argumentsValue.note),
+    hold: optionalString(argumentsValue.hold),
+    color: optionalString(argumentsValue.color),
+    ...(element && typeof element === "object" && !Array.isArray(element) ? { element: element as JsonObject } : {}),
+    ...(defect && typeof defect === "object" && !Array.isArray(defect) ? { defect: defect as JsonObject } : {}),
+  }));
+  const nodeId = typeof result.node_id === "number" ? result.node_id : null;
+  return { ok: true, node_id: nodeId };
 }
 
 async function captureStatus() {

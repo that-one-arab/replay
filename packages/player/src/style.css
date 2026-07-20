@@ -1106,3 +1106,110 @@ body.onboarding-active #chapters-panel { display: none; }
   outline: 2px solid #b7abff;
   outline-offset: 2px;
 }
+
+/* Highlight ring + defect overlay (agent-authored capture_highlight).
+   The ring itself is injected into the replay iframe via insertStyleRules in
+   main.ts (style.css cannot reach in-document nodes); only the callout, which
+   lives on the wrapper, is styled here. */
+.highlight-callout {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 16px));
+  z-index: 20;
+  max-width: 280px;
+  min-width: 168px;
+  padding: 9px 11px;
+  background: rgba(13, 14, 20, .92);
+  border: 1px solid rgba(196, 189, 255, .28);
+  border-radius: 11px;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, .5);
+  backdrop-filter: blur(12px);
+  font: 12.5px/1.4 Manrope, system-ui, sans-serif;
+  color: #ece9ff;
+  pointer-events: none;
+}
+.highlight-callout::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  transform: translateX(-50%) rotate(45deg);
+  width: 10px;
+  height: 10px;
+  background: rgba(13, 14, 20, .92);
+  border-right: 1px solid rgba(196, 189, 255, .28);
+  border-bottom: 1px solid rgba(196, 189, 255, .28);
+}
+.highlight-callout .hl-row { display: flex; gap: 8px; align-items: baseline; }
+.highlight-callout .hl-row + .hl-row { margin-top: 5px; }
+.highlight-callout .hl-label {
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: #8d85b8;
+  flex: 0 0 58px;
+}
+.highlight-callout .hl-value { flex: 1; word-break: break-word; }
+.highlight-callout .hl-expected .hl-value { color: #9affc4; }
+.highlight-callout .hl-actual .hl-value { color: #ff8a8a; }
+
+/* Hold-continue affordance shown when a highlight holds for viewer ack. */
+.hold-continue {
+  position: absolute;
+  left: 50%;
+  bottom: 132px;
+  transform: translateX(-50%);
+  z-index: 6;
+  padding: 9px 18px;
+  border: 1px solid rgba(196, 189, 255, .4);
+  border-radius: 999px;
+  background: rgba(183, 171, 255, .16);
+  color: #ece9ff;
+  font: 700 13px/1 Manrope, system-ui, sans-serif;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .45);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s ease;
+}
+.hold-continue.is-visible { opacity: 1; pointer-events: auto; }
+.hold-continue:hover { background: rgba(183, 171, 255, .26); }
+
+/* Chapter defect block + highlight indicator dot. */
+.chapter-defect { margin: 6px 0 0; display: grid; gap: 3px; }
+.chapter-defect .defect-row { display: flex; gap: 6px; align-items: baseline; font-size: 11px; }
+.chapter-defect .defect-row b {
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 9.5px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: #8d85b8;
+  font-weight: 600;
+  flex: 0 0 52px;
+}
+#chapters-panel [data-chapter-highlight] b::after {
+  content: "◉";
+  margin-left: 4px;
+  color: #b7abff;
+  font-size: 9px;
+}
+
+/* End-card actions row. */
+.session-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 4px; }
+.session-actions .ask-ai {
+  padding: 10px 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(196, 189, 255, .35);
+  background: rgba(183, 171, 255, .14);
+  color: #ece9ff;
+  font: 600 13px/1 Manrope, system-ui, sans-serif;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: background .15s ease;
+}
+.session-actions .ask-ai:hover { background: rgba(183, 171, 255, .24); }
+
+/* Caption emphasis when it carries an expected/actual claim. */
+.caption-card.has-defect { border-left-color: #ff8a8a; }
+.caption-card.has-defect strong { color: #ffb3b3; }

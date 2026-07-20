@@ -6,7 +6,7 @@ import type { Browser, BrowserContext, Frame, Page, Request as PlaywrightRequest
 import { chromium } from "playwright-core";
 import { SessionStore } from "./storage.js";
 import { evaluateViewportFit, type ViewportFit } from "./viewport.js";
-import type { ActionInput, BrowserStatus, Marker, NavigationEvent, ReplayManifest, StartOptions, StopResult } from "./types.js";
+import type { ActionInput, BrowserStatus, Defect, Hold, Marker, NavigationEvent, ReplayManifest, StartOptions, StopResult } from "./types.js";
 
 const require = createRequire(import.meta.url);
 const FLUSH_MS = 500;
@@ -125,6 +125,49 @@ export class Capture {
     const marker: Marker = { t_ms: Date.now() - this.startedAt, label, note, placement, ...(color ? { color } : {}) };
     this.store.addMarker(marker);
     await this.broadcastMarker(label, note, placement);
+  }
+
+  /**
+   * Drop a highlight marker that pins to a DOM element and may carry an
+   * expected-vs-actual defect claim. The element is resolved to an rrweb node
+   * id at capture time via record.mirror; the player resolves it back to the
+   * replayed node with replayer.getMirror().getNode(node_id). Falls back to a
+   * marker with no node_id when the element cannot be found.
+   */
+  async highlight(input: { label?: string; note?: string; defect?: Defect; hold?: Hold; color?: Marker["color"]; element?: { selector?: string; text?: string } }): Promise<{ node_id: number | null }> {
+    if (!this.store) throw new Error("No capture is active");
+    const node_id = await this.resolveNodeId(input.element?.selector, input.element?.text);
+    // When no explicit label is given, derive one so the chapter list always has
+    // a title: the observed wrong value for a defect, else the note, else a default.
+    const deriveFromNote = !input.label && !input.defect && Boolean(input.note);
+    const label = input.label ?? (input.defect ? input.defect.actual : input.note ?? "Highlight");
+    const marker: Marker = {
+      t_ms: Date.now() - this.startedAt,
+      label,
+      ...(deriveFromNote ? {} : input.note ? { note: input.note } : {}),
+      ...(input.defect ? { defect: input.defect } : {}),
+      ...(input.hold ? { hold: input.hold } : {}),
+      ...(input.color ? { color: input.color } : {}),
+      ...(node_id != null ? { node_id } : {}),
+    };
+    this.store.addMarker(marker);
+    await this.broadcastMarker(label, input.note);
+    return { node_id };
+  }
+
+  /** Resolve a selector/text target to an rrweb node id on the first captured page that has it. */
+  private async resolveNodeId(selector?: string, text?: string): Promise<number | null> {
+    if (!selector && !text) return null;
+    for (const { page } of this.pages.values()) {
+      try {
+        const id = await page.evaluate(({ selector, text }) => {
+          const api = window as typeof window & { __replayResolveNodeId?: (selector?: string, text?: string) => number | null };
+          return api.__replayResolveNodeId?.(selector, text) ?? null;
+        }, { selector, text });
+        if (id != null) return id;
+      } catch { /* page may be navigating; try the next */ }
+    }
+    return null;
   }
 
   /**
@@ -684,6 +727,18 @@ async function captureScript() {
       }
     };
     window.__replayAddMarker = (label, note, placement) => rrwebRecord?.record?.addCustomEvent?.("replay-marker", { label, note, placement });
+    window.__replayResolveNodeId = (selector, text) => {
+      const rr = window.rrweb || window.rrwebRecord;
+      if (!rr?.record?.mirror) return null;
+      let el = null;
+      if (selector) { try { el = document.querySelector(selector); } catch {}
+      if (!el && text) {
+        const all = Array.from(document.querySelectorAll("body *"));
+        el = all.find((e) => e.children.length === 0 && (e.textContent || "").trim() === text.trim())
+          || all.find((e) => (e.textContent || "").includes(text));
+      }
+      return el ? rr.record.mirror.getId(el) : null;
+    };
     window.__replayStop = async () => { await flush(); stopTabFocus?.(); stopTabFocus = undefined; stop?.(); stop = undefined; };
   })();`;
 }

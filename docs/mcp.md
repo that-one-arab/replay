@@ -2,8 +2,8 @@
 
 `replay-mcp` is a local stdio MCP server. It gives an MCP-capable coding agent one
 place to drive and capture a browser: the stock Playwright MCP browser tools
-(embedded from a pinned `@playwright/mcp`) plus ten structured replay
-tools. It never exposes the capture beyond the local machine; the `replay_*`
+(embedded from a pinned `@playwright/mcp`) plus eleven structured replay
+tools (the `capture_*` / `replay_*` set). It never exposes the capture beyond the local machine; the `replay_*`
 read tools below consume replays that were already explicitly shared.
 
 | Tool | Purpose |
@@ -13,6 +13,7 @@ read tools below consume replays that were already explicitly shared.
 | `capture_attach_browser` | Attaches Replay to an explicitly supplied loopback CDP endpoint; Replay never stops that external browser. |
 | `capture_start` | Starts a replay on an attached browser, but only after a navigated in-scope page exists. |
 | `capture_marker` | Adds a labelled checkpoint that belongs to no single browser action. |
+| `capture_highlight` | Pins the viewer to a specific element (by visible text or selector), optionally with an expected-vs-actual defect claim and a playback `hold`. Drop one at the defect during the performance pass. |
 | `capture_status` | Returns browser ownership, endpoint, page readiness, and active capture counts. |
 | `capture_stop` | Stops capture and returns its ID, local bundle details, portable artifact path, and replay URL. With `REPLAY_SHARE_URL`, it also publishes automatically and returns `shareUrl`; `shareError` preserves the local handoff if upload fails. |
 | `replay_share` | Explicitly uploads a stopped replay to `REPLAY_SHARE_URL` and returns its public bearer link plus `summaryUrl`, the agent-readable form of the same link. |

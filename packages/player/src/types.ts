@@ -3,7 +3,9 @@
  * envelope the player consumes, and the playback projection derived from them.
  */
 
-export type Marker = { t_ms: number; label: string; note?: string; placement?: "after_previous" | "before_next"; color?: "yellow" | "green"; action_id?: string };
+export type Defect = { expected: string; actual: string };
+export type Hold = "beat" | "until_ack" | "none";
+export type Marker = { t_ms: number; label: string; note?: string; placement?: "after_previous" | "before_next"; color?: "yellow" | "green"; action_id?: string; node_id?: number; defect?: Defect; hold?: Hold };
 export type AgentAction = { id: string; tool: string; args_summary?: string; started_at_ms: number; finished_at_ms: number; ok: boolean };
 export type Segment = { id: string; page_url: string; clock_offset_ms: number };
 export type TabEvent = { t_ms: number; segment_id: string; type: "opened" | "focused" | "closed" };

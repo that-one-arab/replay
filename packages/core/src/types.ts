@@ -1,5 +1,14 @@
 export type Outcome = "reproduced" | "verified" | "other";
 
+/** An expected-vs-actual defect claim pinned to an element by a highlight. */
+export interface Defect {
+  expected: string;
+  actual: string;
+}
+
+/** How the player behaves when playback reaches a highlight marker. */
+export type Hold = "beat" | "until_ack" | "none";
+
 export interface Marker {
   t_ms: number;
   label: string;
@@ -14,6 +23,16 @@ export interface Marker {
   color?: "yellow" | "green";
   /** The agent action this marker was captured atomically with, when it was. */
   action_id?: string;
+  /**
+   * rrweb node id of the element this marker points at, when it does. Resolved
+   * at capture time via rrweb's record.mirror; the player resolves it back to a
+   * replayed node with replayer.getMirror().getNode(node_id).
+   */
+  node_id?: number;
+  /** An expected-vs-actual defect claim. Mutually exclusive with `note`. */
+  defect?: Defect;
+  /** How the player should behave when playback reaches this marker. */
+  hold?: Hold;
 }
 
 /** One embedded browser tool call the agent issued while capturing. */

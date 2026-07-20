@@ -16,7 +16,7 @@
       "Interactive",
       "Write"
     ],
-    "defaultPrompt": "Reproduce this browser bug and return a replay."
+    "defaultPrompt": "Reproduce this browser bug and return a replay. One issue per replay — explore first without recording, then record a clean performance pass, and point at the defect with capture_highlight."
   },
   "mcpServers": "./.mcp.json"
 }

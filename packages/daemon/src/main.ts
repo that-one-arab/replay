@@ -5,7 +5,7 @@ import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
-import { Capture, exportPath, exportSession, replayHome, resolveReplayConfig, sessionsDir, sessionPath, uploadReplay, type ActionInput, type BrowserConfig, type Outcome, type ReplayManifest, type StartOptions } from "@replay/core";
+import { Capture, exportPath, exportSession, replayHome, resolveReplayConfig, sessionsDir, sessionPath, uploadReplay, type ActionInput, type BrowserConfig, type Defect, type Hold, type Outcome, type ReplayManifest, type StartOptions } from "@replay/core";
 import { ChatManager, CHAT_TOOLS } from "./chat.js";
 
 const port = Number(process.env.REPLAY_PORT ?? 7717);
@@ -64,6 +64,9 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   if (request.method === "POST" && url.pathname === "/api/sessions/marker") {
     await capture.marker(String(body?.label ?? ""), optionalString(body?.note), markerPlacement(body?.placement), markerColor(body?.color));
     return reply(response, 204);
+  }
+  if (request.method === "POST" && url.pathname === "/api/sessions/highlight") {
+    return reply(response, 200, await capture.highlight(highlightInput(body)));
   }
   if (request.method === "POST" && url.pathname === "/api/sessions/action") {
     return reply(response, 200, await capture.action(actionInput(body)));
@@ -553,6 +556,31 @@ function actionInput(body: Record<string, unknown> | undefined): ActionInput {
   };
 }
 function markerColor(value: unknown): "yellow" | "green" | undefined { if (value === undefined || value === "default") return undefined; if (value === "yellow" || value === "green") return value; throw new Error("Marker color must be yellow or green."); }
+function holdOf(value: unknown): Hold { if (value === undefined) return "beat"; if (value === "beat" || value === "until_ack" || value === "none") return value; throw new Error("Hold must be beat, until_ack, or none."); }
+function defectOf(value: unknown): Defect | undefined {
+  if (value === undefined) return undefined;
+  const obj = asObject(value);
+  const expected = optionalString(obj.expected);
+  const actual = optionalString(obj.actual);
+  if (!expected || !actual) throw new Error("A defect requires both expected and actual.");
+  return { expected, actual };
+}
+function highlightInput(body: Record<string, unknown> | undefined) {
+  const defect = defectOf(body?.defect);
+  const note = optionalString(body?.note);
+  if (defect && note) throw new Error("Provide either a defect or a note, not both.");
+  const elementObj = asObject(body?.element);
+  const selector = optionalString(elementObj.selector);
+  const text = optionalString(elementObj.text);
+  return {
+    label: optionalString(body?.label),
+    note,
+    defect,
+    hold: holdOf(body?.hold),
+    color: markerColor(body?.color),
+    element: selector || text ? { ...(selector ? { selector } : {}), ...(text ? { text } : {}) } : undefined,
+  };
+}
 function isLoopbackEndpoint(value: string) {
   try { const url = new URL(value); return url.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(url.hostname); } catch { return false; }
 }

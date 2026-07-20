@@ -145,6 +145,39 @@ test("the daemon exits with a clear error when its port is already taken", async
   }
 });
 
+test("capture_highlight validates defect claims before reaching the capture", async () => {
+  const home = await mkdtemp(join(tmpdir(), "replay-daemon-highlight-"));
+  const port = await unusedPort();
+  const daemon = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], {
+    env: { ...process.env, REPLAY_HOME: home, REPLAY_PORT: String(port) },
+    stdio: "ignore",
+  });
+  const endpoint = `http://127.0.0.1:${port}`;
+  try {
+    await waitForHealth(endpoint);
+    // A defect must carry both halves; validation runs before the capture is touched.
+    const halfDefect = await request(endpoint, "/api/sessions/highlight", { element: { text: "1 of 3" }, defect: { expected: "Step 2 of 3" } });
+    assert.equal(halfDefect.status, 500);
+    assert.match(String(halfDefect.body.error), /both expected and actual/);
+    // A defect and a note are mutually exclusive.
+    const both = await request(endpoint, "/api/sessions/highlight", { defect: { expected: "a", actual: "b" }, note: "c" });
+    assert.equal(both.status, 500);
+    assert.match(String(both.body.error), /either a defect or a note/);
+    // An invalid hold value is rejected.
+    const badHold = await request(endpoint, "/api/sessions/highlight", { note: "x", hold: "forever" });
+    assert.equal(badHold.status, 500);
+    assert.match(String(badHold.body.error), /beat, until_ack, or none/);
+    // A well-formed highlight passes validation; with no capture active it fails
+    // at the capture guard instead, proving the schema was accepted.
+    const valid = await request(endpoint, "/api/sessions/highlight", { element: { text: "1 of 3 completed" }, defect: { expected: "Step 2 of 3", actual: "1 of 3 completed" }, hold: "until_ack" });
+    assert.equal(valid.status, 500);
+    assert.match(String(valid.body.error), /No capture is active/);
+  } finally {
+    await stop(daemon);
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 async function unusedPort() {
   const server = createServer();
   server.listen(0, "127.0.0.1");

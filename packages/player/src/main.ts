@@ -3,13 +3,13 @@ import "rrweb/dist/style.css";
 import "./style.css";
 import { closeChat, initChat, registerReplayControl, wireChatToggle } from "./chat.js";
 import { dismissOnboarding, startOnboardingIfDue } from "./onboarding.js";
-import { EventType, IncrementalSource, MouseInteraction, type AgentAction, type IdleMode, type Manifest, type Marker, type NavigationEvent, type ReplayDefaults, type ReplayEvent, type Segment, type TabEvent, type TimelineIdleRange } from "./types.js";
+import { EventType, IncrementalSource, MouseInteraction, type AgentAction, type Defect, type IdleMode, type Manifest, type Marker, type NavigationEvent, type ReplayDefaults, type ReplayEvent, type Segment, type TabEvent, type TimelineIdleRange } from "./types.js";
 import { clamp, escape, format, formatDuration, nearlyEqual } from "./format.js";
 import { CURSOR_APPROACH_MS, humanizeEvents, isRealPoint, withCursorLeadIns } from "./humanize.js";
 import { RELOAD_CONTEXT_MS, closedAt, describeAction, nextFocusForSegment, replayViewport, resolveMarkerTimes, segmentAtTime, segmentLabel, sessionEventTime, tabEvents } from "./manifest.js";
 import { DEFAULT_PLAYBACK_SPEED, projectPlayback, resolvedReplayDefaults } from "./projection.js";
 import { createCamera } from "./camera.js";
-import { elementCenter, isElementLike, makeCursorPlacer, revealCursorOnFirstMove, spawnClickRipple } from "./cursor.js";
+import { elementCenter, isElementLike, makeCursorPlacer, revealCursorOnFirstMove, spawnClickRipple, type ElementLike } from "./cursor.js";
 import { sanitizeReplayEvents } from "./sanitize.js";
 
 const TAB_FOCUS_DELAY_MS = 700;
@@ -18,6 +18,8 @@ const MIN_REFRESH_INDICATOR_MS = 160;
 const MAX_REFRESH_INDICATOR_MS = 1_500;
 const TIMELINE_TOOLTIP_DELAY_MS = 550;
 const CAPTION_LINGER_MS = 4_500;
+// How long a `beat` hold lingers on a defect before playback auto-continues.
+const HOLD_BEAT_MS = 2_000;
 const UI_IDLE_MS = 3_200;
 const SEEK_STEP_MS = 5_000;
 // Arrow-key marker navigation buffers. Going back, treat any marker within this
@@ -42,6 +44,10 @@ let activePlayback: AbortController | undefined;
 let currentSessionTime = 0;
 let lastNarrationKey: string | undefined;
 let captionTimer: number | undefined;
+// The active-marker highlight (ring + defect overlay) is driven by syncNarration,
+// but it needs the live replayer/camera — so each replay() pass installs a
+// driver here. Undefined until the first pass and after teardown.
+let highlightDriver: ((marker: Marker | undefined) => void) | undefined;
 let chaptersOpen: boolean | undefined;
 let introDismissed = false;
 // The spotlight tour starts once after the first replay shell renders and is
@@ -206,14 +212,15 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
   const introCard = introDismissed
     ? ""
     : `<div class="session-overlay is-visible" id="intro-card"><div class="session-card"><span class="session-kicker"><i></i>Replay</span><h1>${escape(manifest.title)}</h1>${sessionMeta}<p class="session-hint">Press play — or space — to watch the captured journey</p></div></div>`;
-  const endCard = `<div class="session-overlay" id="end-card"><div class="session-card"><span class="session-kicker"><i></i>Replay complete</span><h1>${escape(manifest.title)}</h1>${sessionMeta}${manifest.notes ? `<p class="session-notes">${escape(manifest.notes)}</p>` : ""}<button class="watch-again" id="watch-again" type="button">Watch again</button></div></div>`;
+  const endCard = `<div class="session-overlay" id="end-card"><div class="session-card"><span class="session-kicker"><i></i>Replay complete</span><h1>${escape(manifest.title)}</h1>${sessionMeta}${manifest.notes ? `<p class="session-notes">${escape(manifest.notes)}</p>` : ""}<div class="session-actions"><button class="watch-again" id="watch-again" type="button">Watch again</button><button class="ask-ai" id="ask-ai" type="button" hidden>Ask AI about this replay</button></div></div></div>`;
   const chaptersPanel = manifest.markers.length
     ? `<aside class="chapters-panel" id="chapters-panel" aria-label="Replay chapters"><header>Chapters<span>${manifest.markers.length}</span><button class="chapters-collapse" id="chapters-collapse" type="button" aria-label="Collapse chapters" title="Collapse chapters"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></header><ol>${manifest.markers.map((marker) => {
       const action = marker.action_id ? actionsById(manifest).get(marker.action_id) : undefined;
-      return `<li><button type="button" data-chapter="${marker.t_ms}"${marker.color ? ` data-chapter-color="${marker.color}"` : ""} aria-current="false"><b>${format(marker.t_ms)}</b><span><strong>${escape(marker.label)}</strong>${marker.note ? `<p>${escape(marker.note)}</p>` : ""}${action ? `<code>${escape(describeAction(action))}</code>` : ""}</span></button></li>`;
+      const defect = marker.defect ? `<p class="chapter-defect"><span class="defect-row"><b>Expected</b>${escape(marker.defect.expected)}</span><span class="defect-row"><b>Actual</b>${escape(marker.defect.actual)}</span></p>` : "";
+      return `<li><button type="button" data-chapter="${marker.t_ms}"${marker.color ? ` data-chapter-color="${marker.color}"` : ""}${marker.node_id != null ? ` data-chapter-highlight` : ""} aria-current="false"><b>${format(marker.t_ms)}</b><span><strong>${escape(marker.label)}</strong>${marker.note ? `<p>${escape(marker.note)}</p>` : ""}${defect}${action ? `<code>${escape(describeAction(action))}</code>` : ""}</span></button></li>`;
     }).join("")}</ol></aside>`
     : "";
-  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="state-flash" id="state-flash" aria-hidden="true"><span></span></div><b id="stage-status" class="sr-only" role="status">Paused</b>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div>${introCard}${endCard}<section class="control-deck" aria-label="Browser replay controls"><div class="deck-island"><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div>${speedMenu}${settingsMenu}${shareControl}${chatToggle}${chaptersToggle}</div></div></section>${chaptersPanel}<div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
+  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="state-flash" id="state-flash" aria-hidden="true"><span></span></div><b id="stage-status" class="sr-only" role="status">Paused</b>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div><button class="hold-continue" id="hold-continue" type="button" aria-label="Continue replay">Continue ▸</button>${introCard}${endCard}<section class="control-deck" aria-label="Browser replay controls"><div class="deck-island"><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div>${speedMenu}${settingsMenu}${shareControl}${chatToggle}${chaptersToggle}</div></div></section>${chaptersPanel}<div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
 }
 
 async function detectShareAvailability() {
@@ -328,7 +335,12 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
         node.addEventListener("keydown", (event) => replayDocumentKeyboardHandler?.(event as KeyboardEvent), true);
       },
     }] as never[],
-    insertStyleRules: [".replay-focus-target{outline:2px solid rgba(105,86,255,.9)!important;outline-offset:3px!important;box-shadow:0 0 0 6px rgba(105,86,255,.16)!important;border-radius:4px!important}"]
+    insertStyleRules: [
+      ".replay-focus-target{outline:2px solid rgba(105,86,255,.9)!important;outline-offset:3px!important;box-shadow:0 0 0 6px rgba(105,86,255,.16)!important;border-radius:4px!important}",
+      // Injected into the replay iframe (style.css can't reach in-document nodes),
+      // so the highlight ring renders on the captured element itself.
+      ".replay-highlight{outline:2px solid #b7abff!important;outline-offset:3px!important;box-shadow:0 0 0 6px rgba(183,171,255,.22),0 6px 22px rgba(0,0,0,.35)!important;border-radius:6px!important}",
+    ]
   });
   fitReplay(replayer, viewport);
   const camera = createCamera(mount, replayer, viewport, lifetime, cameraZoomEnabled);
@@ -348,6 +360,11 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
   let lastNavigationCheck = requestedSessionTime;
   const scrubber = document.querySelector<HTMLInputElement>("#scrubber")!;
   const nextFocus = nextFocusForSegment(manifest, segment.id, requestedSessionTime);
+  // Highlight `hold` pauses playback at a defect so it can land. lastHoldCheckMs
+  // tracks how far forward we've evaluated holds, mirroring lastNavigationCheck.
+  let lastHoldCheckMs = requestedSessionTime;
+  let holdTimer: number | undefined;
+  let holdGate: Marker | undefined;
   const updateTimelinePosition = (time: number) => {
     const position = clamp(time / duration * 100, 0, 100);
     currentSessionTime = time;
@@ -370,10 +387,13 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
     // A direct marker/timeline jump is a new playback baseline. Do not announce
     // navigation transitions that were crossed before the selected point.
     lastNavigationCheck = start;
+    clearHold();
+    lastHoldCheckMs = start;
     updateTimelinePosition(start);
     replayer.play(start - tabStart);
   };
   const pausePlayback = () => {
+    clearHold();
     if (bridgingTabs) {
       bridgingTabs = false;
       if (tabFocusTimer) window.clearTimeout(tabFocusTimer);
@@ -467,6 +487,12 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
       // pause just set, or the refresh ends on its own a moment later.
       if (playing) announceNavigations(time);
       syncNarration(manifest.markers, time);
+      positionCallout();
+      if (playing) {
+        const holdMarker = manifest.markers.find((marker) => (marker.hold === "beat" || marker.hold === "until_ack") && marker.t_ms > lastHoldCheckMs && marker.t_ms <= time);
+        if (holdMarker) triggerHold(holdMarker);
+        lastHoldCheckMs = Math.max(lastHoldCheckMs, time);
+      }
       if (playing && nextFocus && time >= nextFocus.t_ms) {
         announceAndFocusNewTab(nextFocus, time);
         return;
@@ -538,6 +564,60 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
     target.classList.add("replay-focus-target");
     window.setTimeout(() => target.classList.remove("replay-focus-target"), isFocus ? 1_400 : 900);
   });
+  // Highlight ring + defect overlay for the active marker. syncNarration calls
+  // the installed driver so it tracks both playback and seeks. The callout lives
+  // inside the wrapper so the camera transform applies to it for free.
+  const highlightCallout = document.createElement("div");
+  highlightCallout.className = "highlight-callout";
+  highlightCallout.setAttribute("aria-hidden", "true");
+  let highlightedNode: ElementLike | undefined;
+  const positionCallout = () => {
+    if (!highlightedNode) return;
+    const center = elementCenter(highlightedNode);
+    if (!center) return;
+    highlightCallout.style.left = `${center.x}px`;
+    highlightCallout.style.top = `${center.y}px`;
+  };
+  const clearHighlight = () => {
+    if (highlightedNode) { highlightedNode.classList.remove("replay-highlight"); highlightedNode = undefined; }
+    highlightCallout.remove();
+  };
+  highlightDriver = (marker) => {
+    clearHighlight();
+    if (lifetime.signal.aborted || !marker || marker.node_id == null) return;
+    const node = replayer.getMirror().getNode(marker.node_id);
+    if (!node || !isElementLike(node)) return;
+    highlightedNode = node;
+    node.classList.add("replay-highlight");
+    if (cameraZoomEnabled) { const center = elementCenter(node); if (center) camera.noteInteraction(center.x, center.y); }
+    if (marker.defect) {
+      highlightCallout.innerHTML = `<div class="hl-row hl-expected"><span class="hl-label">Expected</span><span class="hl-value">${escape(marker.defect.expected)}</span></div><div class="hl-row hl-actual"><span class="hl-label">Actual</span><span class="hl-value">${escape(marker.defect.actual)}</span></div>`;
+      replayer.wrapper.appendChild(highlightCallout);
+      positionCallout();
+    }
+  };
+  lifetime.signal.addEventListener("abort", clearHighlight, { once: true });
+  // Hold: pause at a defect marker so it lands before playback continues.
+  const clearHold = () => {
+    if (holdTimer) { window.clearTimeout(holdTimer); holdTimer = undefined; }
+    if (holdGate) { holdGate = undefined; document.querySelector("#hold-continue")?.classList.remove("is-visible"); }
+  };
+  const triggerHold = (marker: Marker) => {
+    clearHold();
+    replayer.pause();
+    if (marker.hold === "beat") {
+      holdTimer = window.setTimeout(() => { holdTimer = undefined; replayer.play(replayer.getCurrentTime()); }, HOLD_BEAT_MS);
+    } else {
+      holdGate = marker;
+      document.querySelector("#hold-continue")?.classList.add("is-visible");
+    }
+  };
+  const continueFromHold = () => {
+    if (!holdGate && !holdTimer) return;
+    clearHold();
+    replayer.play(replayer.getCurrentTime());
+  };
+  document.querySelector<HTMLButtonElement>("#hold-continue")!.onclick = () => continueFromHold();
   document.querySelector<HTMLButtonElement>("#play")!.onclick = togglePlayback;
   document.querySelectorAll<HTMLButtonElement>("[data-idle-mode]").forEach((button) => button.onclick = () => {
     const mode = button.dataset.idleMode as IdleMode;
@@ -870,6 +950,16 @@ function wireSessionCards() {
   if (intro) intro.onclick = play;
   const again = document.querySelector<HTMLButtonElement>("#watch-again");
   if (again) again.onclick = play;
+  // The end-card Ask AI button mirrors the deck chat toggle: it shows only when
+  // the assistant is available, and opens the same panel.
+  const askAi = document.querySelector<HTMLButtonElement>("#ask-ai");
+  const chatToggle = document.querySelector<HTMLButtonElement>("#chat-toggle");
+  if (askAi && chatToggle) {
+    const sync = () => { askAi.hidden = chatToggle.hidden; };
+    sync();
+    new MutationObserver(sync).observe(chatToggle, { attributes: true, attributeFilter: ["hidden"] });
+    askAi.onclick = () => chatToggle.click();
+  }
 }
 function dismissIntro() {
   if (introDismissed) return;
@@ -967,11 +1057,12 @@ function syncNarration(markers: Marker[], time: number, force = false) {
   // A NUL separator no page text can contain, so the pair ("a", "bc") never
   // collides with ("ab", "c"). Color rides along so the banner restyles when
   // the active marker's color changes, even if its label and note match.
-  const key = marker && `${marker.label}\u0000${marker.note ?? ""}\u0000${marker.color ?? ""}`;
+  const key = marker ? JSON.stringify([marker.label, marker.note ?? "", marker.color ?? "", marker.node_id ?? null, marker.defect ? marker.defect.actual : ""]) : "";
   if (!force && key === lastNarrationKey) return;
   lastNarrationKey = key;
-  if (marker) setActionCaption(marker.label, marker.note, marker.color);
+  if (marker) setActionCaption(marker.label, marker.note, marker.color, marker.defect);
   else document.querySelector("#caption")?.classList.remove("is-visible");
+  highlightDriver?.(marker);
 }
 function revealTabs(manifest: Manifest, time: number) {
   document.querySelectorAll<HTMLElement>("[data-segment]").forEach((button) => {
@@ -980,17 +1071,18 @@ function revealTabs(manifest: Manifest, time: number) {
     button.hidden = Boolean(segment && (openedAt > time || closedAt(manifest, segment.id, time)));
   });
 }
-function setActionCaption(title: string, copy?: string, color?: Marker["color"]) {
+function setActionCaption(title: string, copy?: string, color?: Marker["color"], defect?: Defect) {
   const caption = document.querySelector<HTMLElement>("#caption");
   if (!caption) return;
   caption.querySelector("strong")!.textContent = title;
   const detail = caption.querySelector("p")!;
-  detail.textContent = copy ?? "";
-  detail.hidden = !copy;
+  detail.textContent = defect ? `Expected: ${defect.expected}  —  Actual: ${defect.actual}` : copy ?? "";
+  detail.hidden = !detail.textContent;
   // Reflect the active marker's color so the banner draws the eye the same way
   // the timeline dot and chapters entry do. Absent color clears the accent.
   if (color) caption.dataset.color = color;
   else delete caption.dataset.color;
+  caption.classList.toggle("has-defect", Boolean(defect));
   caption.classList.add("is-visible");
   scheduleCaptionFade();
 }

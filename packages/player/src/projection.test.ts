@@ -88,6 +88,22 @@ test("preserve mode leaves the timeline untouched", () => {
   assert.equal(projection.toPlayback(31_000), 31_000);
 });
 
+test("projectPlayback remaps a highlight marker's time but preserves its element, defect, and hold", () => {
+  const events: ReplayEvent[] = [{ type: 2, timestamp: 1_000 }, click(1_000), click(2_000), click(62_000)];
+  const manifest: Manifest = {
+    id: "r2",
+    title: "Highlight replay",
+    markers: [{ t_ms: 61_000, label: "1 of 3 completed", node_id: 42, defect: { expected: "Step 2 of 3", actual: "1 of 3 completed" }, hold: "until_ack" }],
+    segments: [{ id: "s1", page_url: "https://example.test/", clock_offset_ms: 0 }],
+  };
+  const projection = projectPlayback(manifest, new Map([["s1", events]]), "cut", DEFAULT_REPLAY_DEFAULTS);
+  const marker = projection.manifest.markers[0]!;
+  assert.equal(marker.t_ms, 3_000, "the marker time is remapped across the collapsed idle gap");
+  assert.equal(marker.node_id, 42);
+  assert.deepEqual(marker.defect, { expected: "Step 2 of 3", actual: "1 of 3 completed" });
+  assert.equal(marker.hold, "until_ack");
+});
+
 test("idleRanges detects interior and trailing gaps past the threshold", () => {
   assert.deepEqual(idleRanges([0, 1_000, 5_000], 20_000), [
     { start: 1_000, end: 5_000 },
