@@ -474,7 +474,7 @@ body.chat-open #app { width: calc(100% - 404px); }
   z-index: 4;
   top: 18px;
   right: 22px;
-  max-height: calc(100vh - 150px);
+  max-height: calc(50vh - 150px);
   width: min(330px, calc(100vw - 44px));
   display: flex;
   flex-direction: column;
@@ -517,6 +517,7 @@ body.chat-open #app { width: calc(100% - 404px); }
 .chapters-collapse:hover { color: #fff; background: rgba(255, 255, 255, .1); }
 .chapters-panel ol {
   flex: 1;
+  min-height: 0;
   margin: 0;
   padding: 0 8px 10px;
   overflow-y: auto;
