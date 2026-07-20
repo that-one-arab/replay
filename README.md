@@ -83,6 +83,25 @@ for unattended runs. Replay defaults travel with each replay. See
 [configuration](docs/configuration.md) for the TOML file, settings precedence,
 and the required browser restart after changing launch settings.
 
+## Uninstall
+
+Remove the Codex plugin to stop Replay's tools from loading in new tasks:
+
+```sh
+codex plugin remove replay-mcp@replay
+```
+
+That leaves your saved replays, the managed Chrome profile, and downloaded
+runtimes in `~/.replay`. To reclaim that disk space too, stop any in-flight
+capture first, then:
+
+```sh
+rm -rf ~/.replay
+```
+
+Replay installs no system services, LaunchAgents, or shared libraries, so there
+is nothing else to clean up.
+
 ## Development and manual use
 
 The direct CLI and source build are for contributors and troubleshooting, not
@@ -159,6 +178,6 @@ straight from the pasted link. See the
 - [Configuration](docs/configuration.md)
 - [Fresh-agent acceptance checklist](docs/phase-2-acceptance.md)
 - [Codex distribution and release build](docs/distribution.md)
-- [Development and release lanes](docs/development-and-releases.md)
+- [Development and releases](docs/development-and-releases.md)
 - [Changelog](CHANGELOG.md)
 - [Roadmap](docs/roadmap.md)

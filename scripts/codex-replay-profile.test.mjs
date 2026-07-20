@@ -1,16 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { developmentMcpConfig } from "./codex-replay-profile.mjs";
+import { installedPlugin } from "./codex-replay-profile.mjs";
 
-test("development Codex MCP configuration isolates browser and replay state", () => {
-  const config = developmentMcpConfig("/workspace/replay", "/Users/example/.replay-dev", 7718);
-  const server = config.mcpServers.replay;
-  assert.equal(server.cwd, "/workspace/replay");
-  assert.equal(server.env.REPLAY_HOME, "/Users/example/.replay-dev");
-  assert.equal(server.env.REPLAY_PORT, "7718");
-  assert.equal(server.env.REPLAY_DAEMON_URL, "http://127.0.0.1:7718");
-  assert.equal(server.env.REPLAY_SHARE_URL, "https://stitch-production-2492.up.railway.app");
-  assert.match(server.args[0], /packages\/mcp\/dist\/main\.js$/);
-  // replay-mcp embeds Playwright MCP; a second entry would duplicate browser tools.
-  assert.equal(config.mcpServers.playwright, undefined);
+test("installedPlugin detects an enabled plugin in `codex plugin list` output", () => {
+  const output = [
+    "PLUGIN               STATUS              VERSION  PATH",
+    "replay-mcp@replay    installed, enabled  0.2.2    /Users/x/.replay/runtimes/0.2.2",
+    "wix@openai-curated   not installed               /Users/x/.codex/plugins/wix",
+  ].join("\n");
+  assert.equal(installedPlugin(output, "replay-mcp@replay"), true);
+  assert.equal(installedPlugin(output, "wix@openai-curated"), false);
+  assert.equal(installedPlugin(output, "replay-mcp-dev@replay-dev"), false);
+});
+
+test("installedPlugin does not match a plugin id that is a prefix of another", () => {
+  // The regex anchors the id to the whitespace before STATUS, so a real
+  // "replay-mcp@replay" line must not match a hypothetical line for a plugin
+  // whose id merely starts with it.
+  const output = "replay-mcp@replay-staging    installed, enabled    /path";
+  assert.equal(installedPlugin(output, "replay-mcp@replay"), false);
 });

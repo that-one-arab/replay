@@ -1,48 +1,21 @@
-# Development and release lanes
+# Development and releases
 
-Replay has two intentionally separate ways to run. Do not enable both at once:
-they each expose the MCP server names `replay` and `playwright`.
+Replay runs as a marketplace plugin against a packaged runtime. All
+browser/session state lives under `~/.replay`, with the daemon on
+`127.0.0.1:7717`.
 
-| Lane | Code | Browser/session state | Daemon | Sharing |
-| --- | --- | --- | --- | --- |
-| Production | Marketplace plugin and packaged runtime | `~/.replay` | `127.0.0.1:7717` | Enabled by the production plugin |
-| Development | Current source checkout | `~/.replay-dev` | `127.0.0.1:7718` | Enabled against the shared share service |
+Develop from a source checkout through the CLI, not through a separate Codex
+lane: build with `pnpm build`, then drive captures with `pnpm replay ...` (see
+the README's "Development and manual use"). The CLI talks to the daemon directly
+and needs no plugin registered, so it does not disturb the marketplace install.
 
-The state split includes the Chrome profile, browser ownership file, sessions,
-exports, and configuration. Development never downloads or reuses the production
-runtime; it executes the built files from this checkout.
-
-## Switch lanes
-
-From the repository root, enable the development lane:
-
-```sh
-pnpm codex:use-dev
-```
-
-This builds the checkout, generates an isolated local `replay-mcp-dev` plugin under
-`~/.replay-dev`, registers its local `replay-dev` marketplace, removes the production
-plugin, and installs the development plugin. Open a **new Codex task** after the
-command finishes.
-
-Return to production with:
-
-```sh
-pnpm codex:use-production
-```
-
-It removes only `replay-mcp-dev@replay-dev` and reinstalls `replay-mcp@replay`. It does not
-delete `~/.replay-dev`, production sessions, or downloaded production runtimes.
-
-Inspect the active lane and its paths with:
+Inspect or remove the registered plugin:
 
 ```sh
 pnpm codex:status
+pnpm codex:uninstall            # removes the plugin; keeps saved replays and runtimes
+pnpm codex:uninstall -- --purge # also removes ~/.replay
 ```
-
-To reclaim a lane's replays or browser profile, stop its managed browser
-first, inspect the exact directory, then remove only that lane's directory. The
-switch commands deliberately never delete state.
 
 ## Production release process
 

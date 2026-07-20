@@ -11,9 +11,8 @@
     "dev:demo": "pnpm --filter @replay/demo-app dev",
     "dev:landing": "pnpm --filter @replay/landing dev",
     "demo:capture": "node packages/demo/dist/capture-demo.js",
-    "codex:use-dev": "pnpm build && node scripts/codex-replay-profile.mjs dev",
-    "codex:use-production": "node scripts/codex-replay-profile.mjs production",
     "codex:status": "node scripts/codex-replay-profile.mjs status",
+    "codex:uninstall": "node scripts/codex-replay-profile.mjs uninstall",
     "release:version": "node scripts/set-release-version.mjs",
     "package:macos": "node scripts/assert-release-version.mjs && pnpm build && node scripts/package-macos.mjs"
   },

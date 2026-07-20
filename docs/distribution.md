@@ -40,6 +40,20 @@ without asking users for credentials; publishing is protected by a maintainer
 token. It serves compiled artifacts only, not the source checkout. Authenticated
 downloads and stronger source-protection measures remain later hardening work.
 
+## Uninstall
+
+Remove the plugin from Codex, which stops Replay's tools from loading in new
+tasks:
+
+```sh
+codex plugin remove replay-mcp@replay
+```
+
+Saved replays, the managed Chrome profile, and downloaded runtimes stay in
+`~/.replay`. To reclaim them too, stop any in-flight capture first, then
+`rm -rf ~/.replay`. Replay installs no system services or shared libraries, so
+nothing else needs cleaning up.
+
 ## Versioning
 
 Replay uses `MAJOR.MINOR.PATCH` Semantic Versioning. The root package is the

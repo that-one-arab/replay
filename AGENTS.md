@@ -74,17 +74,13 @@ its starting file.
   settings are fixed while a managed Chrome is running; a change reports
   `restart_required` rather than interrupting it.
 
-## Development vs production lanes
+## Development
 
-Two isolated ways to run — **never enable both at once** (they share MCP names
-and would collide on Chrome's `9333`):
-
-- **Production** — marketplace plugin + packaged runtime; home `~/.replay`; daemon `127.0.0.1:7717`.
-- **Development** — this source checkout; home `~/.replay-dev`; daemon `127.0.0.1:7718`.
-
-Switch with `pnpm codex:use-dev` / `pnpm codex:use-production`; inspect with
-`pnpm codex:status`. State (Chrome profile, sessions, exports, config) is split
-by `REPLAY_HOME`/`REPLAY_PORT`. See `docs/development-and-releases.md`.
+Replay runs as a marketplace plugin against a packaged runtime (home `~/.replay`,
+daemon `127.0.0.1:7717`). Develop from this checkout with `pnpm build` then
+`pnpm replay ...` — the CLI drives the daemon directly and needs no Codex plugin
+registered. Inspect the registered plugin with `pnpm codex:status`; remove it
+with `pnpm codex:uninstall`. See `docs/development-and-releases.md`.
 
 ## Releases
 
