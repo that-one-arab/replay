@@ -15,7 +15,6 @@
 #   REPLAY_GITHUB      owner/repo hosting releases (default that-one-arab/replay)
 #   REPLAY_RELEASE_BASE  override the entire download base (default: the GitHub release URL)
 #   REPLAY_HOME        install root (default ~/.replay)
-#   REPLAY_AGENT       agent to register: codex (default), claude, or skip (skips the prompt)
 #
 # Requires curl, tar, and shasum (or sha256sum). macOS Apple Silicon only.
 # The GitHub repo must be public for anonymous downloads.
@@ -84,52 +83,10 @@ bin="$runtimes_dir/current/bin/replay-mcp"
 log ""
 log "Replay $VERSION installed at $dest"
 
-# Register with a coding agent: Codex (default), Claude Code, or skip. Under
-# `curl | sh`, stdin is the script itself, so the prompt reads from /dev/tty.
-prompt_agent() {
-  printf '\nRegister Replay with a coding agent:\n  1) Codex (default)\n  2) Claude Code\n  3) Skip\nChoose [1]: ' >&2
-  choice=""
-  read -r choice < /dev/tty 2>/dev/null || choice=""
-  case "$choice" in
-    ""|1) echo codex ;;
-    2) echo claude ;;
-    *) echo skip ;;
-  esac
-}
-
-agent="${REPLAY_AGENT:-$(prompt_agent)}"
-case "$agent" in
-  codex)
-    if command -v codex >/dev/null 2>&1; then
-      log "Registering with Codex…"
-      if codex mcp add replay -- "$bin" >/dev/null 2>&1; then
-        log "Done — Replay is available in Codex as 'replay'."
-      else
-        log "Codex registration failed. Add it manually:"
-        log "  codex mcp add replay -- \"$bin\""
-      fi
-    else
-      log "Codex CLI not found. Add it manually: codex mcp add replay -- \"$bin\""
-    fi
-    ;;
-  claude)
-    if command -v claude >/dev/null 2>&1; then
-      log "Registering with Claude Code (user scope)…"
-      if claude mcp add -s user replay -- "$bin" >/dev/null 2>&1; then
-        log "Done — Replay is available in Claude Code as 'replay'."
-      else
-        log "Claude Code registration failed. Add it manually:"
-        log "  claude mcp add -s user replay -- \"$bin\""
-      fi
-    else
-      log "Claude Code CLI not found. Add it manually: claude mcp add -s user replay -- \"$bin\""
-    fi
-    ;;
-esac
-
 log ""
-log "Manual commands (for reference or other agents):"
-printf '  codex mcp add replay -- %s\n' "$bin"
-printf '  claude mcp add -s user replay -- %s\n' "$bin"
+log "Add Replay to your coding agent (copy the matching command):"
+log ""
+printf '  Codex:        codex mcp add replay -- %s\n' "$bin"
+printf '  Claude Code:  claude mcp add -s user replay -- %s\n' "$bin"
 log ""
 log "Google Chrome is required — it is the managed browser Replay drives."
