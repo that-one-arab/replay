@@ -3,5 +3,5 @@ node_modules/
 dist/
 dist-test/
 .artifacts/
-.rec/
+.replay/
 .DS_Store

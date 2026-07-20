@@ -1,6 +1,6 @@
-# Rec runtime
+# Replay runtime
 
-`@rec/runtime` is the deployment-only package that groups the Rec CLI, daemon,
+`@replay/runtime` is the deployment-only package that groups the Replay CLI, daemon,
 MCP server, Playwright launcher, and replay assets under stable executable
 entry points. It is assembled into the macOS release archive by
 `pnpm package:macos`; end users do not install this workspace package directly.

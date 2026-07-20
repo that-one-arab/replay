@@ -3,8 +3,8 @@ import pino from "pino";
 // Structured JSON logs to stdout. The share server has no logging framework of
 // its own; this is the single place output is shaped so an operator reading the
 // server's stdout (or a file it is piped to) gets one line per request plus
-// lifecycle events. REC_SHARE_LOG_LEVEL tunes verbosity (default "info").
-export const logger = pino({ level: process.env.REC_SHARE_LOG_LEVEL ?? "info", base: { service: "rec-share-server" } });
+// lifecycle events. REPLAY_SHARE_LOG_LEVEL tunes verbosity (default "info").
+export const logger = pino({ level: process.env.REPLAY_SHARE_LOG_LEVEL ?? "info", base: { service: "replay-share-server" } });
 
 type StatusClass = "1xx" | "2xx" | "3xx" | "4xx" | "5xx";
 type UploadRejection = "too_large" | "invalid";
@@ -38,7 +38,7 @@ export const metrics = {
   recordServerError() { serverErrors += 1; },
   snapshot() {
     return {
-      service: "rec-share-server",
+      service: "replay-share-server",
       started_at: startedAtIso,
       uptime_seconds: Math.round((Date.now() - startedAtMs) / 1000),
       requests: { total: requestsTotal, by_status_class: { ...requestsByStatusClass } },

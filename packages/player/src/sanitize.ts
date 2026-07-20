@@ -1,16 +1,16 @@
 import type { ReplayEvent } from "./types.js";
 
-// The recorder rewrites captured static resources to same-origin
+// The capture rewrites captured static resources to same-origin
 // `/api/sessions/.../assets/...` paths so a shared replay is self-contained. Any
 // resource it could not capture (uncaptured media, oversized files, protected or
 // failed fetches, a capture that lost the flush race) keeps its original absolute
-// URL — usually the recorded dev origin, e.g. http://127.0.0.1:5173. When rrweb
+// URL — usually the captured dev origin, e.g. http://127.0.0.1:5173. When rrweb
 // remounts that DOM on the public sharing origin, the browser tries to fetch it,
 // and Chrome gates the public→private request behind its "local network access"
 // prompt. This pass is the belt-and-braces guarantee: it neutralizes every
 // resource attribute that still holds a fetchable absolute URL, so a missed asset
 // degrades to a blank image instead of a permission prompt (or a data leak back
-// to the recorder's machine).
+// to the capture's machine).
 
 // 1x1 transparent GIF — swapped in for image-like resources so they render as
 // nothing rather than a broken-image glyph.
@@ -42,7 +42,7 @@ function blankUrlForTag(tag: string | undefined): string {
 // An @font-face src that lost all of its captured candidates must resolve to
 // nothing without fetching: a local() lookup that cannot match misses silently,
 // so the text falls back down the font stack with zero network or decode work.
-const UNCAPTURED_FONT_SRC = 'local("rec-uncaptured-font")';
+const UNCAPTURED_FONT_SRC = 'local("replay-uncaptured-font")';
 
 // Split a font-face src list on top-level commas only — url(data:...;base64,...)
 // bodies contain commas that must not break a candidate apart.
@@ -82,7 +82,7 @@ function blankFontFaceSources(css: string): string {
 
 // Rewrite absolute url(...) and @import targets inside a CSS string. rrweb inlines
 // stylesheets (as `_cssText` attributes and <style> text), so their background
-// images, fonts and imports leak the recorded origin just like element sources.
+// images, fonts and imports leak the captured origin just like element sources.
 function blankCssUrls(css: string): string {
   // Drop absolute @imports first: the generic url() pass below would otherwise
   // rewrite an `@import url(http://...)` into `@import url(data:...)`, leaving a

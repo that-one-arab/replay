@@ -15,7 +15,7 @@ const targets = [
   "packages/share-server/package.json",
   "packages/demo/package.json",
   "packages/runtime/package.json",
-  "plugins/rec-mcp/.codex-plugin/plugin.json",
+  "plugins/replay-mcp/.codex-plugin/plugin.json",
 ];
 for (const target of targets) {
   const path = join(root, target);
@@ -23,8 +23,8 @@ for (const target of targets) {
   json.version = version;
   await writeFile(path, JSON.stringify(json, null, 2) + "\n");
 }
-const pluginMcpPath = join(root, "plugins/rec-mcp/.mcp.json");
+const pluginMcpPath = join(root, "plugins/replay-mcp/.mcp.json");
 const pluginMcp = JSON.parse(await readFile(pluginMcpPath, "utf8"));
-for (const name of ["rec", "playwright"]) pluginMcp.mcpServers[name].env.REC_RUNTIME_VERSION = version;
+for (const name of ["replay", "playwright"]) pluginMcp.mcpServers[name].env.REPLAY_RUNTIME_VERSION = version;
 await writeFile(pluginMcpPath, JSON.stringify(pluginMcp, null, 2) + "\n");
 console.log(`Updated release version to ${version}. Add the matching CHANGELOG.md entry, then run pnpm release:check.`);

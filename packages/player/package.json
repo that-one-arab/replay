@@ -1,5 +1,5 @@
 {
-  "name": "@rec/player",
+  "name": "@replay/player",
   "version": "0.2.2",
   "private": true,
   "type": "module",

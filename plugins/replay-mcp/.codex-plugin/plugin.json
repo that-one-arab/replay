@@ -1,14 +1,14 @@
 {
-  "name": "rec-mcp",
+  "name": "replay-mcp",
   "version": "0.2.2",
-  "description": "Record and share browser-session replays from Codex.",
+  "description": "Capture and share browser-session replays from Codex.",
   "author": {
     "name": "Local developer"
   },
   "skills": "./skills/",
   "interface": {
-    "displayName": "Rec browser recordings",
-    "shortDescription": "Record browser evidence from Codex.",
+    "displayName": "Replay",
+    "shortDescription": "Capture browser evidence from Codex.",
     "longDescription": "Capture and share browser replays while Playwright drives the same local Chrome.",
     "developerName": "Local developer",
     "category": "Productivity",
@@ -16,7 +16,7 @@
       "Interactive",
       "Write"
     ],
-    "defaultPrompt": "Reproduce this browser bug and return a Rec replay."
+    "defaultPrompt": "Reproduce this browser bug and return a replay."
   },
   "mcpServers": "./.mcp.json"
 }

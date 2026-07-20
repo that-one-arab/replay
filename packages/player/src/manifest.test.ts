@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Manifest, ReplayEvent } from "./types.js";
-import { describeAction, eventEndTime, recordingViewport, resolveMarkerTimes, segmentAtTime, segmentLabel, tabEvents } from "./manifest.js";
+import { describeAction, eventEndTime, replayViewport, resolveMarkerTimes, segmentAtTime, segmentLabel, tabEvents } from "./manifest.js";
 
 function twoTabManifest(): { manifest: Manifest; eventSets: Map<string, ReplayEvent[]> } {
   const manifest: Manifest = {
     id: "r1",
-    title: "Recording",
+    title: "Replay",
     markers: [],
     segments: [
       { id: "s1", page_url: "https://example.test/", clock_offset_ms: 0 },
@@ -54,7 +54,7 @@ test("eventEndTime spans to the last event across segments", () => {
 test("resolveMarkerTimes snaps markers to the nearest visible step", () => {
   const manifest: Manifest = {
     id: "r1",
-    title: "Recording",
+    title: "Replay",
     segments: [{ id: "s1", page_url: "https://example.test/", clock_offset_ms: 0 }],
     markers: [
       { t_ms: 2_500, label: "back" },
@@ -77,7 +77,7 @@ test("resolveMarkerTimes snaps markers to the nearest visible step", () => {
 test("resolveMarkerTimes anchors action-bound markers on the action's own bracket", () => {
   const manifest: Manifest = {
     id: "r1",
-    title: "Recording",
+    title: "Replay",
     segments: [{ id: "s1", page_url: "https://example.test/", clock_offset_ms: 0 }],
     actions: [
       { id: "a1", tool: "browser_click", started_at_ms: 900, finished_at_ms: 3_500, ok: true },
@@ -117,7 +117,7 @@ test("segmentLabel shortens URLs to host and path", () => {
   assert.equal(segmentLabel("not a url"), "not a url");
 });
 
-test("recordingViewport reads the meta event and falls back to 1280x720", () => {
-  assert.deepEqual(recordingViewport([{ type: 4, timestamp: 0, data: { width: 900, height: 600 } }]), { width: 900, height: 600 });
-  assert.deepEqual(recordingViewport([{ type: 2, timestamp: 0 }]), { width: 1280, height: 720 });
+test("replayViewport reads the meta event and falls back to 1280x720", () => {
+  assert.deepEqual(replayViewport([{ type: 4, timestamp: 0, data: { width: 900, height: 600 } }]), { width: 900, height: 600 });
+  assert.deepEqual(replayViewport([{ type: 2, timestamp: 0 }]), { width: 1280, height: 720 });
 });

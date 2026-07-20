@@ -1,9 +1,9 @@
 {
-  "name": "@rec/demo-app",
+  "name": "@replay/demo-app",
   "version": "0.2.2",
   "private": true,
   "type": "module",
-  "description": "Northstar Goods — a demo storefront used as the subject of the Rec video.",
+  "description": "Northstar Goods — a demo storefront used as the subject of the Replay video.",
   "scripts": {
     "dev": "vite",
     "build": "tsc -p tsconfig.json --noEmit && vite build",

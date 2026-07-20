@@ -25,7 +25,7 @@ function segmentActivityTimes(events: ReplayEvent[], clockOffsetMs: number) {
 }
 export function resolvedNavigationEvents(manifest: Manifest, eventSets: Map<string, ReplayEvent[]>): NavigationEvent[] {
   if (manifest.navigation_events?.length) return manifest.navigation_events;
-  // Recordings made before first-class navigation capture retain the former
+  // Replays made before first-class navigation capture retain the former
   // meta-event fallback. It is converted once into timeline metadata so the
   // player never reacts to rrweb's seek reconstruction events.
   return manifest.segments.flatMap((segment) => {
@@ -119,7 +119,7 @@ export function segmentLabel(pageUrl: string) {
     return url.pathname === "/" ? url.host : `${url.host}${url.pathname}`;
   } catch { return pageUrl; }
 }
-export function recordingViewport(events: ReplayEvent[]) {
+export function replayViewport(events: ReplayEvent[]) {
   const meta = events.find((event) => event.type === EventType.Meta && event.data?.width && event.data?.height);
   return { width: meta?.data?.width ?? 1280, height: meta?.data?.height ?? 720 };
 }
@@ -135,7 +135,7 @@ function isActivityEvent(event: ReplayEvent) {
   // viewport changes, and input count as activity; DOM mutation and narration
   // markers do not keep an idle gap alive.
   const interactionSources: number[] = [IncrementalSource.MouseInteraction, IncrementalSource.Scroll, IncrementalSource.ViewportResize, IncrementalSource.Input];
-  return event.type === EventType.IncrementalSnapshot && (interactionSources.includes(event.data?.source ?? -1) || event.data?.recSynthetic === "approach");
+  return event.type === EventType.IncrementalSnapshot && (interactionSources.includes(event.data?.source ?? -1) || event.data?.replaySynthetic === "approach");
 }
 function isMarkerStep(event: ReplayEvent, index: number) {
   // Mouse moves describe travel, not an explanation-worthy step. Buttons,

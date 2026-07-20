@@ -1,6 +1,6 @@
 /**
  * Stdio MCP bridge for the replay chat provider. The daemon launches Codex
- * with this file registered as the `rec_replay` MCP server; every tool call
+ * with this file registered as the `replay_replay` MCP server; every tool call
  * is proxied straight back to the daemon's /api/chat/tool endpoint so tool
  * behavior lives in one process. The bridge itself is deliberately dumb: it
  * speaks just enough JSON-RPC for Codex's MCP client, mirroring packages/mcp.
@@ -53,7 +53,7 @@ async function dispatch(method: string, params: unknown): Promise<JsonObject> {
       // spares local replay tools the approval elicitation that headless
       // exec runs auto-cancel.
       capabilities: { tools: { listChanged: false, default_tools_approval_mode: "never", default_tools_enabled: true } },
-      serverInfo: { name: "rec-replay-chat", version: "0.1.0" },
+      serverInfo: { name: "replay-chat", version: "0.1.0" },
     };
   }
   if (method === "notifications/initialized") return {};

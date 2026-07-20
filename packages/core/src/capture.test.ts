@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { collectEventCssUrls, rewriteAssetUrls } from "./recorder.js";
+import { collectEventCssUrls, rewriteAssetUrls } from "./capture.js";
 
 const BASE = "http://127.0.0.1:5173/";
 const ASSETS = [

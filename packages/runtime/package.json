@@ -1,5 +1,5 @@
 {
-  "name": "@rec/runtime",
+  "name": "@replay/runtime",
   "version": "0.2.2",
   "private": true,
   "type": "module",
@@ -7,15 +7,15 @@
     "bin"
   ],
   "bin": {
-    "rec": "./bin/rec.mjs",
-    "rec-mcp": "./bin/rec-mcp.mjs",
-    "rec-playwright-launcher": "./bin/rec-playwright-launcher.mjs"
+    "replay": "./bin/replay.mjs",
+    "replay-mcp": "./bin/replay-mcp.mjs",
+    "replay-playwright-launcher": "./bin/replay-playwright-launcher.mjs"
   },
   "dependencies": {
-    "@rec/cli": "workspace:*",
-    "@rec/daemon": "workspace:*",
-    "@rec/mcp": "workspace:*",
-    "@rec/player": "workspace:*",
-    "@rec/playwright-launcher": "workspace:*"
+    "@replay/cli": "workspace:*",
+    "@replay/daemon": "workspace:*",
+    "@replay/mcp": "workspace:*",
+    "@replay/player": "workspace:*",
+    "@replay/playwright-launcher": "workspace:*"
   }
 }

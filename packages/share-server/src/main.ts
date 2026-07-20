@@ -4,25 +4,25 @@ import { mkdir, readFile, rename, readdir, rm, writeFile } from "node:fs/promise
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
-import { importSession, sessionPath, type RecordingManifest } from "../../core/dist/index.js";
+import { importSession, sessionPath, type ReplayManifest } from "../../core/dist/index.js";
 import { checkRateLimit, clientIp } from "./rate-limit.js";
 import { logger, metrics } from "./telemetry.js";
 
 const port = Number(process.env.PORT ?? 8080);
-const dataDir = resolve(process.env.REC_SHARE_DATA_DIR ?? "./.rec-share");
-// The core importer intentionally uses REC_HOME. This process owns that spool
-// exclusively, separate from the local recorder's home.
-process.env.REC_HOME = join(dataDir, "spool");
+const dataDir = resolve(process.env.REPLAY_SHARE_DATA_DIR ?? "./.replay-share");
+// The core importer intentionally uses REPLAY_HOME. This process owns that spool
+// exclusively, separate from the local capture's home.
+process.env.REPLAY_HOME = join(dataDir, "spool");
 const uploadsDir = join(dataDir, "uploads");
 const sharesPath = join(dataDir, "shares.json");
-const maxUploadBytes = Number(process.env.REC_SHARE_MAX_UPLOAD_BYTES ?? 50 * 1024 * 1024);
-const releasesDir = resolve(process.env.REC_RELEASE_DIR ?? join(dataDir, "releases"));
+const maxUploadBytes = Number(process.env.REPLAY_SHARE_MAX_UPLOAD_BYTES ?? 50 * 1024 * 1024);
+const releasesDir = resolve(process.env.REPLAY_RELEASE_DIR ?? join(dataDir, "releases"));
 const releasesPath = join(releasesDir, "index.json");
-const maxReleaseBytes = Number(process.env.REC_RELEASE_MAX_UPLOAD_BYTES ?? 150 * 1024 * 1024);
-const releasePublishToken = process.env.REC_RELEASE_PUBLISH_TOKEN;
+const maxReleaseBytes = Number(process.env.REPLAY_RELEASE_MAX_UPLOAD_BYTES ?? 150 * 1024 * 1024);
+const releasePublishToken = process.env.REPLAY_RELEASE_PUBLISH_TOKEN;
 // GET /stats stays disabled unless a token is configured, so the counters are
 // never exposed on a public server by default.
-const statsToken = process.env.REC_SHARE_STATS_TOKEN;
+const statsToken = process.env.REPLAY_SHARE_STATS_TOKEN;
 
 type Share = { id: string; session_id: string; title: string; created_at: string; bytes: number };
 type Release = { version: string; platform: "darwin-arm64"; archive: string; sha256: string; bytes: number; published_at: string };
@@ -48,7 +48,7 @@ const server = createServer((request, response) => {
     if (!response.headersSent) reply(response, status, { error: messageOf(error) });
   });
 });
-server.listen(port, "0.0.0.0", () => logger.info({ port, data_dir: dataDir }, "rec share server listening"));
+server.listen(port, "0.0.0.0", () => logger.info({ port, data_dir: dataDir }, "replay share server listening"));
 
 // Gate every request behind the per-IP rate limiter before routing. Health is
 // exempt so uptime probes never consume a client's budget.
@@ -56,7 +56,7 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
   const origin = requestOrigin(request);
   const url = new URL(request.url ?? "/", origin);
   if (url.pathname !== "/health") {
-    const kind = request.method === "POST" && url.pathname === "/v1/recordings" ? "upload" : "general";
+    const kind = request.method === "POST" && url.pathname === "/v1/replays" ? "upload" : "general";
     const decision = await checkRateLimit(kind, clientIp(request));
     if (!decision.allowed) {
       metrics.recordRateLimited();
@@ -70,19 +70,19 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
 async function route(request: IncomingMessage, response: ServerResponse, url: URL, origin: string) {
   if (request.method === "GET" && url.pathname === "/health") return reply(response, 200, { ok: true });
   if (request.method === "GET" && url.pathname === "/stats") return serveStats(request, response);
-  if (request.method === "POST" && url.pathname === "/v1/recordings") return upload(request, response, origin);
+  if (request.method === "POST" && url.pathname === "/v1/replays") return upload(request, response, origin);
   if (request.method === "PUT" && url.pathname === "/v1/releases") return publishRelease(request, response);
   if (request.method === "GET" && url.pathname === "/v1/releases/latest") return latestRelease(response, origin, url.searchParams.get("platform"));
   const releaseMetadata = /^\/v1\/releases\/(\d+\.\d+\.\d+)$/.exec(url.pathname);
   if (request.method === "GET" && releaseMetadata) return releaseByVersion(response, origin, releaseMetadata[1]!, url.searchParams.get("platform"));
-  const releaseArchive = /^\/v1\/releases\/(rec-[0-9]+\.[0-9]+\.[0-9]+-darwin-arm64\.tar\.gz)$/.exec(url.pathname);
+  const releaseArchive = /^\/v1\/releases\/(replay-[0-9]+\.[0-9]+\.[0-9]+-darwin-arm64\.tar\.gz)$/.exec(url.pathname);
   if (request.method === "GET" && releaseArchive) return serveRelease(response, releaseArchive[1]);
   const shared = /^\/r\/([a-f0-9]{24})$/.exec(url.pathname);
   if (request.method === "GET" && shared) return redirectToShare(response, shared[1]);
   const replay = /^\/api\/sessions\/([^/]+)\/(manifest|events)$/.exec(url.pathname);
-  if (request.method === "GET" && replay) return serveRecording(response, decodeURIComponent(replay[1]), replay[2], url.searchParams.get("segment"));
+  if (request.method === "GET" && replay) return serveReplay(response, decodeURIComponent(replay[1]), replay[2], url.searchParams.get("segment"));
   const asset = /^\/api\/sessions\/([^/]+)\/assets\/([a-f0-9]{64})$/.exec(url.pathname);
-  if (request.method === "GET" && asset) return serveRecordedAsset(response, decodeURIComponent(asset[1]), asset[2]);
+  if (request.method === "GET" && asset) return serveCapturedAsset(response, decodeURIComponent(asset[1]), asset[2]);
   if (request.method === "GET" && url.pathname.startsWith("/assets/")) return servePlayerAsset(response, url.pathname);
   if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/replay")) return servePlayer(response);
   reply(response, 404, { error: "Not found" });
@@ -90,12 +90,12 @@ async function route(request: IncomingMessage, response: ServerResponse, url: UR
 
 async function publishRelease(request: IncomingMessage, response: ServerResponse) {
   if (!releasePublishToken || !validPublishToken(request.headers.authorization)) return reply(response, 403, { error: "Release publishing is not authorized." });
-  const version = releaseVersion(request.headers["x-rec-release-version"]);
-  const platform = releasePlatform(request.headers["x-rec-release-platform"]);
+  const version = releaseVersion(request.headers["x-replay-release-version"]);
+  const platform = releasePlatform(request.headers["x-replay-release-platform"]);
   const body = await binaryBody(request, maxReleaseBytes, "Release");
-  const archive = `rec-${version}-${platform}.tar.gz`;
+  const archive = `replay-${version}-${platform}.tar.gz`;
   const existing = await readReleases();
-  if (existing.some((entry) => entry.version === version && entry.platform === platform)) return reply(response, 409, { error: `Rec ${version} for ${platform} is already published and cannot be replaced.` });
+  if (existing.some((entry) => entry.version === version && entry.platform === platform)) return reply(response, 409, { error: `Replay ${version} for ${platform} is already published and cannot be replaced.` });
   await mkdir(releasesDir, { recursive: true });
   await writeFile(join(releasesDir, archive), body);
   const release: Release = { version, platform, archive, sha256: createHash("sha256").update(body).digest("hex"), bytes: body.byteLength, published_at: new Date().toISOString() };
@@ -114,7 +114,7 @@ async function latestRelease(response: ServerResponse, origin: string, platform:
 async function releaseByVersion(response: ServerResponse, origin: string, version: string, platform: string | null) {
   if (platform !== "darwin-arm64") return reply(response, 400, { error: "platform=darwin-arm64 is required." });
   const release = (await readReleases()).find((entry) => entry.platform === platform && entry.version === version);
-  if (!release) return reply(response, 404, { error: `Rec ${version} for ${platform} is not available.` });
+  if (!release) return reply(response, 404, { error: `Replay ${version} for ${platform} is not available.` });
   reply(response, 200, releaseMetadata(origin, release));
 }
 
@@ -127,16 +127,16 @@ async function serveRelease(response: ServerResponse, archive: string) {
 }
 
 async function upload(request: IncomingMessage, response: ServerResponse, origin: string) {
-  const body = await binaryBody(request, maxUploadBytes, "Recording").catch((error: unknown) => { if (error instanceof HttpError && error.status === 413) metrics.recordUploadRejected("too_large"); throw error; });
+  const body = await binaryBody(request, maxUploadBytes, "Replay").catch((error: unknown) => { if (error instanceof HttpError && error.status === 413) metrics.recordUploadRejected("too_large"); throw error; });
   await mkdir(uploadsDir, { recursive: true });
-  const temporary = join(uploadsDir, `${randomBytes(12).toString("hex")}.rec`);
+  const temporary = join(uploadsDir, `${randomBytes(12).toString("hex")}.replay`);
   await writeFile(temporary, body, { flag: "wx" });
   try {
-    // Re-sharing an already-uploaded recording is idempotent: keep the installed
+    // Re-sharing an already-uploaded replay is idempotent: keep the installed
     // copy and hand back its existing link instead of failing on a duplicate import.
     // The body is client-supplied, so a failed import is a bad upload (422), not
     // a server fault.
-    const imported = await importSession(temporary, { reuseExisting: true }).catch((error: unknown) => { metrics.recordUploadRejected("invalid"); throw new HttpError(422, `The uploaded artifact is not a valid Rec recording: ${messageOf(error)}`); });
+    const imported = await importSession(temporary, { reuseExisting: true }).catch((error: unknown) => { metrics.recordUploadRejected("invalid"); throw new HttpError(422, `The uploaded artifact is not a valid replay: ${messageOf(error)}`); });
     const shares = await readShares();
     const existing = shares.find((entry) => entry.session_id === imported.sessionId);
     if (existing) { metrics.recordUploadIdempotent(body.byteLength); return reply(response, 201, { shareId: existing.id, sessionId: existing.session_id, shareUrl: `${origin}/r/${existing.id}` }); }
@@ -153,12 +153,12 @@ async function upload(request: IncomingMessage, response: ServerResponse, origin
 
 async function redirectToShare(response: ServerResponse, shareId: string) {
   const share = (await readShares()).find((entry) => entry.id === shareId);
-  if (!share) return reply(response, 404, { error: "Recording share not found" });
+  if (!share) return reply(response, 404, { error: "Replay share not found" });
   response.writeHead(302, { location: `/replay?id=${encodeURIComponent(share.session_id)}`, "cache-control": "no-store" });
   response.end();
 }
 
-async function serveRecording(response: ServerResponse, id: string, resource: string, selected: string | null) {
+async function serveReplay(response: ServerResponse, id: string, resource: string, selected: string | null) {
   const manifest = await readManifest(id);
   if (resource === "manifest") return reply(response, 200, manifest);
   const segments = selected ? manifest.segments.filter((segment) => segment.id === selected) : manifest.segments;
@@ -170,13 +170,13 @@ async function serveRecording(response: ServerResponse, id: string, resource: st
   reply(response, 200, events);
 }
 
-async function serveRecordedAsset(response: ServerResponse, id: string, assetId: string) {
+async function serveCapturedAsset(response: ServerResponse, id: string, assetId: string) {
   const manifest = await readManifest(id);
   const asset = manifest.assets.find((entry) => entry.id === assetId);
-  if (!asset) return reply(response, 404, { error: "Recorded asset not found" });
+  if (!asset) return reply(response, 404, { error: "Captured asset not found" });
   const root = sessionPath(id);
   const path = resolve(root, asset.path);
-  if (!path.startsWith(`${resolve(root, "assets")}/`) || !existsSync(path)) return reply(response, 404, { error: "Recorded asset file not found" });
+  if (!path.startsWith(`${resolve(root, "assets")}/`) || !existsSync(path)) return reply(response, 404, { error: "Captured asset file not found" });
   response.writeHead(200, { "content-type": asset.content_type, "cache-control": "public, max-age=31536000, immutable" });
   createReadStream(path).pipe(response);
 }
@@ -197,8 +197,8 @@ function servePlayerAsset(response: ServerResponse, pathname: string) {
 }
 
 async function readManifest(id: string) {
-  try { return JSON.parse(await readFile(join(sessionPath(id), "manifest.json"), "utf8")) as RecordingManifest; }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new HttpError(404, "Recording not found"); throw error; }
+  try { return JSON.parse(await readFile(join(sessionPath(id), "manifest.json"), "utf8")) as ReplayManifest; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new HttpError(404, "Replay not found"); throw error; }
 }
 async function readShares() { try { return JSON.parse(await readFile(sharesPath, "utf8")) as Share[]; } catch { return []; } }
 async function readReleases() { try { return JSON.parse(await readFile(releasesPath, "utf8")) as Release[]; } catch { return []; } }
@@ -243,10 +243,10 @@ function bearerMatches(header: string | undefined, expected: string | undefined)
   const receivedBytes = Buffer.from(supplied);
   return expectedBytes.byteLength === receivedBytes.byteLength && timingSafeEqual(expectedBytes, receivedBytes);
 }
-function releaseVersion(value: string | string[] | undefined) { if (typeof value === "string" && /^\d+\.\d+\.\d+$/.test(value)) return value; throw new HttpError(400, "x-rec-release-version must be a semantic version such as 0.1.0."); }
-function releasePlatform(value: string | string[] | undefined): Release["platform"] { if (value === "darwin-arm64") return value; throw new HttpError(400, "x-rec-release-platform must be darwin-arm64."); }
+function releaseVersion(value: string | string[] | undefined) { if (typeof value === "string" && /^\d+\.\d+\.\d+$/.test(value)) return value; throw new HttpError(400, "x-replay-release-version must be a semantic version such as 0.1.0."); }
+function releasePlatform(value: string | string[] | undefined): Release["platform"] { if (value === "darwin-arm64") return value; throw new HttpError(400, "x-replay-release-platform must be darwin-arm64."); }
 function compareVersions(left: string, right: string) { const a = left.split(".").map(Number); const b = right.split(".").map(Number); return a[0]! - b[0]! || a[1]! - b[1]! || a[2]! - b[2]!; }
 function releaseMetadata(origin: string, release: Release) { return { version: release.version, platform: release.platform, sha256: release.sha256, bytes: release.bytes, archiveUrl: `${origin}/v1/releases/${release.archive}` }; }
-function requestOrigin(request: IncomingMessage) { return process.env.REC_SHARE_PUBLIC_URL?.replace(/\/$/, "") ?? `http://${request.headers.host ?? `127.0.0.1:${port}`}`; }
+function requestOrigin(request: IncomingMessage) { return process.env.REPLAY_SHARE_PUBLIC_URL?.replace(/\/$/, "") ?? `http://${request.headers.host ?? `127.0.0.1:${port}`}`; }
 function reply(response: ServerResponse, status: number, value: unknown) { response.writeHead(status, { "content-type": "application/json; charset=utf-8" }); response.end(JSON.stringify(value)); }
 function messageOf(error: unknown) { return error instanceof Error ? error.message : String(error); }

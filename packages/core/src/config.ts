@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { recHome } from "./storage.js";
+import { replayHome } from "./storage.js";
 
 export type IdleMode = "cut" | "fast_forward" | "preserve";
 
@@ -31,11 +31,11 @@ export interface ChatConfig {
   command: string;
   /** Optional model override (Codex `-m`, or the OpenAI Responses model). */
   model?: string;
-  /** OpenAI API key; OPENAI_API_KEY and REC_CHAT_API_KEY also work. */
+  /** OpenAI API key; OPENAI_API_KEY and REPLAY_CHAT_API_KEY also work. */
   api_key?: string;
 }
 
-export interface ResolvedRecConfig {
+export interface ResolvedReplayConfig {
   browser: BrowserConfig;
   replay: ReplayDefaults;
   chat: ChatConfig;
@@ -60,22 +60,22 @@ const DEFAULT_BROWSER: BrowserConfig = { headless: false, viewport: { width: 128
 const DEFAULT_REPLAY: ReplayDefaults = { idle_mode: "cut", idle_retained_ms: 2_000, idle_fast_forward_speed: 8, default_speed: 1.15 };
 const DEFAULT_CHAT: ChatConfig = { enabled: true, provider: "auto", command: "codex" };
 
-/** Resolve Rec's small TOML configuration surface without tying it to an MCP client. */
-export async function resolveRecConfig(options: ResolveConfigOptions = {}): Promise<ResolvedRecConfig> {
+/** Resolve Replay's small TOML configuration surface without tying it to an MCP client. */
+export async function resolveReplayConfig(options: ResolveConfigOptions = {}): Promise<ResolvedReplayConfig> {
   const env = options.env ?? process.env;
-  const home = options.home ?? recHome();
-  const cwd = resolve(options.cwd ?? env.REC_CONFIG_CWD ?? process.cwd());
+  const home = options.home ?? replayHome();
+  const cwd = resolve(options.cwd ?? env.REPLAY_CONFIG_CWD ?? process.cwd());
   const sources: string[] = [];
   const warnings: string[] = [];
   let merged: PartialConfig = {};
   const candidates = [
     { path: join(home, "config.toml"), required: false },
-    { path: join(cwd, ".rec", "config.toml"), required: false },
-    ...(env.REC_CONFIG ? [{ path: resolve(env.REC_CONFIG), required: true }] : []),
+    { path: join(cwd, ".replay", "config.toml"), required: false },
+    ...(env.REPLAY_CONFIG ? [{ path: resolve(env.REPLAY_CONFIG), required: true }] : []),
   ];
   for (const candidate of candidates) {
     if (!existsSync(candidate.path)) {
-      if (candidate.required) throw new Error(`Rec config file does not exist: ${candidate.path}`);
+      if (candidate.required) throw new Error(`Replay config file does not exist: ${candidate.path}`);
       continue;
     }
     const parsed = parseToml(await readFile(candidate.path, "utf8"), candidate.path);
@@ -107,7 +107,7 @@ export async function resolveRecConfig(options: ResolveConfigOptions = {}): Prom
 }
 
 /** Kept public for unit tests and helpful config diagnostics. */
-export function parseRecToml(text: string, source = "config.toml") {
+export function parseReplayToml(text: string, source = "config.toml") {
   return parseToml(text, source);
 }
 
@@ -159,18 +159,18 @@ function environmentConfig(env: NodeJS.ProcessEnv): PartialConfig {
   const browser: PartialConfig["browser"] = {};
   const replay: PartialConfig["replay"] = {};
   const chat: PartialConfig["chat"] = {};
-  if (env.REC_CHAT_ENABLED !== undefined) chat.enabled = booleanValue(env.REC_CHAT_ENABLED, "REC_CHAT_ENABLED");
-  if (env.REC_CHAT_PROVIDER !== undefined) chat.provider = env.REC_CHAT_PROVIDER;
-  if (env.REC_CHAT_COMMAND !== undefined) chat.command = env.REC_CHAT_COMMAND;
-  if (env.REC_CHAT_MODEL !== undefined) chat.model = env.REC_CHAT_MODEL;
-  if (env.REC_CHAT_API_KEY !== undefined) chat.api_key = env.REC_CHAT_API_KEY;
-  if (env.REC_BROWSER_HEADLESS !== undefined) browser.headless = booleanValue(env.REC_BROWSER_HEADLESS, "REC_BROWSER_HEADLESS");
-  if (env.REC_BROWSER_VIEWPORT !== undefined) browser.viewport = env.REC_BROWSER_VIEWPORT;
-  if (env.REC_BROWSER_EXECUTABLE !== undefined) browser.executable = env.REC_BROWSER_EXECUTABLE;
-  if (env.REC_REPLAY_IDLE_MODE !== undefined) replay.idle_mode = validateIdleMode(env.REC_REPLAY_IDLE_MODE, "REC_REPLAY_IDLE_MODE");
-  if (env.REC_REPLAY_IDLE_RETAINED_MS !== undefined) replay.idle_retained_ms = numericValue(env.REC_REPLAY_IDLE_RETAINED_MS, "REC_REPLAY_IDLE_RETAINED_MS");
-  if (env.REC_REPLAY_IDLE_FAST_FORWARD_SPEED !== undefined) replay.idle_fast_forward_speed = numericValue(env.REC_REPLAY_IDLE_FAST_FORWARD_SPEED, "REC_REPLAY_IDLE_FAST_FORWARD_SPEED");
-  if (env.REC_REPLAY_DEFAULT_SPEED !== undefined) replay.default_speed = numericValue(env.REC_REPLAY_DEFAULT_SPEED, "REC_REPLAY_DEFAULT_SPEED");
+  if (env.REPLAY_CHAT_ENABLED !== undefined) chat.enabled = booleanValue(env.REPLAY_CHAT_ENABLED, "REPLAY_CHAT_ENABLED");
+  if (env.REPLAY_CHAT_PROVIDER !== undefined) chat.provider = env.REPLAY_CHAT_PROVIDER;
+  if (env.REPLAY_CHAT_COMMAND !== undefined) chat.command = env.REPLAY_CHAT_COMMAND;
+  if (env.REPLAY_CHAT_MODEL !== undefined) chat.model = env.REPLAY_CHAT_MODEL;
+  if (env.REPLAY_CHAT_API_KEY !== undefined) chat.api_key = env.REPLAY_CHAT_API_KEY;
+  if (env.REPLAY_BROWSER_HEADLESS !== undefined) browser.headless = booleanValue(env.REPLAY_BROWSER_HEADLESS, "REPLAY_BROWSER_HEADLESS");
+  if (env.REPLAY_BROWSER_VIEWPORT !== undefined) browser.viewport = env.REPLAY_BROWSER_VIEWPORT;
+  if (env.REPLAY_BROWSER_EXECUTABLE !== undefined) browser.executable = env.REPLAY_BROWSER_EXECUTABLE;
+  if (env.REPLAY_IDLE_MODE !== undefined) replay.idle_mode = validateIdleMode(env.REPLAY_IDLE_MODE, "REPLAY_IDLE_MODE");
+  if (env.REPLAY_IDLE_RETAINED_MS !== undefined) replay.idle_retained_ms = numericValue(env.REPLAY_IDLE_RETAINED_MS, "REPLAY_IDLE_RETAINED_MS");
+  if (env.REPLAY_IDLE_FAST_FORWARD_SPEED !== undefined) replay.idle_fast_forward_speed = numericValue(env.REPLAY_IDLE_FAST_FORWARD_SPEED, "REPLAY_IDLE_FAST_FORWARD_SPEED");
+  if (env.REPLAY_DEFAULT_SPEED !== undefined) replay.default_speed = numericValue(env.REPLAY_DEFAULT_SPEED, "REPLAY_DEFAULT_SPEED");
   return { browser, replay, chat };
 }
 

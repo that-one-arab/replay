@@ -9,11 +9,11 @@ for (const name of packages) {
   const value = await readJson(join("packages", name, "package.json"));
   if (value.version !== version) throw new Error(`packages/${name}/package.json is ${value.version}; expected ${version}.`);
 }
-const plugin = await readJson(join("plugins", "rec-mcp", ".codex-plugin", "plugin.json"));
+const plugin = await readJson(join("plugins", "replay-mcp", ".codex-plugin", "plugin.json"));
 if (plugin.version !== version) throw new Error(`Codex plugin is ${plugin.version}; expected ${version}.`);
-const mcp = await readJson(join("plugins", "rec-mcp", ".mcp.json"));
-for (const name of ["rec", "playwright"]) {
-  const pinned = mcp.mcpServers?.[name]?.env?.REC_RUNTIME_VERSION;
+const mcp = await readJson(join("plugins", "replay-mcp", ".mcp.json"));
+for (const name of ["replay", "playwright"]) {
+  const pinned = mcp.mcpServers?.[name]?.env?.REPLAY_RUNTIME_VERSION;
   if (pinned !== version) throw new Error(`Codex ${name} MCP pins runtime ${String(pinned)}; expected ${version}.`);
 }
 const changelog = await readFile(join(root, "CHANGELOG.md"), "utf8");

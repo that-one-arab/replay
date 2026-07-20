@@ -1,12 +1,12 @@
 # Development and release lanes
 
-Rec has two intentionally separate ways to run. Do not enable both at once:
-they each expose the MCP server names `rec` and `playwright`.
+Replay has two intentionally separate ways to run. Do not enable both at once:
+they each expose the MCP server names `replay` and `playwright`.
 
 | Lane | Code | Browser/session state | Daemon | Sharing |
 | --- | --- | --- | --- | --- |
-| Production | Marketplace plugin and packaged runtime | `~/.rec` | `127.0.0.1:7717` | Enabled by the production plugin |
-| Development | Current source checkout | `~/.rec-dev` | `127.0.0.1:7718` | Enabled against the shared share service |
+| Production | Marketplace plugin and packaged runtime | `~/.replay` | `127.0.0.1:7717` | Enabled by the production plugin |
+| Development | Current source checkout | `~/.replay-dev` | `127.0.0.1:7718` | Enabled against the shared share service |
 
 The state split includes the Chrome profile, browser ownership file, sessions,
 exports, and configuration. Development never downloads or reuses the production
@@ -20,8 +20,8 @@ From the repository root, enable the development lane:
 pnpm codex:use-dev
 ```
 
-This builds the checkout, generates an isolated local `rec-mcp-dev` plugin under
-`~/.rec-dev`, registers its local `rec-dev` marketplace, removes the production
+This builds the checkout, generates an isolated local `replay-mcp-dev` plugin under
+`~/.replay-dev`, registers its local `replay-dev` marketplace, removes the production
 plugin, and installs the development plugin. Open a **new Codex task** after the
 command finishes.
 
@@ -31,8 +31,8 @@ Return to production with:
 pnpm codex:use-production
 ```
 
-It removes only `rec-mcp-dev@rec-dev` and reinstalls `rec-mcp@rec`. It does not
-delete `~/.rec-dev`, production sessions, or downloaded production runtimes.
+It removes only `replay-mcp-dev@replay-dev` and reinstalls `replay-mcp@replay`. It does not
+delete `~/.replay-dev`, production sessions, or downloaded production runtimes.
 
 Inspect the active lane and its paths with:
 
@@ -40,13 +40,13 @@ Inspect the active lane and its paths with:
 pnpm codex:status
 ```
 
-To reclaim a lane's recordings or browser profile, stop its managed browser
+To reclaim a lane's replays or browser profile, stop its managed browser
 first, inspect the exact directory, then remove only that lane's directory. The
 switch commands deliberately never delete state.
 
 ## Production release process
 
-A Git push is not a Rec release. Users receive a new runtime only after an
+A Git push is not a Replay release. Users receive a new runtime only after an
 immutable archive is published to the release feed and the plugin marketplace
 has been updated.
 
@@ -74,12 +74,12 @@ has been updated.
    pnpm package:macos
    ```
 
-5. Publish the generated `.artifacts/rec-<version>-darwin-arm64.tar.gz` using
+5. Publish the generated `.artifacts/replay-<version>-darwin-arm64.tar.gz` using
    the maintainer publishing token:
 
    ```sh
-   REC_RELEASE_PUBLISH_TOKEN=<token> \
-     node scripts/publish-release.mjs .artifacts/rec-<version>-darwin-arm64.tar.gz
+   REPLAY_RELEASE_PUBLISH_TOKEN=<token> \
+     node scripts/publish-release.mjs .artifacts/replay-<version>-darwin-arm64.tar.gz
    ```
 
    The release feed rejects attempts to replace an existing version/platform
@@ -89,9 +89,9 @@ has been updated.
    GET /v1/releases/<version>?platform=darwin-arm64
    ```
 
-6. Copy `plugins/rec-mcp` into the plugin-only marketplace repository, commit
+6. Copy `plugins/replay-mcp` into the plugin-only marketplace repository, commit
    and push it. The plugin's manifest version and both
-   `REC_RUNTIME_VERSION` values must equal the released runtime version;
+   `REPLAY_RUNTIME_VERSION` values must equal the released runtime version;
    `pnpm release:check` enforces the source-copy invariant.
 
 7. Verify from an isolated runtime directory that the marketplace plugin
@@ -100,16 +100,16 @@ has been updated.
 8. Tell users to upgrade deliberately:
 
    ```sh
-   codex plugin marketplace upgrade rec
-   codex plugin add rec-mcp@rec
+   codex plugin marketplace upgrade replay
+   codex plugin add replay-mcp@replay
    ```
 
    They then open a new Codex task. The updated plugin requests exactly its own
-   runtime version and installs it under `~/.rec/runtimes/<version>`.
+   runtime version and installs it under `~/.replay/runtimes/<version>`.
 
 ## Upgrade and rollback behavior
 
-Production plugins pin their runtime with `REC_RUNTIME_VERSION`. A plugin at
+Production plugins pin their runtime with `REPLAY_RUNTIME_VERSION`. A plugin at
 version `X.Y.Z` requests only runtime `X.Y.Z`; it does not silently adopt the
 highest release in the feed. The old `/latest` endpoint remains available for
 diagnostics and pre-pin plugins, but production plugins do not use it.

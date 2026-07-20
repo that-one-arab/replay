@@ -2,7 +2,7 @@
  * Grooming for raw rrweb event streams before replay: reconstruct human
  * pointer travel from instantaneous driver jumps, pace typing onto a
  * keystroke cadence, and cue the synthetic cursor ahead of interactions in
- * recordings that carry no pointer coordinates.
+ * replays that carry no pointer coordinates.
  */
 import { EventType, IncrementalSource, MouseInteraction, type ReplayEvent } from "./types.js";
 
@@ -49,7 +49,7 @@ export function humanizeEvents(events: ReplayEvent[]) {
             timeOffset: Math.round(progress * CURSOR_APPROACH_MS),
           };
         });
-        output.push({ type: EventType.IncrementalSnapshot, timestamp: approachAt, data: { source: IncrementalSource.MouseMove, recSynthetic: "approach", positions } });
+        output.push({ type: EventType.IncrementalSnapshot, timestamp: approachAt, data: { source: IncrementalSource.MouseMove, replaySynthetic: "approach", positions } });
         lastEmittedAt = approachAt;
         cursor = { ...pointer, t: adjusted.timestamp };
       }
@@ -118,7 +118,7 @@ export function withCursorLeadIns(events: ReplayEvent[]): ReplayEvent[] {
       // rests on the target before the action fires.
       const at = Math.max(lastTs + 1, event.timestamp - CURSOR_APPROACH_MS - CURSOR_DWELL_MS);
       if (at < event.timestamp - 40) {
-        out.push({ type: EventType.Custom, timestamp: at, data: { tag: "rec-cursor", id: event.data.id } });
+        out.push({ type: EventType.Custom, timestamp: at, data: { tag: "replay-cursor", id: event.data.id } });
         lastTs = at;
       }
     }
@@ -128,7 +128,7 @@ export function withCursorLeadIns(events: ReplayEvent[]): ReplayEvent[] {
   return out;
 }
 
-// Agent-driven clicks are often recorded at the page origin (0,0) because the
+// Agent-driven clicks are often captured at the page origin (0,0) because the
 // driver dispatches them without pointer coordinates. Treat that as "no real
 // position" so the cursor is never parked, revealed, or zoomed at the top-left.
 export function isRealPoint(x: number | undefined, y: number | undefined) {

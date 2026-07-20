@@ -1,51 +1,51 @@
-# Phase 3 — portable recording artifacts
+# Phase 3 — portable replay artifacts
 
 ## Outcome
 
-A completed Rec session can move independently of the machine that captured it.
-`recording_stop` creates a portable `.rec` artifact automatically, and the CLI
-can export any existing session or import an artifact on another Rec installation.
+A completed Replay session can move independently of the machine that captured it.
+`capture_stop` creates a portable `.replay` artifact automatically, and the CLI
+can export any existing session or import an artifact on another Replay installation.
 An imported session is served by the normal local replay viewer; it does not need
-the source machine's browser, daemon process, or `REC_HOME` directory.
+the source machine's browser, daemon process, or `REPLAY_HOME` directory.
 
 This phase deliberately solves portability, not hosted sharing, authentication,
-encryption, or redaction beyond the recorder's existing password masking. Do not
-treat a `.rec` artifact as safe to send outside its intended audience.
+encryption, or redaction beyond the capture's existing password masking. Do not
+treat a `.replay` artifact as safe to send outside its intended audience.
 
 ## User-facing workflow
 
-When a recording stops, the daemon writes:
+When a replay stops, the daemon writes:
 
 ```text
-~/.rec/exports/<session-id>.rec
+~/.replay/exports/<session-id>.replay
 ```
 
-The MCP `recording_stop` response includes that location as
+The MCP `capture_stop` response includes that location as
 `portableArtifactPath`, alongside `replayUrl`. A coding agent can include both in
-its handoff without a second recording call.
+its handoff without a second replay call.
 
-For an older recording, or to choose a destination explicitly:
+For an older replay, or to choose a destination explicitly:
 
 ```sh
-pnpm rec export <session-id> --output ./bug-repro.rec
+pnpm replay export <session-id> --output ./bug-repro.replay
 ```
 
 The recipient imports the file and opens the returned session ID:
 
 ```sh
-pnpm rec import ./bug-repro.rec
-pnpm rec open <session-id>
+pnpm replay import ./bug-repro.replay
+pnpm replay open <session-id>
 ```
 
-`rec import` refuses to overwrite an existing recording ID. Re-exporting to an
+`replay import` refuses to overwrite an existing replay ID. Re-exporting to an
 existing destination also fails rather than silently replacing a file.
 
 ## Artifact contract
 
-The `.rec` extension denotes a gzip-compressed JSON envelope. Version 1 contains:
+The `.replay` extension denotes a gzip-compressed JSON envelope. Version 1 contains:
 
-- `kind: "rec-portable-bundle"` and `format_version: 1`;
-- the complete recording manifest and a manifest SHA-256 checksum;
+- `kind: "replay-portable-bundle"` and `format_version: 1`;
+- the complete replay manifest and a manifest SHA-256 checksum;
 - every event chunk referenced by the manifest;
 - every captured asset referenced by the manifest;
 - `markers.json` when present; and
@@ -70,7 +70,7 @@ Import validates the bundle before it creates the target session directory:
 5. Verify every included file's decoded size and SHA-256 checksum.
 6. Write to a temporary directory, then atomically rename it into `sessions/`.
 
-The recording ID is preserved because captured asset URLs reference it. Therefore
+The replay ID is preserved because captured asset URLs reference it. Therefore
 an import collision is an error, not a rename. Future artifact versions may add a
 safe ID-rewrite migration if that becomes necessary.
 
@@ -81,7 +81,7 @@ safe ID-rewrite migration if that becomes necessary.
 | Bundle encoding/import validation | `packages/core/src/bundle.ts` | Version, checksums, safe paths, atomic import. |
 | Local session format | `packages/core/src/storage.ts` and `docs/format.md` | Manifest, event chunks, assets, and spool paths. |
 | Automatic stop export | `packages/daemon/src/main.ts` | Creates the default artifact and includes its path in the stop response. |
-| CLI | `packages/cli/src/main.ts` | `rec export` and `rec import` commands. |
+| CLI | `packages/cli/src/main.ts` | `replay export` and `replay import` commands. |
 | Agent handoff | `packages/mcp/src/main.ts` | Maps the daemon result to `portableArtifactPath`. |
 | Regression coverage | `packages/core/src/storage.test.ts`, `packages/mcp/src/main.test.ts` | Round trip, corruption rejection, collision protection, and MCP handoff field. |
 
@@ -90,7 +90,7 @@ safe ID-rewrite migration if that becomes necessary.
 Use a finished session from the source environment:
 
 ```sh
-pnpm rec export rec_example --output /tmp/rec-example.rec
+pnpm replay export replay_example --output /tmp/replay-example.replay
 ```
 
 Simulate a recipient in a fresh spool and use a different daemon port. The port
@@ -98,11 +98,11 @@ is important: otherwise the CLI can reuse the source daemon and mask an isolatio
 failure.
 
 ```sh
-export REC_HOME="$(mktemp -d)"
-export REC_PORT=7720
+export REPLAY_HOME="$(mktemp -d)"
+export REPLAY_PORT=7720
 
-pnpm rec import /tmp/rec-example.rec
-pnpm rec open rec_example
+pnpm replay import /tmp/replay-example.replay
+pnpm replay open replay_example
 ```
 
 Open the returned `http://127.0.0.1:7720/replay?...` URL and verify timeline,
@@ -114,5 +114,5 @@ confirm that it rejects the ID collision.
 Phase 4 will make this same artifact uploadable and viewable through a durable
 share URL. Keep the artifact envelope backward compatible: a future service
 should ingest and retain the manifest/chunks/assets rather than inventing a
-parallel recording representation. Security, access control, expiry, revocation,
+parallel replay representation. Security, access control, expiry, revocation,
 and a review experience are explicitly deferred until that sharing phase.

@@ -1,11 +1,11 @@
 /**
  * Detects when a headed browser's emulated viewport is larger than the display
- * it is shown on. Playwright drives Rec's managed Chrome with an
+ * it is shown on. Playwright drives Replay's managed Chrome with an
  * Emulation.setDeviceMetricsOverride, so a page can report an inner size wider
  * or taller than the physical window — Chrome then paints the overflow
  * off-screen and the visible page looks "zoomed in" with edges cut off. This is
  * pure logic over a single measurement so it can be unit-tested away from a
- * live browser; the recorder feeds it real numbers from `page.evaluate`.
+ * live browser; the capture feeds it real numbers from `page.evaluate`.
  */
 
 /** A single reading taken from the live page (all in CSS pixels). */

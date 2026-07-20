@@ -1,5 +1,5 @@
 {
-  "name": "@rec/mcp",
+  "name": "@replay/mcp",
   "version": "0.2.2",
   "private": true,
   "type": "module",
@@ -7,11 +7,11 @@
     "dist"
   ],
   "bin": {
-    "rec-mcp": "./dist/main.js"
+    "replay-mcp": "./dist/main.js"
   },
   "dependencies": {
     "@playwright/mcp": "0.0.78",
-    "@rec/core": "workspace:*"
+    "@replay/core": "workspace:*"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

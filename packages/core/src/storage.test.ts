@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { Page, Request as PlaywrightRequest } from "playwright-core";
-import { Recorder } from "./recorder.js";
+import { Capture } from "./capture.js";
 import { calculateActiveDuration, SessionStore } from "./storage.js";
 import { exportSession, importSession } from "./bundle.js";
-import { rewriteAssetUrls } from "./recorder.js";
+import { rewriteAssetUrls } from "./capture.js";
 
 test("caps inactive gaps while preserving active event spans", () => {
   assert.equal(calculateActiveDuration([0, 1_000, 8_000]), 4_000);
@@ -28,23 +28,23 @@ test("rewrites captured resources and leaves an explicit unscoped iframe fallbac
         { type: 2, tagName: "iframe", attributes: { src: "https://payments.example/checkout" }, childNodes: [] },
       ],
     },
-  }, "https://app.example/onboarding", "rec_fixture", [{ id: "asset-image", source_urls: ["https://app.example/images/orbit.svg"] }], new Set(["https://app.example"])) as { node: { childNodes: { attributes: Record<string, string> }[] } };
-  assert.equal(result.node.childNodes[0].attributes.src, "/api/sessions/rec_fixture/assets/asset-image");
+  }, "https://app.example/onboarding", "replay_fixture", [{ id: "asset-image", source_urls: ["https://app.example/images/orbit.svg"] }], new Set(["https://app.example"])) as { node: { childNodes: { attributes: Record<string, string> }[] } };
+  assert.equal(result.node.childNodes[0].attributes.src, "/api/sessions/replay_fixture/assets/asset-image");
   assert.equal(result.node.childNodes[1].attributes.src, "about:blank");
   assert.match(result.node.childNodes[1].attributes.srcdoc, /External frame unavailable/);
 });
 
 test("persists marker placement and reports captured event counts", async () => {
-  const root = await mkdtemp(join(tmpdir(), "rec-storage-"));
-  const previousHome = process.env.REC_HOME;
-  process.env.REC_HOME = root;
+  const root = await mkdtemp(join(tmpdir(), "replay-storage-"));
+  const previousHome = process.env.REPLAY_HOME;
+  process.env.REPLAY_HOME = root;
   try {
     const store = await SessionStore.create({
       format_version: 1,
-      id: "rec_marker_fixture",
+      id: "replay_marker_fixture",
       title: "Marker fixture",
       created_at: new Date().toISOString(),
-      recorder: { version: "test", rrweb: "test", record_canvas: false, record_cross_origin_iframes: false },
+      capture: { version: "test", rrweb: "test", capture_canvas: false, capture_cross_origin_iframes: false },
       origins: ["http://example.test"],
       masking: { mask_all_inputs: false, passwords: true },
       segments: [],
@@ -68,7 +68,7 @@ test("persists marker placement and reports captured event counts", async () => 
     });
     await store.finalize();
     assert.deepEqual(store.captureSummary(), { segmentCount: 1, chunkCount: 1, eventCount: 2 });
-    const manifest = JSON.parse(await readFile(join(root, "sessions", "rec_marker_fixture", "manifest.json"), "utf8")) as { markers: { placement?: string; action_id?: string }[]; actions?: { id: string; tool: string; ok: boolean }[]; navigation_events?: { kind: string; ready_at_ms: number }[] };
+    const manifest = JSON.parse(await readFile(join(root, "sessions", "replay_marker_fixture", "manifest.json"), "utf8")) as { markers: { placement?: string; action_id?: string }[]; actions?: { id: string; tool: string; ok: boolean }[]; navigation_events?: { kind: string; ready_at_ms: number }[] };
     assert.equal(manifest.markers[0]?.placement, "before_next");
     assert.equal(manifest.markers[1]?.action_id, "act_1");
     assert.deepEqual(manifest.actions, [{ id: "act_1", tool: "browser_click", args_summary: "{\"selector\":\"#submit\"}", started_at_ms: 15, finished_at_ms: 22, ok: true }]);
@@ -82,23 +82,23 @@ test("persists marker placement and reports captured event counts", async () => 
       to_url: "http://example.test/todos",
     }]);
   } finally {
-    if (previousHome === undefined) delete process.env.REC_HOME;
-    else process.env.REC_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.REPLAY_HOME;
+    else process.env.REPLAY_HOME = previousHome;
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("records a completed top-level reload as manifest navigation metadata", async () => {
-  const root = await mkdtemp(join(tmpdir(), "rec-navigation-"));
-  const previousHome = process.env.REC_HOME;
-  process.env.REC_HOME = root;
+test("captures a completed top-level reload as manifest navigation metadata", async () => {
+  const root = await mkdtemp(join(tmpdir(), "replay-navigation-"));
+  const previousHome = process.env.REPLAY_HOME;
+  process.env.REPLAY_HOME = root;
   try {
     const store = await SessionStore.create({
       format_version: 1,
-      id: "rec_navigation_fixture",
+      id: "replay_navigation_fixture",
       title: "Navigation fixture",
       created_at: new Date().toISOString(),
-      recorder: { version: "test", rrweb: "test", record_canvas: false, record_cross_origin_iframes: false },
+      capture: { version: "test", rrweb: "test", capture_canvas: false, capture_cross_origin_iframes: false },
       origins: ["http://example.test"],
       masking: { mask_all_inputs: false, passwords: true },
       segments: [],
@@ -110,8 +110,8 @@ test("records a completed top-level reload as manifest navigation metadata", asy
     store.segment("seg_1", "http://example.test/todos", 0);
     const frame = {};
     const page = { mainFrame: () => frame } as unknown as Page;
-    const recorder = new Recorder();
-    const internals = recorder as unknown as {
+    const capture = new Capture();
+    const internals = capture as unknown as {
       store?: SessionStore;
       startedAt: number;
       pages: Map<Page, { id: string; page: Page; baseUrl: string }>;
@@ -139,40 +139,40 @@ test("records a completed top-level reload as manifest navigation metadata", asy
     assert.equal(store.manifest.navigation_events?.[0]?.from_url, "http://example.test/todos");
     assert.equal(store.manifest.navigation_events?.[0]?.to_url, "http://example.test/todos");
   } finally {
-    if (previousHome === undefined) delete process.env.REC_HOME;
-    else process.env.REC_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.REPLAY_HOME;
+    else process.env.REPLAY_HOME = previousHome;
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("exports a complete recording and imports it with verified chunks and assets", async () => {
-  const source = await mkdtemp(join(tmpdir(), "rec-export-source-"));
-  const target = await mkdtemp(join(tmpdir(), "rec-export-target-"));
-  const artifact = join(source, "handoff.rec");
-  const previousHome = process.env.REC_HOME;
+test("exports a complete replay and imports it with verified chunks and assets", async () => {
+  const source = await mkdtemp(join(tmpdir(), "replay-export-source-"));
+  const target = await mkdtemp(join(tmpdir(), "replay-export-target-"));
+  const artifact = join(source, "handoff.replay");
+  const previousHome = process.env.REPLAY_HOME;
   try {
-    process.env.REC_HOME = source;
+    process.env.REPLAY_HOME = source;
     const store = await SessionStore.create({
-      format_version: 1, id: "rec_portable_fixture", title: "Portable fixture", created_at: new Date().toISOString(),
-      recorder: { version: "test", rrweb: "test", record_canvas: false, record_cross_origin_iframes: false }, origins: ["http://example.test"], masking: { mask_all_inputs: false, passwords: true }, segments: [], tab_events: [], markers: [], assets: [],
+      format_version: 1, id: "replay_portable_fixture", title: "Portable fixture", created_at: new Date().toISOString(),
+      capture: { version: "test", rrweb: "test", capture_canvas: false, capture_cross_origin_iframes: false }, origins: ["http://example.test"], masking: { mask_all_inputs: false, passwords: true }, segments: [], tab_events: [], markers: [], assets: [],
     });
     store.segment("seg_1", "http://example.test", 0);
     await store.append("seg_1", [{ type: 2, timestamp: 1 }, { type: 3, timestamp: 2 }], Date.now());
     await store.addAsset("http://example.test/icon.svg", Buffer.from("asset"), "image/svg+xml");
     await store.finalize();
-    const exported = await exportSession("rec_portable_fixture", artifact);
+    const exported = await exportSession("replay_portable_fixture", artifact);
     assert.equal(exported.fileCount, 3);
-    await assert.rejects(exportSession("rec_portable_fixture", artifact), /EEXIST/);
-    process.env.REC_HOME = target;
+    await assert.rejects(exportSession("replay_portable_fixture", artifact), /EEXIST/);
+    process.env.REPLAY_HOME = target;
     const imported = await importSession(artifact);
-    assert.equal(imported.sessionId, "rec_portable_fixture");
+    assert.equal(imported.sessionId, "replay_portable_fixture");
     assert.equal(await readFile(join(target, "sessions", imported.sessionId, "assets", store.manifest.assets[0]!.id), "utf8"), "asset");
     await assert.rejects(importSession(artifact), /already exists/);
     await writeFile(artifact, Buffer.from("invalid"));
-    await assert.rejects(importSession(artifact), /Not a valid .rec bundle/);
+    await assert.rejects(importSession(artifact), /Not a valid .replay bundle/);
   } finally {
-    if (previousHome === undefined) delete process.env.REC_HOME;
-    else process.env.REC_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.REPLAY_HOME;
+    else process.env.REPLAY_HOME = previousHome;
     await rm(source, { recursive: true, force: true });
     await rm(target, { recursive: true, force: true });
   }

@@ -1,12 +1,12 @@
 # Codex distribution
 
-Rec is distributed to end users through an approved Codex marketplace, not as a
+Replay is distributed to end users through an approved Codex marketplace, not as a
 source checkout. The plugin includes a small bootstrapper; on first use it
 downloads its pinned versioned macOS Apple-silicon runtime, verifies its
-checksum, and starts Rec normally.
+checksum, and starts Replay normally.
 
 The marketplace should be a small, plugin-only Git repository. It contains the
-marketplace catalog and `plugins/rec-mcp`, but never the Rec application source
+marketplace catalog and `plugins/replay-mcp`, but never the Replay application source
 or runtime archives. Codex supports Git-backed marketplace sources and caches
 the installed plugin separately from the runtime.
 
@@ -15,24 +15,24 @@ itself (not only its contents):
 
 ```sh
 mkdir -p <plugin-marketplace>/plugins
-cp -R /Users/mo/Documents/stitch/plugins/rec-mcp <plugin-marketplace>/plugins/rec-mcp
+cp -R /Users/mo/Documents/stitch/plugins/replay-mcp <plugin-marketplace>/plugins/replay-mcp
 ```
 
-The marketplace catalog's `source.path` must remain `./plugins/rec-mcp`.
+The marketplace catalog's `source.path` must remain `./plugins/replay-mcp`.
 
 ## User installation
 
-Install **Rec browser recordings** from the approved Codex marketplace. The
+Install **Replay browser replays** from the approved Codex marketplace. The
 first task that uses its MCPs installs the runtime under
-`~/.rec/runtimes/<version>` automatically. A new Codex task then has both Rec
+`~/.replay/runtimes/<version>` automatically. A new Codex task then has both Replay
 and the shared Playwright launcher available. No archive, `pnpm install`,
 source checkout, or manual MCP configuration is required.
 
-Until Rec is accepted into a curated marketplace, the same workflow is one
+Until Replay is accepted into a curated marketplace, the same workflow is one
 terminal command from the private plugin marketplace repository:
 
 ```sh
-codex plugin marketplace add <plugin-marketplace-git-url> && codex plugin add rec-mcp@rec
+codex plugin marketplace add <plugin-marketplace-git-url> && codex plugin add replay-mcp@replay
 ```
 
 The initial release feed permits public reads so a Codex plugin can bootstrap
@@ -42,7 +42,7 @@ downloads and stronger source-protection measures remain later hardening work.
 
 ## Versioning
 
-Rec uses `MAJOR.MINOR.PATCH` Semantic Versioning. The root package is the
+Replay uses `MAJOR.MINOR.PATCH` Semantic Versioning. The root package is the
 single source of truth; every deployable package and the Codex plugin must use
 that exact version. `pnpm release:check` enforces the invariant and requires a
 matching changelog entry. `pnpm release:version <version>` updates the version
@@ -64,9 +64,9 @@ available:
 pnpm package:macos
 ```
 
-This produces `.artifacts/rec-<version>-darwin-arm64.tar.gz` and its matching
+This produces `.artifacts/replay-<version>-darwin-arm64.tar.gz` and its matching
 `.sha256` checksum. Publish the archive with
-`REC_RELEASE_PUBLISH_TOKEN=<token> node scripts/publish-release.mjs <archive>`.
+`REPLAY_RELEASE_PUBLISH_TOKEN=<token> node scripts/publish-release.mjs <archive>`.
 The hosted release feed stores immutable version/platform pairs and is what the
 Codex bootstrapper reads. Before publishing, sign the archive and notarize the
 embedded Node-based app bundle if required by the delivery channel.

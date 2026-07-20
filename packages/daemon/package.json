@@ -1,5 +1,5 @@
 {
-  "name": "@rec/daemon",
+  "name": "@replay/daemon",
   "version": "0.2.2",
   "private": true,
   "type": "module",
@@ -12,6 +12,6 @@
     "test": "node --test dist/**/*.test.js"
   },
   "dependencies": {
-    "@rec/core": "workspace:*"
+    "@replay/core": "workspace:*"
   }
 }

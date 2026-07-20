@@ -10,16 +10,16 @@ import { promisify } from "node:util";
 import { execFile as execute } from "node:child_process";
 
 const execFile = promisify(execute);
-const releaseEndpoint = process.env.REC_RELEASE_URL ?? "https://stitch-production-2492.up.railway.app/v1/releases";
-const runtimeHome = process.env.REC_RUNTIME_HOME ?? join(homedir(), ".rec", "runtimes");
+const releaseEndpoint = process.env.REPLAY_RELEASE_URL ?? "https://stitch-production-2492.up.railway.app/v1/releases";
+const runtimeHome = process.env.REPLAY_RUNTIME_HOME ?? join(homedir(), ".replay", "runtimes");
 const platform = `${process.platform}-${process.arch}`;
-const runtimeVersion = process.env.REC_RUNTIME_VERSION;
+const runtimeVersion = process.env.REPLAY_RUNTIME_VERSION;
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const component = process.argv[2];
-  if (component !== "rec-mcp" && component !== "rec-playwright-launcher") throw new Error("Rec bootstrap must start rec-mcp or rec-playwright-launcher.");
+  if (component !== "replay-mcp" && component !== "replay-playwright-launcher") throw new Error("Replay bootstrap must start replay-mcp or replay-playwright-launcher.");
   void main(component).catch((error) => {
-    process.stderr.write(`rec bootstrap: ${messageOf(error)}\n`);
+    process.stderr.write(`replay bootstrap: ${messageOf(error)}\n`);
     process.exitCode = 1;
   });
 }
@@ -27,7 +27,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 async function main(component) {
   const runtime = await ensureRuntime();
   const child = spawn(join(runtime, "bin", component), process.argv.slice(3), { stdio: "inherit", env: process.env });
-  child.once("error", (error) => { process.stderr.write(`rec bootstrap: could not start ${component}: ${messageOf(error)}\n`); process.exitCode = 1; });
+  child.once("error", (error) => { process.stderr.write(`replay bootstrap: could not start ${component}: ${messageOf(error)}\n`); process.exitCode = 1; });
   child.once("exit", (code) => { process.exitCode = code ?? 1; });
 }
 
@@ -35,13 +35,13 @@ export async function ensureRuntime(options = {}) {
   const configuredEndpoint = options.releaseEndpoint ?? releaseEndpoint;
   const configuredHome = options.runtimeHome ?? runtimeHome;
   const configuredPlatform = options.platform ?? platform;
-  if (configuredPlatform !== "darwin-arm64") throw new Error(`No Rec runtime is available for ${configuredPlatform}.`);
+  if (configuredPlatform !== "darwin-arm64") throw new Error(`No Replay runtime is available for ${configuredPlatform}.`);
   const metadata = await releaseMetadata(configuredEndpoint, configuredPlatform, options.version ?? runtimeVersion);
   const runtime = join(configuredHome, metadata.version);
-  if (existsSync(join(runtime, "bin", "rec-mcp"))) return runtime;
+  if (existsSync(join(runtime, "bin", "replay-mcp"))) return runtime;
   await mkdir(configuredHome, { recursive: true });
   return withInstallLock(join(configuredHome, `.install-${metadata.version}`), async () => {
-    if (existsSync(join(runtime, "bin", "rec-mcp"))) return runtime;
+    if (existsSync(join(runtime, "bin", "replay-mcp"))) return runtime;
     await installRuntime(metadata, runtime, configuredHome);
     return runtime;
   });
@@ -54,7 +54,7 @@ async function releaseMetadata(endpoint, expectedPlatform, expectedVersion) {
   const value = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(typeof value.error === "string" ? value.error : `Release feed returned ${response.status}.`);
   if (!value || typeof value.version !== "string" || !/^\d+\.\d+\.\d+$/.test(value.version) || value.platform !== expectedPlatform || typeof value.archiveUrl !== "string" || !/^[a-f0-9]{64}$/.test(value.sha256 ?? "")) throw new Error("Release feed returned invalid metadata.");
-  if (expectedVersion && value.version !== expectedVersion) throw new Error(`Release feed returned ${value.version}; expected pinned Rec runtime ${expectedVersion}.`);
+  if (expectedVersion && value.version !== expectedVersion) throw new Error(`Release feed returned ${value.version}; expected pinned Replay runtime ${expectedVersion}.`);
   return value;
 }
 
@@ -68,7 +68,7 @@ function releaseMetadataUrl(endpoint, version) {
 }
 
 async function installRuntime(metadata, destination, home) {
-  const temporary = await mkdtemp(join(tmpdir(), "rec-runtime-"));
+  const temporary = await mkdtemp(join(tmpdir(), "replay-runtime-"));
   try {
     const archive = join(temporary, "runtime.tar.gz");
     const response = await fetch(metadata.archiveUrl);
@@ -77,12 +77,12 @@ async function installRuntime(metadata, destination, home) {
     if (createHash("sha256").update(body).digest("hex") !== metadata.sha256) throw new Error("Runtime checksum did not match the release feed.");
     await writeFile(archive, body, { mode: 0o600 });
     await execFile("tar", ["-xzf", archive, "-C", temporary]);
-    const source = join(temporary, `rec-${metadata.version}-${metadata.platform}`, "runtime");
-    if (!existsSync(join(source, "bin", "rec-mcp"))) throw new Error("Runtime archive does not contain Rec's MCP executable.");
+    const source = join(temporary, `replay-${metadata.version}-${metadata.platform}`, "runtime");
+    if (!existsSync(join(source, "bin", "replay-mcp"))) throw new Error("Runtime archive does not contain Replay's MCP executable.");
     await mkdir(dirname(destination), { recursive: true });
     await rename(source, destination);
-    await chmod(join(destination, "bin", "rec-mcp"), 0o755);
-    await chmod(join(destination, "bin", "rec-playwright-launcher"), 0o755);
+    await chmod(join(destination, "bin", "replay-mcp"), 0o755);
+    await chmod(join(destination, "bin", "replay-playwright-launcher"), 0o755);
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
@@ -95,7 +95,7 @@ async function withInstallLock(path, action) {
       await mkdir(path);
       try { return await action(); } finally { await rm(path, { recursive: true, force: true }); }
     } catch (error) {
-      if ((error?.code !== "EEXIST") || Date.now() >= deadline) throw new Error("Another Rec runtime install did not finish in time.");
+      if ((error?.code !== "EEXIST") || Date.now() >= deadline) throw new Error("Another Replay runtime install did not finish in time.");
       await new Promise((resolveWait) => setTimeout(resolveWait, 100));
     }
   }

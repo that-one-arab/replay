@@ -1,5 +1,5 @@
 {
-  "name": "@rec/core",
+  "name": "@replay/core",
   "version": "0.2.2",
   "private": true,
   "type": "module",

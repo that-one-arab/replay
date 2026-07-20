@@ -5,10 +5,10 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { AgentAction, CaptureSummary, Marker, NavigationEvent, RecordedAsset, RecordingManifest, Segment, TabEvent } from "./types.js";
+import type { AgentAction, CaptureSummary, Marker, NavigationEvent, CapturedAsset, ReplayManifest, Segment, TabEvent } from "./types.js";
 
-export const recHome = () => process.env.REC_HOME ?? join(process.env.HOME ?? process.cwd(), ".rec");
-export const sessionsDir = () => join(recHome(), "sessions");
+export const replayHome = () => process.env.REPLAY_HOME ?? join(process.env.HOME ?? process.cwd(), ".replay");
+export const sessionsDir = () => join(replayHome(), "sessions");
 
 export function sessionPath(sessionId: string) {
   return join(sessionsDir(), sessionId);
@@ -16,20 +16,20 @@ export function sessionPath(sessionId: string) {
 
 export class SessionStore {
   readonly root: string;
-  readonly manifest: RecordingManifest;
+  readonly manifest: ReplayManifest;
   private readonly segments = new Map<string, Segment>();
-  private readonly assets = new Map<string, RecordedAsset>();
+  private readonly assets = new Map<string, CapturedAsset>();
   private sequence = new Map<string, number>();
   private eventTimes: number[] = [];
   private eventCount = 0;
   private manifestWrite: Promise<void> = Promise.resolve();
 
-  private constructor(root: string, manifest: RecordingManifest) {
+  private constructor(root: string, manifest: ReplayManifest) {
     this.root = root;
     this.manifest = manifest;
   }
 
-  static async create(manifest: RecordingManifest) {
+  static async create(manifest: ReplayManifest) {
     const root = sessionPath(manifest.id);
     await mkdir(join(root, "events"), { recursive: true });
     const store = new SessionStore(root, manifest);
@@ -39,7 +39,7 @@ export class SessionStore {
 
   static async open(sessionId: string) {
     const root = sessionPath(sessionId);
-    const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as RecordingManifest;
+    const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as ReplayManifest;
     const store = new SessionStore(root, manifest);
     for (const segment of manifest.segments) {
       store.segments.set(segment.id, segment);
@@ -93,7 +93,7 @@ export class SessionStore {
       await this.writeManifest();
       return matching;
     }
-    const asset: RecordedAsset = {
+    const asset: CapturedAsset = {
       id,
       source_urls: [sourceUrl],
       path: `assets/${id}`,
@@ -143,7 +143,7 @@ export class SessionStore {
     transitions.push(event);
   }
 
-  async finalize(outcome?: RecordingManifest["outcome"], notes?: string) {
+  async finalize(outcome?: ReplayManifest["outcome"], notes?: string) {
     const started = Date.parse(this.manifest.created_at);
     const stopped = Date.now();
     this.manifest.stopped_at = new Date(stopped).toISOString();

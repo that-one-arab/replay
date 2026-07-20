@@ -6,39 +6,39 @@ import { dirname, resolve } from "node:path";
 
 type JsonObject = Record<string, unknown>;
 
-const endpoint = process.env.REC_DAEMON_URL ?? "http://127.0.0.1:7717";
+const endpoint = process.env.REPLAY_DAEMON_URL ?? "http://127.0.0.1:7717";
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
-const daemonEntry = process.env.REC_DAEMON_ENTRY ?? resolve(moduleDirectory, "../../daemon/dist/main.js");
-// Rec's managed Chrome always exposes this fixed loopback CDP endpoint (see the
+const daemonEntry = process.env.REPLAY_DAEMON_ENTRY ?? resolve(moduleDirectory, "../../daemon/dist/main.js");
+// Replay's managed Chrome always exposes this fixed loopback CDP endpoint (see the
 // daemon's browser launch). It is known before Chrome exists, so it can be handed
 // to Playwright MCP up front and the actual launch deferred until first use.
 const MANAGED_CDP_ENDPOINT = "http://127.0.0.1:9333";
 
 void main().catch((error: unknown) => {
-  process.stderr.write(`rec-playwright-launcher: ${messageOf(error)}\n`);
+  process.stderr.write(`replay-playwright-launcher: ${messageOf(error)}\n`);
   process.exitCode = 1;
 });
 
 /**
  * A near-transparent rendezvous launcher. It forwards MCP stdio to stock
  * Playwright MCP untouched, except that it watches for the first `tools/call`
- * and provisions Rec's managed Chrome just-in-time before forwarding it. Chrome
+ * and provisions Replay's managed Chrome just-in-time before forwarding it. Chrome
  * therefore stays closed until the browser is actually used, while Playwright
- * and Rec still share one browser over the fixed loopback CDP endpoint.
+ * and Replay still share one browser over the fixed loopback CDP endpoint.
  */
 async function main() {
   await ensureDaemon();
   const daemonLease = await acquireDaemonLease();
-  const command = process.env.REC_PLAYWRIGHT_MCP_COMMAND ?? "npx";
+  const command = process.env.REPLAY_PLAYWRIGHT_MCP_COMMAND ?? "npx";
   const args = playwrightArgs();
-  if (args.includes("--cdp-endpoint")) throw new Error("REC_PLAYWRIGHT_MCP_ARGS must not set --cdp-endpoint; Rec supplies the shared endpoint.");
+  if (args.includes("--cdp-endpoint")) throw new Error("REPLAY_PLAYWRIGHT_MCP_ARGS must not set --cdp-endpoint; Replay supplies the shared endpoint.");
   // Playwright MCP connects to the CDP endpoint lazily on its first browser tool,
   // so Chrome is not launched here. It is provisioned on the first tools/call.
   const child = spawn(command, [...args, "--cdp-endpoint", MANAGED_CDP_ENDPOINT], { stdio: ["pipe", "pipe", "inherit"], env: process.env });
   child.stdout?.pipe(process.stdout);
   child.stdin?.on("error", () => { /* Playwright MCP closed its input; nothing left to forward. */ });
   child.once("error", (error) => {
-    process.stderr.write(`rec-playwright-launcher: could not start Playwright MCP: ${messageOf(error)}\n`);
+    process.stderr.write(`replay-playwright-launcher: could not start Playwright MCP: ${messageOf(error)}\n`);
     process.exitCode = 1;
   });
   child.once("exit", async (code) => {
@@ -49,7 +49,7 @@ async function main() {
 }
 
 /**
- * Forward the client's stdin to Playwright MCP line by line, launching Rec's
+ * Forward the client's stdin to Playwright MCP line by line, launching Replay's
  * managed Chrome exactly once — just before the first `tools/call` reaches
  * Playwright MCP, which is the first moment a browser is actually needed.
  */
@@ -87,9 +87,9 @@ function forwardStdinEnsuringBrowser(child: ChildProcess) {
 }
 
 async function ensureManagedBrowser() {
-  const result = object(await api("POST", "/api/browser/ensure", { executable: process.env.REC_BROWSER_EXECUTABLE }, false));
-  if (result.browser_state === "restart_required") throw new Error("Rec browser settings changed. Stop the managed browser with `rec browser stop`, then start this task again.");
-  requiredString(result.cdp_endpoint, "Rec browser CDP endpoint");
+  const result = object(await api("POST", "/api/browser/ensure", { executable: process.env.REPLAY_BROWSER_EXECUTABLE }, false));
+  if (result.browser_state === "restart_required") throw new Error("Replay browser settings changed. Stop the managed browser with `replay browser stop`, then start this task again.");
+  requiredString(result.cdp_endpoint, "Replay browser CDP endpoint");
 }
 
 function isToolCall(line: string) {
@@ -106,14 +106,14 @@ function parseMessage(line: string): { method?: string; id?: unknown } | undefin
 }
 
 function playwrightArgs() {
-  const configured = process.env.REC_PLAYWRIGHT_MCP_ARGS;
+  const configured = process.env.REPLAY_PLAYWRIGHT_MCP_ARGS;
   if (!configured) return ["-y", "@playwright/mcp@latest"];
   try {
     const value = JSON.parse(configured) as unknown;
     if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error("Expected a JSON string array.");
     return value;
   } catch (error) {
-    throw new Error(`REC_PLAYWRIGHT_MCP_ARGS is invalid: ${messageOf(error)}`);
+    throw new Error(`REPLAY_PLAYWRIGHT_MCP_ARGS is invalid: ${messageOf(error)}`);
   }
 }
 
@@ -121,8 +121,8 @@ async function ensureDaemon(): Promise<JsonObject> {
   const running = await probeDaemon();
   if (running.health) return running.health;
   if (running.listening) throw new Error(portConflict());
-  if (!existsSync(daemonEntry)) throw new Error("rec is not built. Run npm run build before starting the Playwright launcher.");
-  const child = spawn(process.execPath, [daemonEntry], { detached: true, stdio: "ignore", cwd: resolve(moduleDirectory, "../../.."), env: { ...process.env, REC_CONFIG_CWD: process.cwd() } });
+  if (!existsSync(daemonEntry)) throw new Error("replay is not built. Run npm run build before starting the Playwright launcher.");
+  const child = spawn(process.execPath, [daemonEntry], { detached: true, stdio: "ignore", cwd: resolve(moduleDirectory, "../../.."), env: { ...process.env, REPLAY_CONFIG_CWD: process.cwd() } });
   child.unref();
   let daemonGone = false;
   child.once("exit", () => { daemonGone = true; });
@@ -134,16 +134,16 @@ async function ensureDaemon(): Promise<JsonObject> {
     if (probe.listening) throw new Error(portConflict());
     // A daemon that lost a startup race leaves the winner answering health
     // above; an exit with nothing listening means the daemon itself failed.
-    if (daemonGone) throw new Error(`The rec daemon exited during startup. Run \`node ${daemonEntry}\` to see why.`);
+    if (daemonGone) throw new Error(`The replay daemon exited during startup. Run \`node ${daemonEntry}\` to see why.`);
   }
-  throw new Error(`The rec daemon did not respond at ${endpoint} within 2.5s of spawning.`);
+  throw new Error(`The replay daemon did not respond at ${endpoint} within 2.5s of spawning.`);
 }
 
 /**
- * A valid /health body is the only proof a rec daemon owns the endpoint.
+ * A valid /health body is the only proof a replay daemon owns the endpoint.
  * Anything else answering there is a foreign process: spawning a daemon behind
  * it would die on the taken port, and treating it as the daemon (the old
- * response.ok check did) would misroute recording calls into it.
+ * response.ok check did) would misroute replay calls into it.
  */
 async function probeDaemon(): Promise<{ health?: JsonObject; listening: boolean }> {
   let response: Response;
@@ -153,7 +153,7 @@ async function probeDaemon(): Promise<{ health?: JsonObject; listening: boolean 
 }
 
 function portConflict() {
-  return `Something that is not a rec daemon is already listening at ${endpoint}. Stop that process or point REC_PORT / REC_DAEMON_URL at a free port.`;
+  return `Something that is not a replay daemon is already listening at ${endpoint}. Stop that process or point REPLAY_PORT / REPLAY_DAEMON_URL at a free port.`;
 }
 
 type DaemonLease = { id: string; renewTimer: NodeJS.Timeout };
@@ -163,7 +163,7 @@ async function acquireDaemonLease(): Promise<DaemonLease | undefined> {
     const response = await fetch(`${endpoint}/api/leases/acquire`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ owner: "rec-playwright-launcher", kind: "agent", ttl_ms: 30_000 }),
+      body: JSON.stringify({ owner: "replay-playwright-launcher", kind: "agent", ttl_ms: 30_000 }),
     });
     const value = await response.json().catch(() => ({})) as { lease_id?: string };
     if (!response.ok || !value.lease_id) return undefined;

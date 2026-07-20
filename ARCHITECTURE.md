@@ -1,13 +1,13 @@
-# Rec architecture
+# Replay architecture
 
 ## Purpose
 
-Rec captures a browser journey performed by a coding agent, stores it as a
+Replay captures a browser journey performed by a coding agent, stores it as a
 portable DOM-based replay, and hands it back locally or through an optional
 share link. It is designed around one important separation:
 
 - **Playwright drives the browser.** It remains an independent MCP server.
-- **Rec observes and records that same browser.** It does not proxy or
+- **Replay observes and captures that same browser.** It does not proxy or
   reimplement Playwright tools.
 
 That separation keeps the agent's normal browser workflow intact while giving
@@ -20,19 +20,19 @@ markers, and captured static assets.
 flowchart LR
   Agent[Coding agent]
   P[Stock Playwright MCP]
-  L[Rec Playwright launcher]
-  R[Rec MCP]
-  D[Local Rec daemon]
+  L[Replay Playwright launcher]
+  R[Replay MCP]
+  D[Local Replay daemon]
   C[Managed local Chrome]
-  Core[Recorder and storage]
+  Core[Capture and storage]
   Player[Replay player]
   Local[Local replay URL]
-  Artifact[Portable .rec artifact]
+  Artifact[Portable .replay artifact]
   Share[Optional share service]
   Link[Bearer share link]
 
   Agent -->|Playwright tool calls| P
-  Agent -->|recording lifecycle and markers| R
+  Agent -->|replay lifecycle and markers| R
   L -->|starts with shared CDP endpoint| P
   L --> D
   R --> D
@@ -42,73 +42,73 @@ flowchart LR
   Core --> Artifact
   D --> Local
   Local --> Player
-  R -->|on recording_stop when configured| Share
+  R -->|on capture_stop when configured| Share
   Artifact --> Share
   Share --> Link
   Link --> Player
 ```
 
 All capture state is local by default. The only hosted request in the normal
-workflow is the optional upload performed after a recording has been finalized.
+workflow is the optional upload performed after a replay has been finalized.
 
 ## Components and ownership
 
 | Component | Location | Owns | Does not own |
 | --- | --- | --- | --- |
-| Core | `packages/core` | CDP recorder, rrweb event capture, session storage, assets, configuration, export/import | HTTP, MCP, player UI |
-| Daemon | `packages/daemon` | One local recorder, Chrome lifecycle, local replay/data endpoints, automatic final export, replay-assistant chat backend (Codex provider, tool bridge) | Agent protocol and browser automation |
-| Rec MCP | `packages/mcp` | Stdio MCP protocol, recording lifecycle tools, the embedded stock Playwright tool surface (pinned `@playwright/mcp` behind an in-process bridge, `rec_marker` injection, action reporting), optional automatic upload handoff | Implementing browser tools itself |
-| Playwright launcher | `packages/playwright-launcher` | Escape hatch: starting a separately installed stock Playwright MCP against Rec's managed Chrome when embedding is disabled | Recording or interpreting MCP traffic |
-| Player | `packages/player` | Rendering a stored recording, timeline controls and reviewer-facing UI | Capture, persistence, sharing policy |
+| Core | `packages/core` | CDP capture, rrweb event capture, session storage, assets, configuration, export/import | HTTP, MCP, player UI |
+| Daemon | `packages/daemon` | One local capture, Chrome lifecycle, local replay/data endpoints, automatic final export, replay-assistant chat backend (Codex provider, tool bridge) | Agent protocol and browser automation |
+| Replay MCP | `packages/mcp` | Stdio MCP protocol, replay lifecycle tools, the embedded stock Playwright tool surface (pinned `@playwright/mcp` behind an in-process bridge, `replay_marker` injection, action reporting), optional automatic upload handoff | Implementing browser tools itself |
+| Playwright launcher | `packages/playwright-launcher` | Escape hatch: starting a separately installed stock Playwright MCP against Replay's managed Chrome when embedding is disabled | Replay or interpreting MCP traffic |
+| Player | `packages/player` | Rendering a stored replay, timeline controls and reviewer-facing UI | Capture, persistence, sharing policy |
 | CLI | `packages/cli` | Contributor/troubleshooting commands and manual artifact recovery | Normal coding-agent orchestration |
 | Runtime | `packages/runtime` | Stable entry points and asset paths in a packaged distribution | Source builds or release delivery |
-| Codex plugin | `plugins/rec-mcp` | Bootstrapping the packaged runtime and registering Rec plus the launcher | Rec implementation itself |
+| Codex plugin | `plugins/replay-mcp` | Bootstrapping the packaged runtime and registering Replay plus the launcher | Replay implementation itself |
 | Share server | `packages/share-server` | Validating uploaded artifacts, hosted replay, bearer-link lookup, runtime release feed | Live browser capture or authorization policy |
 
 ## Local agent capture
 
 ### Browser rendezvous
 
-The browser is the shared boundary between Playwright and Rec. A coding agent
-can browse before it decides to record. Rec MCP embeds the pinned stock
+The browser is the shared boundary between Playwright and Replay. A coding agent
+can browse before it decides to capture. Replay MCP embeds the pinned stock
 `@playwright/mcp` in-process and forwards `browser_*` tool calls to it over an
-in-memory bridge, injecting an optional `rec_marker` parameter into each tool
+in-memory bridge, injecting an optional `replay_marker` parameter into each tool
 schema and stripping it before Playwright sees the call. Chrome is provisioned
-lazily: before forwarding a browser tool call, Rec MCP asks the daemon for the
-attached CDP endpoint and ensures Rec's managed Chrome only if none is
+lazily: before forwarding a browser tool call, Replay MCP asks the daemon for the
+attached CDP endpoint and ensures Replay's managed Chrome only if none is
 attached. Because embedded Playwright connects to that endpoint on its first
 browser action, Chrome stays closed until the browser is actually used, not
 merely because an MCP client started. Each forwarded call is reported to the
-daemon with its request/response bracket; a call carrying `rec_marker` records
+daemon with its request/response bracket; a call carrying `replay_marker` captures
 that checkpoint atomically with the action, so marker-action association never
 depends on call ordering. The separate launcher provides the same rendezvous
 for an external Playwright MCP when embedding is disabled
-(`REC_EMBEDDED_PLAYWRIGHT=0`): it watches the forwarded stdio stream and asks
-the daemon to ensure Rec's Chrome just before the first `tools/call` reaches
+(`REPLAY_EMBEDDED_PLAYWRIGHT=0`): it watches the forwarded stdio stream and asks
+the daemon to ensure Replay's Chrome just before the first `tools/call` reaches
 Playwright MCP.
 
 ```mermaid
 sequenceDiagram
   participant Agent
-  participant Rec as Rec MCP
+  participant Replay as Replay MCP
   participant Daemon as Local daemon
   participant Chrome as Managed Chrome
   participant PW as Embedded stock Playwright MCP
 
-  Agent->>Rec: Codex starts the rec MCP server
-  Rec->>Daemon: GET /health, start if absent (Chrome not launched)
-  Agent->>Rec: browser_* tools/call, optionally carrying rec_marker
-  Rec->>Daemon: POST /api/browser/ensure (only if no browser attached)
+  Agent->>Replay: Codex starts the replay MCP server
+  Replay->>Daemon: GET /health, start if absent (Chrome not launched)
+  Agent->>Replay: browser_* tools/call, optionally carrying replay_marker
+  Replay->>Daemon: POST /api/browser/ensure (only if no browser attached)
   Daemon->>Chrome: launch or reuse local Chrome with CDP
-  Daemon-->>Rec: loopback CDP endpoint
-  Rec->>PW: forward the call over the in-process bridge, rec_marker stripped
+  Daemon-->>Replay: loopback CDP endpoint
+  Replay->>PW: forward the call over the in-process bridge, replay_marker stripped
   PW->>Chrome: connect over CDP and automate
-  Rec->>Daemon: POST /api/sessions/action (bracket timestamps, atomic marker)
+  Replay->>Daemon: POST /api/sessions/action (bracket timestamps, atomic marker)
 ```
 
-Rec owns a Chrome it launches itself. It can alternatively attach to a supplied
-**loopback-only** CDP endpoint through `recording_attach_browser`; in that case
-the external browser is never stopped or reconfigured by Rec. Normal Codex use
+Replay owns a Chrome it launches itself. It can alternatively attach to a supplied
+**loopback-only** CDP endpoint through `capture_attach_browser`; in that case
+the external browser is never stopped or reconfigured by Replay. Normal Codex use
 relies on the managed-browser path, so users do not need to launch Chrome or
 handle ports.
 
@@ -118,57 +118,57 @@ an internet-facing API.
 
 ### Local runtime lifecycle
 
-The daemon is lazy-started by Rec MCP, the Playwright launcher, or a CLI command.
+The daemon is lazy-started by Replay MCP, the Playwright launcher, or a CLI command.
 Those agent-facing processes acquire a renewable **agent lease** while they are
 alive. When the last agent lease ends, the daemon waits 30 seconds by default,
-then stops only Rec-managed Chrome. An open local player instead holds a
-**replay lease**: it keeps recording data reachable but never keeps Chrome
+then stops only Replay-managed Chrome. An open local player instead holds a
+**replay lease**: it keeps replay data reachable but never keeps Chrome
 running. Once no agent or replay lease remains, the daemon exits after 15
-minutes by default. An active recording blocks automatic shutdown, and
-`rec daemon stop` provides an explicit post-recording stop. Both grace periods
-are configurable through `REC_BROWSER_IDLE_TIMEOUT_MS` and
-`REC_DAEMON_IDLE_TIMEOUT_MS`.
+minutes by default. An active replay blocks automatic shutdown, and
+`replay daemon stop` provides an explicit post-replay stop. Both grace periods
+are configurable through `REPLAY_BROWSER_IDLE_TIMEOUT_MS` and
+`REPLAY_DAEMON_IDLE_TIMEOUT_MS`.
 
-### Recording lifecycle
+### Replay lifecycle
 
-`recording_start` is valid only after a navigated in-scope page exists. This
-prevents empty recordings. The recorder connects to Chrome over CDP using
-`playwright-core`, injects the rrweb recorder into eligible documents, and
+`capture_start` is valid only after a navigated in-scope page exists. This
+prevents empty replays. The capture connects to Chrome over CDP using
+`playwright-core`, injects the rrweb capture into eligible documents, and
 observes all pages in the browser context.
 
 ```mermaid
 sequenceDiagram
   participant Agent
-  participant Rec as Rec MCP
+  participant Replay as Replay MCP
   participant Daemon
-  participant Recorder
+  participant Capture
   participant Chrome
   participant Store as Session store
 
-  Agent->>Rec: recording_start
-  Rec->>Daemon: POST /api/sessions/start
-  Daemon->>Recorder: start(options + replay defaults)
-  Recorder->>Chrome: attach rrweb bindings and init script
-  Recorder->>Store: create manifest and session directory
+  Agent->>Replay: capture_start
+  Replay->>Daemon: POST /api/sessions/start
+  Daemon->>Capture: start(options + replay defaults)
+  Capture->>Chrome: attach rrweb bindings and init script
+  Capture->>Store: create manifest and session directory
   Agent->>Chrome: Playwright actions continue
-  Chrome->>Recorder: rrweb batches, page/tab/navigation signals
-  Recorder->>Store: gzip event chunks and captured assets
-  Agent->>Rec: recording_marker (optional)
-  Rec->>Daemon: POST /api/sessions/marker
+  Chrome->>Capture: rrweb batches, page/tab/navigation signals
+  Capture->>Store: gzip event chunks and captured assets
+  Agent->>Replay: capture_marker (optional)
+  Replay->>Daemon: POST /api/sessions/marker
   Daemon->>Store: append marker metadata
-  Agent->>Rec: recording_stop
-  Rec->>Daemon: POST /api/sessions/stop
-  Daemon->>Store: finalize manifest and export .rec
-  Rec-->>Agent: replay URL, artifact path, optional share URL
+  Agent->>Replay: capture_stop
+  Replay->>Daemon: POST /api/sessions/stop
+  Daemon->>Store: finalize manifest and export .replay
+  Replay-->>Agent: replay URL, artifact path, optional share URL
 ```
 
 Event batches flush every 500 ms into independently valid gzip chunks. A crash
 can therefore lose at most the current in-memory batch rather than corrupting
-the whole session. The recorder also copies eligible same-scope static assets
+the whole session. The capture also copies eligible same-scope static assets
 (stylesheets, images, and fonts) up to 10 MiB each and rewrites replay URLs to
 the locally stored asset endpoint.
 
-The recorder models a browser session, not a single DOM tree:
+The capture models a browser session, not a single DOM tree:
 
 - Each page receives its own rrweb **segment**.
 - Segment clock offsets place all tabs on one shared timeline.
@@ -184,32 +184,32 @@ The recorder models a browser session, not a single DOM tree:
 
 ## Session and artifact data
 
-The local Rec home defaults to `~/.rec` and is configurable through `REC_HOME`.
+The local Replay home defaults to `~/.replay` and is configurable through `REPLAY_HOME`.
 
 ```text
-~/.rec/
+~/.replay/
 ├── config.toml                 # optional user defaults
 ├── browser.json                # managed Chrome state
 ├── chromium-profile/           # managed Chrome profile
 ├── sessions/
-│   └── rec_<id>/
+│   └── replay_<id>/
 │       ├── manifest.json
 │       ├── markers.json
 │       ├── events/<segment>-<sequence>.jsonl.gz
 │       └── assets/<sha256>
-├── exports/rec_<id>.rec        # finalized portable artifacts
+├── exports/replay_<id>.replay        # finalized portable artifacts
 └── runtimes/<version>/          # installed packaged runtime
 ```
 
-`manifest.json` is the source of truth for a recording. It contains session
-metadata, recording origins and masking policy, durations, segments, tabs,
+`manifest.json` is the source of truth for a replay. It contains session
+metadata, replay origins and masking policy, durations, segments, tabs,
 navigation intervals, markers, asset metadata, and replay defaults. It is
-updated atomically. Event files hold lines with the source segment, Rec receipt
+updated atomically. Event files hold lines with the source segment, Replay receipt
 time, and original rrweb event.
 
-### Portable `.rec` format
+### Portable `.replay` format
 
-Stopping a recording creates a `.rec` file automatically. It is a
+Stopping a replay creates a `.replay` file automatically. It is a
 gzip-compressed JSON envelope containing the complete manifest, every referenced
 event chunk and captured asset, `markers.json` when present, and SHA-256
 checksums for all included files.
@@ -231,11 +231,11 @@ malformed artifacts; they do not authenticate the sender or encrypt content.
 The daemon serves the compiled player at `/replay` and exposes session endpoints
 for a manifest, event streams, and captured assets. The share server serves the
 same player and compatible endpoints, which keeps replay behavior independent of
-where a finalized recording is opened.
+where a finalized replay is opened.
 
 The player turns a session timeline into reviewer-friendly playback:
 
-- It selects the tab that was focused at the current recording time. Tabs are
+- It selects the tab that was focused at the current replay time. Tabs are
   display state, not user-selectable playback controls.
 - It reconstructs a smooth cursor path between relevant interaction targets;
   it does not blindly replay raw automation mouse events.
@@ -244,14 +244,14 @@ The player turns a session timeline into reviewer-friendly playback:
 - It uses persistent navigation intervals to show refresh or navigation state
   accurately while playing and when seeking into or out of an interval.
 - It supports **Cut**, **Fast-forward**, and **Keep** idle modes. Replay
-  defaults are captured in the recording manifest so authors set a sensible
+  defaults are captured in the replay manifest so authors set a sensible
   initial experience while reviewers can still choose another mode.
 
 Configuration is resolved per key in this order: built-in defaults, user
-`~/.rec/config.toml`, project `.rec/config.toml`, `REC_CONFIG`, then matching
-`REC_*` environment variables. Browser launch settings are fixed for a running
+`~/.replay/config.toml`, project `.replay/config.toml`, `REPLAY_CONFIG`, then matching
+`REPLAY_*` environment variables. Browser launch settings are fixed for a running
 managed Chrome; a configuration change reports `restart_required` rather than
-interrupting an active browser or recording.
+interrupting an active browser or replay.
 
 ### Replay assistant
 
@@ -261,7 +261,7 @@ the OpenAI Codex CLI is the provider. The pieces and their boundaries:
 - `packages/core` (`summary.ts`) distills the raw rrweb stream into a semantic
   timeline — navigations, labeled clicks, typed input, tab switches, markers,
   and idle gaps — that becomes the model's grounding context. All times are raw
-  recording milliseconds.
+  replay milliseconds.
 - `packages/daemon` (`chat.ts`) owns chat sessions. Each user turn spawns
   `codex exec --json` (resuming the same Codex thread on later turns), parses
   its JSONL events, and streams the transcript to the player over SSE
@@ -277,36 +277,36 @@ the OpenAI Codex CLI is the provider. The pieces and their boundaries:
   annotations and `execution.approval_mode = "never"`, because Codex otherwise
   auto-cancels MCP calls needing approval in headless exec runs.
 - The Codex subprocess runs with a read-only sandbox, `--ignore-user-config`
-  for reproducible behavior, and the recording's session directory as its
+  for reproducible behavior, and the replay's session directory as its
   working root. Everything stays on the local machine except the model calls
   made by the viewer's own Codex account.
 
 ## MCP contracts
 
-The Rec MCP server is stdio JSON-RPC and exposes seven tools:
+The Replay MCP server is stdio JSON-RPC and exposes seven tools:
 
 | Tool | Local daemon operation | Intended use |
 | --- | --- | --- |
-| `recording_browser_ensure` | Ensure managed Chrome and return CDP endpoint | Manual/standalone setup or diagnostics |
-| `recording_attach_browser` | Attach to an explicit loopback CDP endpoint | External browser integration |
-| `recording_start` | Start capture after page readiness | Begin evidence collection |
-| `recording_marker` | Add narrative marker | Meaningful confirmed checkpoints only |
-| `recording_status` | Read daemon, browser, and capture state | Diagnostics and readiness |
-| `recording_stop` | Finalize, export, and optionally upload | Normal terminal handoff |
-| `recording_share` | Upload a completed artifact | Retry/recovery for an earlier recording |
+| `capture_browser_ensure` | Ensure managed Chrome and return CDP endpoint | Manual/standalone setup or diagnostics |
+| `capture_attach_browser` | Attach to an explicit loopback CDP endpoint | External browser integration |
+| `capture_start` | Start capture after page readiness | Begin evidence collection |
+| `capture_marker` | Add narrative marker | Meaningful confirmed checkpoints only |
+| `capture_status` | Read daemon, browser, and capture state | Diagnostics and readiness |
+| `capture_stop` | Finalize, export, and optionally upload | Normal terminal handoff |
+| `replay_share` | Upload a completed artifact | Retry/recovery for an earlier replay |
 
 The normal agent sequence is:
 
 1. Navigate with Playwright.
-2. Start Rec when capture is requested.
+2. Start capturing when capture is requested.
 3. Continue all browser actions through Playwright.
 4. Add markers only where they make a reviewer understand the journey better.
-5. Stop Rec and return the resulting replay/share URL.
+5. Stop capturing and return the resulting replay/share URL.
 
 The Playwright launcher forwards stdio to stock Playwright MCP untouched, with
-one exception: it detects the first `tools/call` in order to provision Rec's
+one exception: it detects the first `tools/call` in order to provision Replay's
 Chrome just in time. It does not otherwise inspect calls, issue synthetic
-markers, or try to associate a Playwright action with a Rec marker by ID.
+markers, or try to associate a Playwright action with a Replay marker by ID.
 
 ## Hosted sharing
 
@@ -314,14 +314,14 @@ The optional share server accepts only a completed portable artifact:
 
 ```mermaid
 sequenceDiagram
-  participant MCP as Rec MCP
+  participant MCP as Replay MCP
   participant Local as Local export
   participant Share as Share server
   participant Volume as Persistent volume
   participant Reviewer
 
-  MCP->>Local: read finalized .rec
-  MCP->>Share: POST /v1/recordings
+  MCP->>Local: read finalized .replay
+  MCP->>Share: POST /v1/replays
   Share->>Share: validate and import artifact
   Share->>Volume: store spool and share map
   Share-->>MCP: opaque bearer URL
@@ -336,32 +336,32 @@ manifest/events/assets API as the local daemon. On Railway, `/data` must be a
 persistent volume because the service stores both shares and release artifacts
 there.
 
-`recording_stop` attempts this upload automatically when `REC_SHARE_URL` is
+`capture_stop` attempts this upload automatically when `REPLAY_SHARE_URL` is
 configured. A failed upload does not discard the local result: the response
 still contains the replay URL and portable artifact path, with `shareError` for
-diagnostics. `recording_share` and `rec share` are recovery paths for an already
-stopped recording.
+diagnostics. `replay_share` and `replay share` are recovery paths for an already
+stopped replay.
 
 Shares are currently unlisted bearer links. Anyone with the link can view the
-recording. Authentication, authorization, expiry, revocation, retention,
+replay. Authentication, authorization, expiry, revocation, retention,
 auditing, encryption, and broader redaction are intentionally outside the
 current architecture.
 
 ## Distribution and runtime bootstrap
 
-Rec's user-facing Codex installation is a small plugin-only Git marketplace,
-not a source checkout. The plugin registers two MCP entries: Rec MCP and the
-Rec Playwright launcher. Both start through `rec-bootstrap.mjs`.
+Replay's user-facing Codex installation is a small plugin-only Git marketplace,
+not a source checkout. The plugin registers two MCP entries: Replay MCP and the
+Replay Playwright launcher. Both start through `replay-bootstrap.mjs`.
 
 ```mermaid
 sequenceDiagram
   participant Codex
   participant Plugin as Installed plugin
   participant Feed as Release feed
-  participant Disk as ~/.rec/runtimes/<version>
-  participant Runtime as Packaged Rec runtime
+  participant Disk as ~/.replay/runtimes/<version>
+  participant Runtime as Packaged Replay runtime
 
-  Codex->>Plugin: start rec or playwright MCP
+  Codex->>Plugin: start capturing or playwright MCP
   Plugin->>Feed: GET pinned release for darwin-arm64
   Feed-->>Plugin: version, archive URL, SHA-256
   Plugin->>Disk: lock, download, verify, extract atomically
@@ -394,12 +394,12 @@ more platforms, authenticated downloads, and a hardened native launcher.
 
 ## Operational boundaries and current limitations
 
-- The recorder captures DOM events and selected static assets, not scripts, API
+- The capture captures DOM events and selected static assets, not scripts, API
   responses, or resources larger than 10 MiB.
 - Password fields are masked. Broader input masking/redaction policy is deferred.
 - Only loopback CDP endpoints are accepted for external attachment.
-- The local daemon assumes one active recorder and one managed browser per Rec
-  home/port. Deliberate isolation uses `REC_HOME` and `REC_PORT`.
+- The local daemon assumes one active capture and one managed browser per Replay
+  home/port. Deliberate isolation uses `REPLAY_HOME` and `REPLAY_PORT`.
 - The share service is a single volume-backed instance, not a multi-writer or
   object-storage deployment.
 - Runtime distribution currently targets only Apple-silicon macOS.
@@ -410,15 +410,15 @@ more platforms, authenticated downloads, and a hardened native launcher.
 
 | Change needed | Start here | Related contract |
 | --- | --- | --- |
-| Capture behavior, masking, assets, tabs, navigation | `packages/core/src/recorder.ts` | `RecordingManifest` in `packages/core/src/types.ts` |
-| On-disk sessions or `.rec` validation | `packages/core/src/storage.ts`, `packages/core/src/bundle.ts` | [recording format](docs/format.md) |
+| Capture behavior, masking, assets, tabs, navigation | `packages/core/src/capture.ts` | `ReplayManifest` in `packages/core/src/types.ts` |
+| On-disk sessions or `.replay` validation | `packages/core/src/storage.ts`, `packages/core/src/bundle.ts` | [replay format](docs/format.md) |
 | Local endpoints or Chrome lifecycle | `packages/daemon/src/main.ts` | MCP/CLI calls and player API |
 | Agent-facing tool behavior | `packages/mcp/src/main.ts` | [MCP guide](docs/mcp.md) |
-| Embedded Playwright bridge, `rec_marker`, action reporting | `packages/mcp/src/playwright-bridge.ts`, `packages/mcp/src/main.ts` | pinned `@playwright/mcp` dependency |
+| Embedded Playwright bridge, `replay_marker`, action reporting | `packages/mcp/src/playwright-bridge.ts`, `packages/mcp/src/main.ts` | pinned `@playwright/mcp` dependency |
 | External Playwright startup (escape hatch) | `packages/playwright-launcher/src/main.ts` | `@playwright/mcp` command and arguments |
 | Playback/timeline UX | `packages/player/src/main.ts`, `packages/player/src/style.css` | persisted manifest metadata |
 | Hosted links or release feed | `packages/share-server/src/main.ts` | portable artifact and Railway volume |
-| Packaging or bootstrap | `scripts/package-macos.mjs`, `plugins/rec-mcp/scripts/rec-bootstrap.mjs` | release version and SHA-256 feed |
+| Packaging or bootstrap | `scripts/package-macos.mjs`, `plugins/replay-mcp/scripts/replay-bootstrap.mjs` | release version and SHA-256 feed |
 
 Run the focused package tests while changing a component, then run `pnpm check`
 and `pnpm test` before a cross-component handoff. The repository's README and

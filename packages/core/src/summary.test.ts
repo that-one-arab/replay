@@ -1,17 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { renderSummaryText, stepsInRange, summarizeReplay } from "./summary.js";
-import type { RecordingManifest } from "./types.js";
+import type { ReplayManifest } from "./types.js";
 
 const BASE = 1_700_000_000_000;
 
-function manifest(overrides: Partial<RecordingManifest> = {}): RecordingManifest {
+function manifest(overrides: Partial<ReplayManifest> = {}): ReplayManifest {
   return {
     format_version: 1,
-    id: "rec_test",
+    id: "replay_test",
     title: "Checkout repro",
     created_at: "2026-07-19T10:00:00.000Z",
-    recorder: { version: "0", rrweb: "0", record_canvas: false, record_cross_origin_iframes: false },
+    capture: { version: "0", rrweb: "0", capture_canvas: false, capture_cross_origin_iframes: false },
     origins: ["http://127.0.0.1:4173"],
     masking: { mask_all_inputs: false, passwords: true },
     segments: [{ id: "seg-1", page_url: "http://127.0.0.1:4173/", clock_offset_ms: 0, chunks: [] }],
@@ -68,7 +68,7 @@ test("summarizeReplay distills clicks, typing, markers, and idle gaps", () => {
   assert.ok(descriptions.some((item) => item.startsWith("Idle for 7")), "the 2s→9s gap surfaces as idle");
   assert.equal(summary.duration_ms, 9_000);
   const text = renderSummaryText(summary);
-  assert.match(text, /Recording: Checkout repro/);
+  assert.match(text, /Replay: Checkout repro/);
   assert.match(text, /t_ms=2000/);
 });
 

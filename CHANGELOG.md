@@ -1,7 +1,7 @@
 # Changelog
 
-Rec follows [Semantic Versioning](https://semver.org/). Each published runtime
-is immutable and is named `rec-<version>-darwin-arm64.tar.gz`.
+Replay follows [Semantic Versioning](https://semver.org/). Each published runtime
+is immutable and is named `replay-<version>-darwin-arm64.tar.gz`.
 
 ## [Unreleased]
 
@@ -10,7 +10,7 @@ is immutable and is named `rec-<version>-darwin-arm64.tar.gz`.
   `chat.provider` selects it ("auto" prefers OpenAI when a key is configured,
   falling back to the Codex CLI).
 - Add a replay assistant chat panel to the local player, powered by the Codex
-  CLI. The assistant reads a distilled action timeline of the recording and can
+  CLI. The assistant reads a distilled action timeline of the replay and can
   drive the player while it answers: seeking, pausing, highlighting elements,
   and reading the rendered page at any moment. Local-only; hidden on shared
   replays and configurable via the new `[chat]` config table.
@@ -31,12 +31,12 @@ is immutable and is named `rec-<version>-darwin-arm64.tar.gz`.
 
 ## [0.2.0] - 2026-07-18
 
-- Add a Codex plugin bootstrapper that installs the matching Rec runtime on
+- Add a Codex plugin bootstrapper that installs the matching Replay runtime on
   first use.
 - Add a versioned runtime release feed and protected release publishing API.
 - Add the macOS runtime archive, checksum, and release-version guard.
 
 ## [0.1.0]
 
-- Initial local recording, agent capture, portable artifacts, and replay sharing
+- Initial local replay, agent capture, portable artifacts, and replay sharing
   workflow.

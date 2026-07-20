@@ -6,6 +6,6 @@ COPY packages ./packages
 RUN corepack enable && pnpm install --frozen-lockfile && pnpm build
 
 ENV PORT=8080
-ENV REC_SHARE_DATA_DIR=/data
+ENV REPLAY_SHARE_DATA_DIR=/data
 EXPOSE 8080
 CMD ["node", "packages/share-server/dist/main.js"]

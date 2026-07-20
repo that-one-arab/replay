@@ -5,7 +5,7 @@ import { closeChat, initChat, registerReplayControl, wireChatToggle } from "./ch
 import { EventType, IncrementalSource, MouseInteraction, type AgentAction, type IdleMode, type Manifest, type Marker, type NavigationEvent, type ReplayDefaults, type ReplayEvent, type Segment, type TabEvent, type TimelineIdleRange } from "./types.js";
 import { clamp, escape, format, formatDuration, nearlyEqual } from "./format.js";
 import { CURSOR_APPROACH_MS, humanizeEvents, isRealPoint, withCursorLeadIns } from "./humanize.js";
-import { RELOAD_CONTEXT_MS, closedAt, describeAction, nextFocusForSegment, recordingViewport, resolveMarkerTimes, segmentAtTime, segmentLabel, sessionEventTime, tabEvents } from "./manifest.js";
+import { RELOAD_CONTEXT_MS, closedAt, describeAction, nextFocusForSegment, replayViewport, resolveMarkerTimes, segmentAtTime, segmentLabel, sessionEventTime, tabEvents } from "./manifest.js";
 import { DEFAULT_PLAYBACK_SPEED, projectPlayback, resolvedReplayDefaults } from "./projection.js";
 import { createCamera } from "./camera.js";
 import { elementCenter, isElementLike, makeCursorPlacer, revealCursorOnFirstMove, spawnClickRipple } from "./cursor.js";
@@ -29,7 +29,7 @@ const MARKER_FWD_SLOP_MS = 60;
 // Camera inputs arriving from rrweb's seek reconstruction are historical; only
 // events cast near the live playhead may steer the camera.
 const CAMERA_SYNC_WINDOW_MS = 800;
-// A recording fetch that hasn't answered in this long means the server is gone,
+// A replay fetch that hasn't answered in this long means the server is gone,
 // not slow — fail with a clear message rather than hanging forever. Sharing
 // uploads to the remote server, so it gets a longer leash.
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -44,25 +44,25 @@ let captionTimer: number | undefined;
 let chaptersOpen: boolean | undefined;
 let introDismissed = false;
 // The auto-zoom camera is a viewer setting: off by default, toggled from the
-// play-bar settings menu, and remembered across replays via rec-camera. The
+// play-bar settings menu, and remembered across replays via replay-camera. The
 // ?camera=on/off query param still seeds it for shared links.
 let cameraZoomEnabled = resolveCameraPreference();
 
 function resolveCameraPreference() {
   const requested = new URLSearchParams(location.search).get("camera");
   try {
-    if (requested === "on" || requested === "1") { localStorage.setItem("rec-camera", "on"); return true; }
-    if (requested === "off" || requested === "0") { localStorage.setItem("rec-camera", "off"); return false; }
-    return localStorage.getItem("rec-camera") === "on";
+    if (requested === "on" || requested === "1") { localStorage.setItem("replay-camera", "on"); return true; }
+    if (requested === "off" || requested === "0") { localStorage.setItem("replay-camera", "off"); return false; }
+    return localStorage.getItem("replay-camera") === "on";
   } catch { return requested === "on" || requested === "1"; }
 }
 let shareAvailable = false;
 let shareUrl: string | undefined;
-// The chat panel and its tools speak raw recording time; the active playback
+// The chat panel and its tools speak raw replay time; the active playback
 // projection translates it. Refreshed by every present().
 let rawToPlayback: (time: number) => number = (time) => time;
 let playbackToRaw: (time: number) => number = (time) => time;
-if (!id) renderError("Choose a recording with `rec open <id>`.");
+if (!id) renderError("Choose a replay with `replay open <id>`.");
 else {
   maintainReplayLease();
   void load(id);
@@ -101,7 +101,7 @@ function maintainReplayLease() {
   void fetch("/api/leases/acquire", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ owner: "rec-player", kind: "replay", ttl_ms: 30_000 }),
+    body: JSON.stringify({ owner: "replay-player", kind: "replay", ttl_ms: 30_000 }),
   }).then(async (response) => {
     if (!response.ok) return;
     const value = await response.json() as { lease_id?: string };
@@ -112,7 +112,7 @@ function maintainReplayLease() {
   window.addEventListener("pagehide", release, { once: true });
 }
 
-async function load(recordingId: string) {
+async function load(replayId: string) {
   try {
     currentSessionTime = 0;
     lastNarrationKey = undefined;
@@ -123,13 +123,13 @@ async function load(recordingId: string) {
     // link never opens to a blank screen while the data streams in.
     renderLoading();
     shareAvailable = await detectShareAvailability();
-    void initChat(recordingId, () => {
+    void initChat(replayId, () => {
       // The assistant and the chapters list share the right edge; opening one
       // yields it to the other.
       const chapters = document.querySelector<HTMLButtonElement>("#chapters-toggle");
       if (chapters?.classList.contains("is-open")) chapters.click();
     });
-    const manifest = await request<Manifest>(`/api/sessions/${encodeURIComponent(recordingId)}/manifest`);
+    const manifest = await request<Manifest>(`/api/sessions/${encodeURIComponent(replayId)}/manifest`);
     const eventSets = new Map(await Promise.all(manifest.segments.map(async (segment) => [
       segment.id,
       humanizeEvents(sanitizeReplayEvents(await request<ReplayEvent[]>(`/api/sessions/${encodeURIComponent(manifest.id)}/events?segment=${encodeURIComponent(segment.id)}`))),
@@ -170,9 +170,9 @@ async function load(recordingId: string) {
 function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDefaults, playbackSpeed: number) {
   chaptersOpen ??= manifest.markers.length > 1 && window.matchMedia("(min-width: 1100px)").matches;
   const segmentPicker = manifest.segments.length > 1
-    ? `<nav class="segment-picker" aria-label="Recorded browser tabs">${manifest.segments.map((segment, index) => `<div class="segment-tab" data-segment="${escape(segment.id)}" title="Opened at ${format(segment.clock_offset_ms)} — ${escape(segment.page_url)}"${index === 0 ? "" : " hidden"}><span>Tab ${index + 1}</span>${escape(segmentLabel(segment.page_url))}</div>`).join("")}</nav>`
+    ? `<nav class="segment-picker" aria-label="Captured browser tabs">${manifest.segments.map((segment, index) => `<div class="segment-tab" data-segment="${escape(segment.id)}" title="Opened at ${format(segment.clock_offset_ms)} — ${escape(segment.page_url)}"${index === 0 ? "" : " hidden"}><span>Tab ${index + 1}</span>${escape(segmentLabel(segment.page_url))}</div>`).join("")}</nav>`
     : "";
-  // The tuned default pace is the recording's "natural" speed — present it as
+  // The tuned default pace is the replay's "natural" speed — present it as
   // 1× instead of leaking the internal multiplier into the control.
   const speedOptions = [...new Set([0.25, 0.5, defaults.default_speed, 2, 4, 8])]
     .map((speed) => ({ speed, label: speed === defaults.default_speed ? "1×" : `${speed}×` }));
@@ -195,10 +195,10 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
   const sessionMeta = sessionMetaMarkup(manifest);
   const introCard = introDismissed
     ? ""
-    : `<div class="session-overlay is-visible" id="intro-card"><div class="session-card"><span class="session-kicker"><i></i>Rec replay</span><h1>${escape(manifest.title)}</h1>${sessionMeta}<p class="session-hint">Press play — or space — to watch the recorded journey</p></div></div>`;
+    : `<div class="session-overlay is-visible" id="intro-card"><div class="session-card"><span class="session-kicker"><i></i>Replay</span><h1>${escape(manifest.title)}</h1>${sessionMeta}<p class="session-hint">Press play — or space — to watch the captured journey</p></div></div>`;
   const endCard = `<div class="session-overlay" id="end-card"><div class="session-card"><span class="session-kicker"><i></i>Replay complete</span><h1>${escape(manifest.title)}</h1>${sessionMeta}${manifest.notes ? `<p class="session-notes">${escape(manifest.notes)}</p>` : ""}<button class="watch-again" id="watch-again" type="button">Watch again</button></div></div>`;
   const chaptersPanel = manifest.markers.length
-    ? `<aside class="chapters-panel" id="chapters-panel" aria-label="Recording chapters"><header>Chapters<span>${manifest.markers.length}</span><button class="chapters-collapse" id="chapters-collapse" type="button" aria-label="Collapse chapters" title="Collapse chapters"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></header><ol>${manifest.markers.map((marker) => {
+    ? `<aside class="chapters-panel" id="chapters-panel" aria-label="Replay chapters"><header>Chapters<span>${manifest.markers.length}</span><button class="chapters-collapse" id="chapters-collapse" type="button" aria-label="Collapse chapters" title="Collapse chapters"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></header><ol>${manifest.markers.map((marker) => {
       const action = marker.action_id ? actionsById(manifest).get(marker.action_id) : undefined;
       return `<li><button type="button" data-chapter="${marker.t_ms}"${marker.color ? ` data-chapter-color="${marker.color}"` : ""} aria-current="false"><b>${format(marker.t_ms)}</b><span><strong>${escape(marker.label)}</strong>${marker.note ? `<p>${escape(marker.note)}</p>` : ""}${action ? `<code>${escape(describeAction(action))}</code>` : ""}</span></button></li>`;
     }).join("")}</ol></aside>`
@@ -213,9 +213,9 @@ async function detectShareAvailability() {
   } catch { return false; }
 }
 
-function wireShareControl(recordingId: string) {
+function wireShareControl(replayId: string) {
   const button = document.querySelector<HTMLButtonElement>("#share");
-  if (button) button.onclick = () => void shareRecording(recordingId, button);
+  if (button) button.onclick = () => void shareReplay(replayId, button);
   const copy = document.querySelector<HTMLButtonElement>("#share-copy");
   if (copy) copy.onclick = () => copyShareLink(copy);
 }
@@ -232,14 +232,14 @@ function copyShareLink(button: HTMLButtonElement) {
     .catch(() => setActionCaption("Copy the link", "Select the share link and copy it manually."));
 }
 
-async function shareRecording(recordingId: string, button: HTMLButtonElement) {
+async function shareReplay(replayId: string, button: HTMLButtonElement) {
   // The share link is a means to an end, not something to read — swap the button
   // for a brief spinner, then drop the link straight on the clipboard and confirm
   // with a caption rather than showing the URL.
   button.disabled = true;
   button.innerHTML = `<span class="share-spinner" aria-hidden="true"></span>`;
   try {
-    const result = await request<{ shareUrl: string }>(`/api/sessions/${encodeURIComponent(recordingId)}/share`, { method: "POST" }, SHARE_TIMEOUT_MS);
+    const result = await request<{ shareUrl: string }>(`/api/sessions/${encodeURIComponent(replayId)}/share`, { method: "POST" }, SHARE_TIMEOUT_MS);
     shareUrl = result.shareUrl;
     try {
       await navigator.clipboard.writeText(shareUrl);
@@ -251,7 +251,7 @@ async function shareRecording(recordingId: string, button: HTMLButtonElement) {
       // across the network wait) — degrade to a copyable link so it isn't lost.
       const control = document.querySelector<HTMLElement>("#share-control");
       if (control) control.innerHTML = shareResultMarkup(shareUrl);
-      wireShareControl(recordingId);
+      wireShareControl(replayId);
       setActionCaption("Share link ready", "Copy it from the control bar.");
     }
   } catch (error) {
@@ -289,26 +289,26 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
   const tabDuration = Math.max(1, events.at(-1)!.timestamp - events[0].timestamp);
   const tabStart = segment.clock_offset_ms;
   const tabEnd = tabStart + tabDuration;
-  const viewport = recordingViewport(events);
+  const viewport = replayViewport(events);
   let selectedPlaybackSpeed = playbackSpeed;
   let replayDocumentKeyboardHandler: ((event: KeyboardEvent) => void) | undefined;
-  // Agent-driven recordings capture interactions without pointer coordinates, so
-  // rrweb has nothing to move the cursor with. When a recording carries no real
+  // Agent-driven replays capture interactions without pointer coordinates, so
+  // rrweb has nothing to move the cursor with. When a replay carries no real
   // pointer data at all, drive the cursor ourselves from the element each
   // interaction resolves to, and feed the replayer lead-in cues so the cursor
-  // arrives as the action fires. Recordings with real coordinates keep rrweb's.
+  // arrives as the action fires. Replays with real coordinates keep rrweb's.
   const syntheticCursor = !events.some((event) => event.type === EventType.IncrementalSnapshot && (
     (event.data?.source === IncrementalSource.MouseMove && (event.data.positions?.length ?? 0) > 0) ||
     (event.data?.source === IncrementalSource.MouseInteraction && isRealPoint(event.data.x, event.data.y))
   ));
   const replayEvents = syntheticCursor ? withCursorLeadIns(events) : events;
   const replayer = new Replayer(replayEvents as never[], {
-    // rrweb only skips when a later mouse/input event exists. Rec owns this
+    // rrweb only skips when a later mouse/input event exists. Replay owns this
     // policy so navigation, reload, and verification waits are accelerated too.
     root: mount, skipInactive: false, showWarning: false, speed: selectedPlaybackSpeed,
     mouseTail: false,
     // The replay is passive playback. Letting rrweb move real DOM focus into a
-    // recorded field makes that field typeable and steals focus from the chat
+    // captured field makes that field typeable and steals focus from the chat
     // composer, so keep focus in the player's own chrome and paint the focus
     // ring ourselves (see the mouse-interaction handler below).
     triggerFocus: false,
@@ -318,7 +318,7 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
         node.addEventListener("keydown", (event) => replayDocumentKeyboardHandler?.(event as KeyboardEvent), true);
       },
     }] as never[],
-    insertStyleRules: [".rec-focus-target{outline:2px solid rgba(105,86,255,.9)!important;outline-offset:3px!important;box-shadow:0 0 0 6px rgba(105,86,255,.16)!important;border-radius:4px!important}"]
+    insertStyleRules: [".replay-focus-target{outline:2px solid rgba(105,86,255,.9)!important;outline-offset:3px!important;box-shadow:0 0 0 6px rgba(105,86,255,.16)!important;border-radius:4px!important}"]
   });
   fitReplay(replayer, viewport);
   const camera = createCamera(mount, replayer, viewport, lifetime, cameraZoomEnabled);
@@ -349,7 +349,7 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
     updateActiveMarker(time);
   };
   const playFrom = (time: number) => {
-    // Real playback is starting — the session cards yield to the recording.
+    // Real playback is starting — the session cards yield to the replay.
     // rrweb's seek-while-paused also emits start/pause internally, so the
     // cards cannot key off setPlaying.
     dismissIntro();
@@ -493,7 +493,7 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
   replayer.on("custom-event", (payload: unknown) => {
     if (!syntheticCursor) return;
     const event = payload as ReplayEvent;
-    if (event.type !== EventType.Custom || event.data?.tag !== "rec-cursor" || typeof event.data.id !== "number") return;
+    if (event.type !== EventType.Custom || event.data?.tag !== "replay-cursor" || typeof event.data.id !== "number") return;
     const center = elementCenter(replayer.getMirror().getNode(event.data.id));
     if (!center) return;
     // Match the glide to the wall-clock gap before the interaction (~the lead
@@ -514,12 +514,12 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
     if (isClick) spawnClickRipple(replayer, point ?? {});
     const target = interaction.target;
     if (!isElementLike(target)) return;
-    // With rrweb's triggerFocus off, the recorded field gets no native focus
+    // With rrweb's triggerFocus off, the captured field gets no native focus
     // ring, so stand in the player's own outline for both clicks and focus
     // events. Focus lingers a beat longer since typing usually follows it.
-    target.classList.remove("rec-focus-target");
-    target.classList.add("rec-focus-target");
-    window.setTimeout(() => target.classList.remove("rec-focus-target"), isFocus ? 1_400 : 900);
+    target.classList.remove("replay-focus-target");
+    target.classList.add("replay-focus-target");
+    window.setTimeout(() => target.classList.remove("replay-focus-target"), isFocus ? 1_400 : 900);
   });
   document.querySelector<HTMLButtonElement>("#play")!.onclick = togglePlayback;
   document.querySelectorAll<HTMLButtonElement>("[data-idle-mode]").forEach((button) => button.onclick = () => {
@@ -528,7 +528,7 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
   });
   document.querySelectorAll<HTMLButtonElement>("[data-camera-mode]").forEach((button) => button.onclick = () => {
     cameraZoomEnabled = button.dataset.cameraMode === "on";
-    try { localStorage.setItem("rec-camera", cameraZoomEnabled ? "on" : "off"); } catch { /* storage may be unavailable in private mode */ }
+    try { localStorage.setItem("replay-camera", cameraZoomEnabled ? "on" : "off"); } catch { /* storage may be unavailable in private mode */ }
     document.querySelectorAll<HTMLButtonElement>("[data-camera-mode]").forEach((item) => item.classList.toggle("selected", item === button));
     camera.setEnabled(cameraZoomEnabled);
   });
@@ -618,7 +618,7 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
   const onPlaybackKey = (event: KeyboardEvent) => {
     // The replayed page is a passive playback, so keystrokes must never reach its
     // form fields — only guard against text entry in the player's own chrome
-    // (top document), never the recorded content inside the replay iframe.
+    // (top document), never the captured content inside the replay iframe.
     if (event.repeat) return;
     if (isTextEntryTarget(event.target) && isMainDocumentTarget(event.target)) return;
     if (event.key === "Enter" || event.key === " " || event.key === "Spacebar" || event.code === "Space") {
@@ -715,7 +715,7 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
     setPlaying(true);
     requestAnimationFrame(advance);
   };
-  // The chat assistant drives playback through this handle. Raw recording
+  // The chat assistant drives playback through this handle. Raw replay
   // times arrive from the model; the projection maps them onto the timeline.
   const urlAtTime = (time: number) => {
     const navigated = [...navigationEvents].reverse().find((event) => event.started_at_ms <= time);
@@ -729,7 +729,7 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
       const target = segmentAtTime(manifest, eventSets, projected) ?? segment;
       await replay(session, target, projected, play, selectedPlaybackSpeed);
       syncNarration(manifest.markers, projected, true);
-      return `Playhead moved to recording time ${format(rawMs)} (${play ? "playing" : "paused"}). The viewer is now looking at this moment.`;
+      return `Playhead moved to replay time ${format(rawMs)} (${play ? "playing" : "paused"}). The viewer is now looking at this moment.`;
     },
     setPlayback: (action) => {
       if (action === "play" && !playing) togglePlayback();
@@ -746,7 +746,7 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
         `URL: ${urlAtTime(currentSessionTime)}`,
         // Inside a collapsed idle gap several raw seconds share one playhead
         // instant, so the mapped-back time is approximate by nature.
-        `Recording time: ~${format(playbackToRaw(currentSessionTime))}`,
+        `Replay time: ~${format(playbackToRaw(currentSessionTime))}`,
         "",
         text || "(The page shows no visible text at this moment.)",
       ].join("\n");
@@ -759,9 +759,9 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
       if (!target && text) target = findElementByText(frameDocument, text);
       if (!target) throw new Error("No matching element is visible at the current moment.");
       target.scrollIntoView({ block: "center", inline: "center" });
-      target.classList.remove("rec-focus-target");
-      target.classList.add("rec-focus-target");
-      window.setTimeout(() => target?.classList.remove("rec-focus-target"), 2_600);
+      target.classList.remove("replay-focus-target");
+      target.classList.add("replay-focus-target");
+      window.setTimeout(() => target?.classList.remove("replay-focus-target"), 2_600);
       const label = (target.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
       return `Highlighted <${target.tagName.toLowerCase()}>${label ? ` "${label}"` : ""} for the viewer.`;
     },
@@ -789,10 +789,10 @@ function prepareTimeline(markers: Marker[], actions: Map<string, AgentAction>, n
   const buckets = Array.from({ length: 72 }, () => 0);
   interactions.forEach((time) => { buckets[Math.min(buckets.length - 1, Math.floor(time / duration * buckets.length))] += 1; });
   const max = Math.max(1, ...buckets);
-  density.innerHTML = buckets.map((count) => `<i data-timeline-tooltip="Recorded activity — ${count ? `${count} event${count === 1 ? "" : "s"}` : "no events"}" style="--level:${Math.max(.08, count / max)}"></i>`).join("");
+  density.innerHTML = buckets.map((count) => `<i data-timeline-tooltip="Captured activity — ${count ? `${count} event${count === 1 ? "" : "s"}` : "no events"}" style="--level:${Math.max(.08, count / max)}"></i>`).join("");
   document.querySelector<HTMLElement>("#idle-ranges")!.innerHTML = projectedIdle.map((range) => {
     const label = range.mode === "fast_forward"
-      ? `Idle time — played at ${range.speed}× (${formatDuration(range.originalDuration)} recorded)`
+      ? `Idle time — played at ${range.speed}× (${formatDuration(range.originalDuration)} captured)`
       : nearlyEqual(range.originalDuration, range.end - range.start)
         ? `Idle time — ${formatDuration(range.originalDuration)} retained`
         : `Idle time — reduced from ${formatDuration(range.originalDuration)} to ${formatDuration(range.end - range.start)}`;
@@ -836,7 +836,7 @@ function updateActiveMarker(time: number) {
 
 function sessionMetaMarkup(manifest: Manifest) {
   const items: string[] = [];
-  // Recordings are a general-purpose capture of any flow, not just bug repros,
+  // Replays are a general-purpose capture of any flow, not just bug repros,
   // so the card carries no outcome tag — only neutral context (date, length).
   const created = manifest.created_at ? formatDate(manifest.created_at) : "";
   if (created) items.push(`<span>${escape(created)}</span>`);
@@ -1054,11 +1054,11 @@ async function request<T>(url: string, init?: RequestInit, timeoutMs = REQUEST_T
   } catch (error) {
     // A rejected fetch is a transport failure, not an HTTP status: the server is
     // unreachable or too slow. Translate it into something a viewer can act on.
-    if (error instanceof DOMException && error.name === "TimeoutError") throw new Error("The recording server took too long to respond. Check your connection and try again.");
-    throw new Error("Could not reach the recording server. Check your connection and try again.");
+    if (error instanceof DOMException && error.name === "TimeoutError") throw new Error("The replay server took too long to respond. Check your connection and try again.");
+    throw new Error("Could not reach the replay server. Check your connection and try again.");
   }
   if (!response.ok) throw new Error((await response.json().catch(() => ({ error: response.statusText }))).error || response.statusText);
   return response.json() as Promise<T>;
 }
-function renderError(message: string) { app.innerHTML = `<section class=error><p>REC</p><h1>Replay unavailable</h1><p>${escape(message)}</p></section>`; }
+function renderError(message: string) { app.innerHTML = `<section class=error><p>Replay</p><h1>Replay unavailable</h1><p>${escape(message)}</p></section>`; }
 function renderLoading() { app.innerHTML = `<section class="replay-loading" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><p>Loading replay…</p></section>`; }

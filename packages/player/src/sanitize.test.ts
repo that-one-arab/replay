@@ -76,7 +76,7 @@ test("drops uncaptured @font-face sources instead of feeding the browser image b
   assert.equal(/@font-face[^}]*data:image\/gif/.test(out), false);
   assert.equal(out.includes("localhost"), false);
   // Fully uncaptured family degrades to a silent local() miss.
-  assert.equal(out.includes('local("rec-uncaptured-font")'), true);
+  assert.equal(out.includes('local("replay-uncaptured-font")'), true);
   // Captured relative, local() and data: candidates survive untouched.
   assert.equal(out.includes("url('/api/sessions/r1/assets/a3') format('woff2')"), true);
   assert.equal(out.includes("local('Mixed')"), true);
@@ -111,7 +111,7 @@ test("sanitizes absolute src in incremental add and attribute mutations", () => 
   assert.equal((add.data as { adds: { node: { attributes: { src: string } } }[] }).adds[0].node.attributes.src.startsWith("data:image/gif"), true);
   const mutated = (attr.data as { attributes: { attributes: { src: string; href: string } }[] }).attributes[0].attributes;
   // A mutation has no tag context, so src is neutralized to about:blank — either
-  // way the recorded localhost origin is gone and no fetch is issued.
+  // way the captured localhost origin is gone and no fetch is issued.
   assert.equal(mutated.src, "about:blank");
   assert.equal(mutated.src.includes("127.0.0.1"), false);
   // href is ambiguous without a tag in a mutation, so it is left as-is.

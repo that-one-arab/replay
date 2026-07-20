@@ -5,22 +5,22 @@ import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
-import { Recorder, exportPath, exportSession, recHome, resolveRecConfig, sessionsDir, sessionPath, uploadRecording, type ActionInput, type BrowserConfig, type Outcome, type RecordingManifest, type StartOptions } from "@rec/core";
+import { Capture, exportPath, exportSession, replayHome, resolveReplayConfig, sessionsDir, sessionPath, uploadReplay, type ActionInput, type BrowserConfig, type Outcome, type ReplayManifest, type StartOptions } from "@replay/core";
 import { ChatManager, CHAT_TOOLS } from "./chat.js";
 
-const port = Number(process.env.REC_PORT ?? 7717);
-const recorder = new Recorder();
-const chatManager = new ChatManager(port, async () => (await resolveRecConfig()).chat);
+const port = Number(process.env.REPLAY_PORT ?? 7717);
+const capture = new Capture();
+const chatManager = new ChatManager(port, async () => (await resolveReplayConfig()).chat);
 let cdpEndpoint: string | undefined;
-let managedBrowser = existsSync(join(recHome(), "browser.json"));
-// Set when Rec's controlled Chrome exits without Rec stopping it. Closing that
+let managedBrowser = existsSync(join(replayHome(), "browser.json"));
+// Set when Replay's controlled Chrome exits without Replay stopping it. Closing that
 // window is the user's explicit "I'm done", so the daemon winds down too —
 // even past agent leases, since idle MCP sessions relaunch it on demand.
 let managedBrowserClosed = false;
 let activeBrowserConfig: BrowserConfig | undefined;
 const leases = new Map<string, DaemonLease>();
-const agentIdleTimeoutMs = configuredDuration("REC_BROWSER_IDLE_TIMEOUT_MS", 30_000);
-const daemonIdleTimeoutMs = configuredDuration("REC_DAEMON_IDLE_TIMEOUT_MS", 15 * 60_000);
+const agentIdleTimeoutMs = configuredDuration("REPLAY_BROWSER_IDLE_TIMEOUT_MS", 30_000);
+const daemonIdleTimeoutMs = configuredDuration("REPLAY_DAEMON_IDLE_TIMEOUT_MS", 15 * 60_000);
 let agentIdleSince: number | undefined;
 let daemonIdleSince: number | undefined;
 let lifecycleCheckRunning = false;
@@ -32,11 +32,11 @@ const server = createServer((request, response) => void route(request, response)
 // instead of crashing on an unhandled 'error' event.
 server.on("error", (error: NodeJS.ErrnoException) => {
   console.error(error.code === "EADDRINUSE"
-    ? `rec daemon: 127.0.0.1:${port} is already in use by another process. Stop it or set REC_PORT to a free port.`
-    : `rec daemon: could not listen on 127.0.0.1:${port}: ${messageOf(error)}`);
+    ? `replay daemon: 127.0.0.1:${port} is already in use by another process. Stop it or set REPLAY_PORT to a free port.`
+    : `replay daemon: could not listen on 127.0.0.1:${port}: ${messageOf(error)}`);
   process.exit(1);
 });
-server.listen(port, "127.0.0.1", () => console.log(`rec daemon listening on http://127.0.0.1:${port}`));
+server.listen(port, "127.0.0.1", () => console.log(`replay daemon listening on http://127.0.0.1:${port}`));
 const lifecycleTimer = setInterval(() => void enforceLifecycle(), 1_000);
 lifecycleTimer.unref();
 
@@ -48,7 +48,7 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   if (request.method === "POST" && url.pathname === "/api/leases/renew") return reply(response, 200, renewLease(body));
   if (request.method === "POST" && url.pathname === "/api/leases/release") return reply(response, 200, releaseLease(body));
   if (request.method === "POST" && url.pathname === "/api/daemon/stop") {
-    if (recorder.status().state === "recording") throw new Error("Cannot stop the daemon while a recording is active.");
+    if (capture.status().state === "capture") throw new Error("Cannot stop the daemon while a capture is active.");
     reply(response, 202, { stopping: true });
     setImmediate(() => void shutdownDaemon());
     return;
@@ -57,19 +57,19 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   if (request.method === "POST" && (url.pathname === "/api/browser/start" || url.pathname === "/api/browser/ensure")) return reply(response, 200, await startBrowser(String(body?.executable ?? "")));
   if (request.method === "POST" && url.pathname === "/api/browser/stop") return reply(response, 200, await stopBrowser());
   if (request.method === "POST" && url.pathname === "/api/sessions/start") {
-    if (!cdpEndpoint) throw new Error("No browser attached. Run rec attach --cdp <url> or rec browser start.");
-    const config = await resolveRecConfig();
-    return reply(response, 201, await recorder.start({ ...(body as StartOptions), replayDefaults: config.replay }));
+    if (!cdpEndpoint) throw new Error("No browser attached. Run replay attach --cdp <url> or replay browser start.");
+    const config = await resolveReplayConfig();
+    return reply(response, 201, await capture.start({ ...(body as StartOptions), replayDefaults: config.replay }));
   }
   if (request.method === "POST" && url.pathname === "/api/sessions/marker") {
-    await recorder.marker(String(body?.label ?? ""), optionalString(body?.note), markerPlacement(body?.placement), markerColor(body?.color));
+    await capture.marker(String(body?.label ?? ""), optionalString(body?.note), markerPlacement(body?.placement), markerColor(body?.color));
     return reply(response, 204);
   }
   if (request.method === "POST" && url.pathname === "/api/sessions/action") {
-    return reply(response, 200, await recorder.action(actionInput(body)));
+    return reply(response, 200, await capture.action(actionInput(body)));
   }
   if (request.method === "POST" && url.pathname === "/api/sessions/stop") {
-    const stopped = await recorder.stop(outcomeOf(body?.outcome), optionalString(body?.notes));
+    const stopped = await capture.stop(outcomeOf(body?.outcome), optionalString(body?.notes));
     const portable = await exportSession(stopped.sessionId);
     return reply(response, 200, { ...stopped, portable_bundle: portable.path, portable_bundle_bytes: portable.bytes });
   }
@@ -87,26 +87,26 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   if (request.method === "POST" && url.pathname === "/api/chat/tool-result") {
     return reply(response, 200, chatManager.toolResult(String(body?.chat_id ?? ""), String(body?.call_id ?? ""), body?.ok !== false, body?.result));
   }
-  if (request.method === "GET" && url.pathname === "/api/sessions/status") return reply(response, 200, recorder.status());
+  if (request.method === "GET" && url.pathname === "/api/sessions/status") return reply(response, 200, capture.status());
   if (request.method === "GET" && url.pathname === "/api/sessions") return reply(response, 200, await listSessions());
   const shareSession = /^\/api\/sessions\/([^/]+)\/share$/.exec(url.pathname);
-  if (request.method === "POST" && shareSession) return reply(response, 200, await shareRecording(decodeURIComponent(shareSession[1]!)));
+  if (request.method === "POST" && shareSession) return reply(response, 200, await shareReplay(decodeURIComponent(shareSession[1]!)));
   const replay = /^\/api\/sessions\/([^/]+)\/(manifest|events)$/.exec(url.pathname);
-  if (request.method === "GET" && replay) return serveRecording(response, decodeURIComponent(replay[1]), replay[2], url.searchParams.get("segment"));
-  const recordedAsset = /^\/api\/sessions\/([^/]+)\/assets\/([a-f0-9]{64})$/.exec(url.pathname);
-  if (request.method === "GET" && recordedAsset) return serveRecordedAsset(response, decodeURIComponent(recordedAsset[1]), recordedAsset[2]);
+  if (request.method === "GET" && replay) return serveReplay(response, decodeURIComponent(replay[1]), replay[2], url.searchParams.get("segment"));
+  const capturedAsset = /^\/api\/sessions\/([^/]+)\/assets\/([a-f0-9]{64})$/.exec(url.pathname);
+  if (request.method === "GET" && capturedAsset) return serveCapturedAsset(response, decodeURIComponent(capturedAsset[1]), capturedAsset[2]);
   if (request.method === "GET" && url.pathname.startsWith("/assets/")) return serveAsset(response, url.pathname);
   if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/replay")) return servePlayer(response);
   reply(response, 404, { error: "Not found" });
 }
 
 async function startBrowser(executable: string) {
-  await recoverLostBrowserRecording();
-  if (recorder.status().state === "recording") throw new Error("Cannot change browser attachment while a recording is active");
-  const resolved = await resolveRecConfig();
+  await recoverLostBrowserCapture();
+  if (capture.status().state === "capture") throw new Error("Cannot change browser attachment while a capture is active");
+  const resolved = await resolveReplayConfig();
   const browserConfig: BrowserConfig = executable ? { ...resolved.browser, executable } : resolved.browser;
   const fingerprint = JSON.stringify({ browser: browserConfig });
-  const statePath = join(recHome(), "browser.json");
+  const statePath = join(replayHome(), "browser.json");
   if (existsSync(statePath)) {
     try {
       const saved = JSON.parse(await readFile(statePath, "utf8")) as ManagedBrowserState;
@@ -115,7 +115,7 @@ async function startBrowser(executable: string) {
         return { managed: true, launched: false, browser_state: "restart_required", browser_config_state: "restart_required", browser_config: browserConfig, active_browser_config: saved.browser_config };
       }
       await waitForBrowser(saved.cdp_endpoint, 5);
-      await recorder.attach(saved.cdp_endpoint);
+      await capture.attach(saved.cdp_endpoint);
       cdpEndpoint = saved.cdp_endpoint;
       managedBrowser = true;
       managedBrowserClosed = false;
@@ -126,13 +126,13 @@ async function startBrowser(executable: string) {
     }
   }
   const browser = browserConfig.executable || chromeExecutable();
-  if (!browser) throw new Error("Chrome was not found. Set REC_BROWSER_EXECUTABLE or use rec attach --cdp.");
+  if (!browser) throw new Error("Chrome was not found. Set REPLAY_BROWSER_EXECUTABLE or use replay attach --cdp.");
   const managedEndpoint = "http://127.0.0.1:9333";
   if (await browserAvailable(managedEndpoint)) {
-    throw new Error(`A browser is already listening at ${managedEndpoint}, but Rec does not own it. Use recording_attach_browser with its endpoint or stop that browser before calling recording_browser_ensure.`);
+    throw new Error(`A browser is already listening at ${managedEndpoint}, but Replay does not own it. Use capture_attach_browser with its endpoint or stop that browser before calling capture_browser_ensure.`);
   }
-  await mkdir(recHome(), { recursive: true });
-  const profileDir = join(recHome(), "chromium-profile");
+  await mkdir(replayHome(), { recursive: true });
+  const profileDir = join(replayHome(), "chromium-profile");
   const launchArgs = ["--remote-debugging-port=9333", `--user-data-dir=${profileDir}`, "--no-first-run", "--no-default-browser-check"];
   if (browserConfig.headless) {
     launchArgs.push("--headless=new", `--window-size=${browserConfig.viewport.width},${browserConfig.viewport.height}`);
@@ -144,8 +144,8 @@ async function startBrowser(executable: string) {
     // reasonable viewport, so the common case never clips.
     launchArgs.push("--start-maximized");
     // A headed browser is one a person can see and accidentally touch. Brand its
-    // chrome so it is unmistakably Rec's controlled session: a bold purple frame
-    // and a labelled profile that live in browser UI, never in the recorded page.
+    // chrome so it is unmistakably Replay's controlled session: a bold purple frame
+    // and a labelled profile that live in browser UI, never in the captured page.
     // Seed the profile before Chrome reads it at startup.
     await brandControlledProfile(profileDir);
   }
@@ -154,9 +154,9 @@ async function startBrowser(executable: string) {
   cdpEndpoint = managedEndpoint;
   try {
     await waitForBrowser(cdpEndpoint);
-    if (!child.pid) throw new Error("Rec could not determine the launched Chrome process ID");
+    if (!child.pid) throw new Error("Replay could not determine the launched Chrome process ID");
     process.kill(child.pid, 0);
-    await recorder.attach(cdpEndpoint);
+    await capture.attach(cdpEndpoint);
   } catch (error) {
     if (child.pid) { try { process.kill(child.pid, "SIGTERM"); } catch { /* already exited */ } }
     cdpEndpoint = undefined;
@@ -170,14 +170,14 @@ async function startBrowser(executable: string) {
 }
 
 async function stopBrowser() {
-  if (recorder.status().state === "recording") throw new Error("Cannot stop the managed browser while a recording is active");
+  if (capture.status().state === "capture") throw new Error("Cannot stop the managed browser while a capture is active");
   if (!managedBrowser) return { stopped: false, managed: false };
-  const statePath = join(recHome(), "browser.json");
+  const statePath = join(replayHome(), "browser.json");
   if (!existsSync(statePath)) return { stopped: false, managed: true };
   const saved = JSON.parse(await readFile(statePath, "utf8")) as { pid: number };
   try { process.kill(saved.pid, "SIGTERM"); } catch { /* browser already gone */ }
   await unlink(statePath).catch(() => undefined);
-  await recorder.close();
+  await capture.close();
   cdpEndpoint = undefined;
   managedBrowser = false;
   activeBrowserConfig = undefined;
@@ -185,11 +185,11 @@ async function stopBrowser() {
 }
 
 async function attachBrowser(endpoint: string) {
-  await recoverLostBrowserRecording();
-  if (recorder.status().state === "recording") throw new Error("Cannot change browser attachment while a recording is active");
+  await recoverLostBrowserCapture();
+  if (capture.status().state === "capture") throw new Error("Cannot change browser attachment while a capture is active");
   if (!isLoopbackEndpoint(endpoint)) throw new Error("Only loopback CDP endpoints are supported. Use http://127.0.0.1:<port>.");
   await waitForBrowser(endpoint, 5);
-  await recorder.attach(endpoint);
+  await capture.attach(endpoint);
   cdpEndpoint = endpoint;
   managedBrowser = false;
   managedBrowserClosed = false;
@@ -199,11 +199,11 @@ async function attachBrowser(endpoint: string) {
 
 async function health() {
   expireLeases();
-  const browser = recorder.browserStatus();
+  const browser = capture.browserStatus();
   const config = await configDiagnostics();
   // Only measure a real, navigated page — an empty or unattached browser has no
   // meaningful viewport, and the check must never block a status poll.
-  const viewport = browser.attached && browser.navigatedPageCount > 0 ? await recorder.viewportFit() : undefined;
+  const viewport = browser.attached && browser.navigatedPageCount > 0 ? await capture.viewportFit() : undefined;
   const baseWarnings = "config_warnings" in config && Array.isArray(config.config_warnings) ? config.config_warnings : [];
   const configWarnings = [...baseWarnings, ...(viewport?.warning ? [viewport.warning] : [])];
   return {
@@ -225,7 +225,7 @@ async function health() {
     ...config,
     config_warnings: configWarnings,
     ...(viewport ? { viewport } : {}),
-    ...recorder.status(),
+    ...capture.status(),
   };
 }
 
@@ -297,18 +297,18 @@ async function enforceLifecycle() {
     const now = Date.now();
     expireLeases(now);
     await releaseClosedManagedBrowser();
-    const recording = recorder.status().state === "recording";
+    const replay = capture.status().state === "capture";
     const { active_lease_count: activeLeases, agent_lease_count: agentLeases, replay_lease_count: replayLeases } = leaseSummary();
-    if (managedBrowserClosed && !recording && replayLeases === 0) {
+    if (managedBrowserClosed && !replay && replayLeases === 0) {
       await shutdownDaemon();
       return;
     }
-    if (recording || agentLeases > 0) agentIdleSince = undefined;
+    if (replay || agentLeases > 0) agentIdleSince = undefined;
     else {
       agentIdleSince ??= now;
       if (managedBrowser && now - agentIdleSince >= agentIdleTimeoutMs) await stopBrowser();
     }
-    if (recording || activeLeases > 0) daemonIdleSince = undefined;
+    if (replay || activeLeases > 0) daemonIdleSince = undefined;
     else {
       daemonIdleSince ??= now;
       if (now - daemonIdleSince >= daemonIdleTimeoutMs) await shutdownDaemon();
@@ -319,22 +319,22 @@ async function enforceLifecycle() {
 }
 
 /**
- * Notice when the managed Chrome exited without Rec stopping it — the user
+ * Notice when the managed Chrome exited without Replay stopping it — the user
  * closed the controlled window, or it crashed. Finalize any in-flight capture
  * (what reached disk is kept), clear the browser state, and mark the closure
- * so the lifecycle check winds the daemon down once nothing is replaying.
- * Rec-initiated stops (stopBrowser) remove browser.json first and never trip
- * this; an external attached browser is not Rec's to watch.
+ * so the lifecycle check winds the daemon down once nothing is capturing.
+ * Replay-initiated stops (stopBrowser) remove browser.json first and never trip
+ * this; an external attached browser is not Replay's to watch.
  */
 async function releaseClosedManagedBrowser() {
   if (!managedBrowser) return;
-  const statePath = join(recHome(), "browser.json");
+  const statePath = join(replayHome(), "browser.json");
   if (!existsSync(statePath)) return;
   let saved: ManagedBrowserState;
   try { saved = JSON.parse(await readFile(statePath, "utf8")) as ManagedBrowserState; } catch { return; }
   try { process.kill(saved.pid, 0); return; } catch { /* the browser process is gone */ }
   managedBrowserClosed = true;
-  try { await recorder.close(); } catch { /* an empty interrupted capture is intentionally not handed off */ }
+  try { await capture.close(); } catch { /* an empty interrupted capture is intentionally not handed off */ }
   await unlink(statePath).catch(() => undefined);
   cdpEndpoint = undefined;
   managedBrowser = false;
@@ -342,12 +342,12 @@ async function releaseClosedManagedBrowser() {
 }
 
 async function shutdownDaemon() {
-  if (shuttingDown || recorder.status().state === "recording") return;
+  if (shuttingDown || capture.status().state === "capture") return;
   shuttingDown = true;
   clearInterval(lifecycleTimer);
   chatManager.dispose();
   if (managedBrowser) await stopBrowser().catch(() => undefined);
-  else await recorder.close().catch(() => undefined);
+  else await capture.close().catch(() => undefined);
   server.close(() => process.exit(0));
   const forceExit = setTimeout(() => process.exit(0), 1_000);
   forceExit.unref();
@@ -367,7 +367,7 @@ function browserResponse(launched: boolean, browserState: "ready" | "restart_req
 }
 async function configDiagnostics() {
   try {
-    const config = await resolveRecConfig();
+    const config = await resolveReplayConfig();
     return { browser_config: config.browser, replay_defaults: config.replay, config_sources: config.sources, config_warnings: config.warnings, browser_config_state: managedBrowser && !activeBrowserConfig ? "restart_required" : "matched" };
   } catch (error) {
     return { config_error: messageOf(error), browser_config_state: "invalid" };
@@ -377,13 +377,13 @@ async function configDiagnostics() {
 /**
  * A browser can disappear while rrweb capture is active (for example, after a
  * machine sleep or a crashed Chrome). Do not leave the daemon permanently
- * recording a dead target: finalize what reached disk, release the CDP facade,
- * and let the next browser ensure/attach create a fresh recording.
+ * replay a dead target: finalize what reached disk, release the CDP facade,
+ * and let the next browser ensure/attach create a fresh replay.
  */
-async function recoverLostBrowserRecording() {
-  if (recorder.status().state !== "recording") return;
+async function recoverLostBrowserCapture() {
+  if (capture.status().state !== "capture") return;
   if (cdpEndpoint && await browserAvailable(cdpEndpoint)) return;
-  try { await recorder.close(); } catch { /* An empty interrupted capture is intentionally not handed off. */ }
+  try { await capture.close(); } catch { /* An empty interrupted capture is intentionally not handed off. */ }
   cdpEndpoint = undefined;
 }
 
@@ -395,8 +395,8 @@ function chromeExecutable() {
   return candidates.find(existsSync);
 }
 
-const CONTROLLED_PROFILE_NAME = "Rec — controlled session";
-// Rec's brand purple (#7C5CFF) as an opaque SkColor (ARGB int). Chrome derives a
+const CONTROLLED_PROFILE_NAME = "Replay — controlled session";
+// Replay's brand purple (#7C5CFF) as an opaque SkColor (ARGB int). Chrome derives a
 // Material tonal palette from this seed and paints the frame / tab strip with it,
 // so a headed managed browser reads as branded and unmistakably controlled.
 const CONTROLLED_FRAME_COLOR = 0xff7c5cff;
@@ -405,9 +405,9 @@ const CONTROLLED_FRAME_COLOR = 0xff7c5cff;
 const CONTROLLED_COLOR_VARIANT = 3;
 
 /**
- * Brand a headed managed browser as Rec's controlled session by seeding its
+ * Brand a headed managed browser as Replay's controlled session by seeding its
  * profile: a labelled profile pill plus a bold purple frame theme. Both live in
- * Chrome's own UI (never the recorded page) and are applied by seeding
+ * Chrome's own UI (never the captured page) and are applied by seeding
  * Preferences — Google Chrome stable ignores --load-extension theme injection.
  * Best-effort: on any failure the browser still launches, just unbranded.
  */
@@ -424,7 +424,7 @@ async function brandControlledProfile(profileDir: string) {
     const browser = { ...(preferences.browser as Record<string, unknown> | undefined), theme: { user_color: CONTROLLED_FRAME_COLOR, color_variant: CONTROLLED_COLOR_VARIANT, is_grayscale: false } };
     await writeFile(preferencesPath, JSON.stringify({ ...preferences, profile, browser }));
   } catch (error) {
-    console.log(`rec daemon: could not brand the controlled browser: ${messageOf(error)}`);
+    console.log(`replay daemon: could not brand the controlled browser: ${messageOf(error)}`);
   }
 }
 
@@ -441,30 +441,30 @@ async function browserAvailable(endpoint: string) {
   try { return (await fetch(`${endpoint}/json/version`)).ok; } catch { return false; }
 }
 
-async function shareRecording(id: string) {
+async function shareReplay(id: string) {
   const endpoint = shareEndpoint();
-  if (!endpoint) throw new Error("Sharing is not configured. Set REC_SHARE_URL for this Rec home.");
-  if (!existsSync(sessionPath(id))) throw new Error(`Recording ${id} was not found.`);
+  if (!endpoint) throw new Error("Sharing is not configured. Set REPLAY_SHARE_URL for this Replay home.");
+  if (!existsSync(sessionPath(id))) throw new Error(`Replay ${id} was not found.`);
   // stop already exported the artifact; reuse it. exportSession writes exclusively
-  // and would otherwise fail with EEXIST when sharing an already-stopped recording.
+  // and would otherwise fail with EEXIST when sharing an already-stopped replay.
   const artifact = existsSync(exportPath(id)) ? exportPath(id) : (await exportSession(id)).path;
-  const { shareUrl } = await uploadRecording(endpoint, artifact);
+  const { shareUrl } = await uploadReplay(endpoint, artifact);
   return { sessionId: id, shareUrl };
 }
 
-function shareEndpoint() { return process.env.REC_SHARE_URL?.replace(/\/$/, "") || undefined; }
+function shareEndpoint() { return process.env.REPLAY_SHARE_URL?.replace(/\/$/, "") || undefined; }
 
 async function listSessions() {
   if (!existsSync(sessionsDir())) return [];
   const entries = await readdir(sessionsDir(), { withFileTypes: true });
   const manifests = await Promise.all(entries.filter((entry) => entry.isDirectory()).map(async (entry) => {
-    try { return JSON.parse(await readFile(join(sessionsDir(), entry.name, "manifest.json"), "utf8")) as RecordingManifest; } catch { return undefined; }
+    try { return JSON.parse(await readFile(join(sessionsDir(), entry.name, "manifest.json"), "utf8")) as ReplayManifest; } catch { return undefined; }
   }));
   return manifests.filter(Boolean).sort((a, b) => Date.parse(b!.created_at) - Date.parse(a!.created_at));
 }
 
-async function serveRecording(response: ServerResponse, id: string, resource: string, selected: string | null) {
-  const manifest = JSON.parse(await readFile(join(sessionPath(id), "manifest.json"), "utf8")) as RecordingManifest;
+async function serveReplay(response: ServerResponse, id: string, resource: string, selected: string | null) {
+  const manifest = JSON.parse(await readFile(join(sessionPath(id), "manifest.json"), "utf8")) as ReplayManifest;
   if (resource === "manifest") return reply(response, 200, manifest);
   const segments = selected ? manifest.segments.filter((segment) => segment.id === selected) : manifest.segments;
   const events: unknown[] = [];
@@ -475,13 +475,13 @@ async function serveRecording(response: ServerResponse, id: string, resource: st
   reply(response, 200, events);
 }
 
-async function serveRecordedAsset(response: ServerResponse, sessionId: string, assetId: string) {
+async function serveCapturedAsset(response: ServerResponse, sessionId: string, assetId: string) {
   const root = sessionPath(sessionId);
-  const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as RecordingManifest;
+  const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as ReplayManifest;
   const asset = (manifest.assets ?? []).find((item) => item.id === assetId);
-  if (!asset) return reply(response, 404, { error: "Recorded asset not found" });
+  if (!asset) return reply(response, 404, { error: "Captured asset not found" });
   const path = resolve(root, asset.path);
-  if (!path.startsWith(`${resolve(root, "assets")}/`) || !existsSync(path)) return reply(response, 404, { error: "Recorded asset file not found" });
+  if (!path.startsWith(`${resolve(root, "assets")}/`) || !existsSync(path)) return reply(response, 404, { error: "Captured asset file not found" });
   response.writeHead(200, { "content-type": asset.content_type, "cache-control": "public, max-age=31536000, immutable" });
   createReadStream(path).pipe(response);
 }
@@ -501,7 +501,7 @@ function serveAsset(response: ServerResponse, pathname: string) {
   createReadStream(path).pipe(response);
 }
 
-function playerRoot() { return resolve(process.env.REC_PLAYER_DIR ?? resolve(process.cwd(), "packages/player/dist")); }
+function playerRoot() { return resolve(process.env.REPLAY_PLAYER_DIR ?? resolve(process.cwd(), "packages/player/dist")); }
 
 function reply(response: ServerResponse, status: number, value?: unknown) {
   // A failed SSE stream may already hold sent headers; never double-write them.

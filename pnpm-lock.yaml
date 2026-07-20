@@ -17,7 +17,7 @@ importers:
 
   packages/cli:
     dependencies:
-      '@rec/core':
+      '@replay/core':
         specifier: workspace:*
         version: link:../core
 
@@ -32,7 +32,7 @@ importers:
 
   packages/daemon:
     dependencies:
-      '@rec/core':
+      '@replay/core':
         specifier: workspace:*
         version: link:../core
 
@@ -81,7 +81,7 @@ importers:
       '@playwright/mcp':
         specifier: 0.0.78
         version: 0.0.78
-      '@rec/core':
+      '@replay/core':
         specifier: workspace:*
         version: link:../core
 
@@ -102,19 +102,19 @@ importers:
 
   packages/runtime:
     dependencies:
-      '@rec/cli':
+      '@replay/cli':
         specifier: workspace:*
         version: link:../cli
-      '@rec/daemon':
+      '@replay/daemon':
         specifier: workspace:*
         version: link:../daemon
-      '@rec/mcp':
+      '@replay/mcp':
         specifier: workspace:*
         version: link:../mcp
-      '@rec/player':
+      '@replay/player':
         specifier: workspace:*
         version: link:../player
-      '@rec/playwright-launcher':
+      '@replay/playwright-launcher':
         specifier: workspace:*
         version: link:../playwright-launcher
 

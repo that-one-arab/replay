@@ -6,7 +6,7 @@ import type { Browser, BrowserContext, Frame, Page, Request as PlaywrightRequest
 import { chromium } from "playwright-core";
 import { SessionStore } from "./storage.js";
 import { evaluateViewportFit, type ViewportFit } from "./viewport.js";
-import type { ActionInput, BrowserStatus, Marker, NavigationEvent, RecordingManifest, StartOptions, StopResult } from "./types.js";
+import type { ActionInput, BrowserStatus, Marker, NavigationEvent, ReplayManifest, StartOptions, StopResult } from "./types.js";
 
 const require = createRequire(import.meta.url);
 const FLUSH_MS = 500;
@@ -33,8 +33,8 @@ interface PendingNavigation {
   committedAtWallClockMs?: number;
 }
 
-/** One active recorder bound to an existing Chromium CDP endpoint. */
-export class Recorder {
+/** One active capture bound to an existing Chromium CDP endpoint. */
+export class Capture {
   private browser?: Browser;
   private context?: BrowserContext;
   private store?: SessionStore;
@@ -45,11 +45,11 @@ export class Recorder {
   private observedPages = new WeakSet<Page>();
   private readonly assetCaptures = new Map<string, Promise<void>>();
   private origins = new Set<string>();
-  private recordCanvas = false;
+  private captureCanvas = false;
   private initialized = false;
 
   async attach(cdpEndpoint: string) {
-    if (this.store) throw new Error("Cannot change browser attachment while a recording is active");
+    if (this.store) throw new Error("Cannot change browser attachment while a capture is active");
     // Connect before releasing the current CDP facade. A failed external attach
     // must not strand a healthy existing attachment.
     const browser = await chromium.connectOverCDP(cdpEndpoint);
@@ -72,29 +72,29 @@ export class Recorder {
   }
 
   async start(options: StartOptions = {}) {
-    if (!this.browser || !this.context) throw new Error("Recorder is not attached. Run rec attach first.");
-    if (this.store) throw new Error("A recording is already active");
+    if (!this.browser || !this.context) throw new Error("Capture is not attached. Run replay attach first.");
+    if (this.store) throw new Error("A capture is already active");
     const pages = [...new Set([...this.context.pages(), ...this.knownPages])];
     const active = pages.find((page) => isNavigatedPage(page.url()));
     const defaultOrigin = active ? originOf(active.url()) : undefined;
     const origins = options.origins?.length ? options.origins : defaultOrigin ? [defaultOrigin] : [];
     const readyPage = pages.find((page) => isNavigatedPage(page.url()) && inScope(page.url(), new Set(origins)));
     if (origins.length === 0 || !readyPage) {
-      throw new Error("No navigated page is available to record. Use Playwright MCP to open the target page, then call recording_start.");
+      throw new Error("No navigated page is available to capture. Use Playwright MCP to open the target page, then call capture_start.");
     }
     this.origins = new Set(origins);
-    this.recordCanvas = Boolean(options.recordCanvas);
+    this.captureCanvas = Boolean(options.captureCanvas);
     this.startedAt = Date.now();
     this.observedPages = new WeakSet<Page>();
     this.pendingNavigations.clear();
     this.assetCaptures.clear();
-    const id = `rec_${randomUUID()}`;
-    const manifest: RecordingManifest = {
+    const id = `replay_${randomUUID()}`;
+    const manifest: ReplayManifest = {
       format_version: 1,
       id,
-      title: options.title ?? "Untitled recording",
+      title: options.title ?? "Untitled replay",
       created_at: new Date(this.startedAt).toISOString(),
-      recorder: { version: "0.1.0", rrweb: "2.0.0-alpha.20", record_canvas: this.recordCanvas, record_cross_origin_iframes: this.origins.size > 1 },
+      capture: { version: "0.1.0", rrweb: "2.0.0-alpha.20", capture_canvas: this.captureCanvas, capture_cross_origin_iframes: this.origins.size > 1 },
       origins,
       masking: { mask_all_inputs: Boolean(options.maskAllInputs), passwords: true },
       ...(options.replayDefaults ? { replay_defaults: options.replayDefaults } : {}),
@@ -107,12 +107,12 @@ export class Recorder {
     };
     this.store = await SessionStore.create(manifest);
     await this.installBindings();
-    const injection = await recorderScript();
+    const injection = await captureScript();
     await this.context.addInitScript({ content: injection });
     for (const page of pages) {
       // addInitScript only applies to documents created after registration.
       // Starting on an already-open page is the primary workflow, so inject the
-      // exact same bundle before attempting to call its recorder API.
+      // exact same bundle before attempting to call its capture API.
       if (inScope(page.url(), this.origins)) await page.evaluate(injection).catch(() => undefined);
       await this.captureExistingAssets(page);
       this.observePage(page);
@@ -121,19 +121,19 @@ export class Recorder {
   }
 
   async marker(label: string, note?: string, placement: Marker["placement"] = "after_previous", color?: Marker["color"]) {
-    if (!this.store) throw new Error("No recording is active");
+    if (!this.store) throw new Error("No capture is active");
     const marker: Marker = { t_ms: Date.now() - this.startedAt, label, note, placement, ...(color ? { color } : {}) };
     this.store.addMarker(marker);
     await this.broadcastMarker(label, note, placement);
   }
 
   /**
-   * Log one agent browser action, optionally with a marker recorded atomically
-   * with it. Actions issued while no recording is active are ignored rather
-   * than failed: driving the browser is never gated on the recorder's state.
+   * Log one agent browser action, optionally with a marker captured atomically
+   * with it. Actions issued while no replay is active are ignored rather
+   * than failed: driving the browser is never gated on the capture's state.
    */
-  async action(input: ActionInput): Promise<{ recorded: boolean }> {
-    if (!this.store) return { recorded: false };
+  async action(input: ActionInput): Promise<{ captured: boolean }> {
+    if (!this.store) return { captured: false };
     const started = Math.max(0, input.startedAtEpochMs - this.startedAt);
     const finished = Math.max(started, input.finishedAtEpochMs - this.startedAt);
     this.store.addAction({
@@ -154,19 +154,19 @@ export class Recorder {
       });
       await this.broadcastMarker(input.marker.label, input.marker.note, undefined);
     }
-    return { recorded: true };
+    return { captured: true };
   }
 
   private async broadcastMarker(label: string, note?: string, placement?: Marker["placement"]) {
     await Promise.all([...this.pages.values()].map(async ({ page }) => {
       await page.evaluate(({ label, note, placement }) => {
-        const api = window as typeof window & { __recAddMarker?: (label: string, note?: string, placement?: Marker["placement"]) => void };
-        api.__recAddMarker?.(label, note, placement);
+        const api = window as typeof window & { __replayAddMarker?: (label: string, note?: string, placement?: Marker["placement"]) => void };
+        api.__replayAddMarker?.(label, note, placement);
       }, { label, note, placement }).catch(() => undefined);
     }));
   }
 
-  async stop(outcome?: RecordingManifest["outcome"], notes?: string): Promise<StopResult> {
+  async stop(outcome?: ReplayManifest["outcome"], notes?: string): Promise<StopResult> {
     const store = this.requireStore();
     // URL rewriting happens while flushing events. Finish any in-flight static
     // resource copies first so the final snapshot can point at the bundle.
@@ -175,8 +175,8 @@ export class Recorder {
     for (const { page, flushTimer } of this.pages.values()) {
       if (flushTimer) clearTimeout(flushTimer);
       await page.evaluate(() => {
-        const api = window as typeof window & { __recStop?: () => void };
-        api.__recStop?.();
+        const api = window as typeof window & { __replayStop?: () => void };
+        api.__replayStop?.();
       }).catch(() => undefined);
     }
     await store.finalize(outcome, notes);
@@ -192,14 +192,14 @@ export class Recorder {
     this.pages.clear();
     this.store = undefined;
     if (capture.segmentCount === 0 || capture.chunkCount === 0 || capture.eventCount === 0) {
-      throw new Error("Recording captured no replay events. Confirm Playwright MCP is connected to Rec's CDP endpoint, then retry the recording.");
+      throw new Error("Capture produced no replay events. Confirm Playwright MCP is connected to Replay's CDP endpoint, then retry the capture.");
     }
     return result;
   }
 
   status() {
     if (!this.store) return { state: "idle" as const };
-    return { state: "recording" as const, sessionId: this.store.manifest.id, elapsedMs: Date.now() - this.startedAt, ...this.store.captureSummary() };
+    return { state: "capture" as const, sessionId: this.store.manifest.id, elapsedMs: Date.now() - this.startedAt, ...this.store.captureSummary() };
   }
 
   browserStatus(): BrowserStatus {
@@ -247,7 +247,7 @@ export class Recorder {
 
   private async installBindings() {
     if (this.initialized || !this.context) return;
-    await this.context.exposeBinding("__rec_emit", ({ page }, payload: unknown) => {
+    await this.context.exposeBinding("__replay_emit", ({ page }, payload: unknown) => {
       // Playwright can rehydrate a CDP page target between sessions. Prefer
       // object identity, then resolve the active page by its current URL.
       const state = page ? this.pages.get(page) ?? [...this.pages.values()].find((candidate) => candidate.page.url() === page.url()) : undefined;
@@ -264,9 +264,9 @@ export class Recorder {
     if (this.knownPages.has(page)) return;
     this.knownPages.add(page);
     page.on("close", () => this.knownPages.delete(page));
-    // New popup targets are announced after recording has started. The init
+    // New popup targets are announced after capture has started. The init
     // script already covers their next document, but they still need the
-    // recorder's navigation observer to become their own segment.
+    // capture's navigation observer to become their own segment.
     if (this.store) this.observePage(page);
   }
 
@@ -288,12 +288,12 @@ export class Recorder {
   private async activatePage(page: Page) {
     if (!this.store || !inScope(page.url(), this.origins)) return;
     this.ensurePageState(page);
-    await page.evaluate(invokeRecorder, startConfig(this.store.manifest.masking.mask_all_inputs, this.recordCanvas, this.origins.size > 1)).catch(() => undefined);
+    await page.evaluate(invokeCapture, startConfig(this.store.manifest.masking.mask_all_inputs, this.captureCanvas, this.origins.size > 1)).catch(() => undefined);
   }
 
   private async activateFrame(frame: Frame) {
     if (!this.store || !inScope(frame.url(), this.origins)) return;
-    await frame.evaluate(invokeRecorder, startConfig(this.store.manifest.masking.mask_all_inputs, this.recordCanvas, this.origins.size > 1)).catch(() => undefined);
+    await frame.evaluate(invokeCapture, startConfig(this.store.manifest.masking.mask_all_inputs, this.captureCanvas, this.origins.size > 1)).catch(() => undefined);
   }
 
   private ensurePageState(page: Page) {
@@ -333,7 +333,7 @@ export class Recorder {
     // Stylesheets rrweb inlines into events are the only place some resources
     // appear: a font declared for glyphs the page never rendered has no network
     // response to capture. Discover those url() references and fetch them now,
-    // so the rewrite below can point the CSS at recorded copies instead of
+    // so the rewrite below can point the CSS at captured copies instead of
     // persisting absolute URLs the replay must refuse to fetch.
     queue.forEach((event, index) => {
       for (const url of collectEventCssUrls(event, bases[index])) void this.captureAssetUrl(url);
@@ -350,7 +350,7 @@ export class Recorder {
   }
 
   private requireStore() {
-    if (!this.store) throw new Error("No recording is active");
+    if (!this.store) throw new Error("No capture is active");
     return this.store;
   }
 
@@ -359,7 +359,7 @@ export class Recorder {
       const timestamp = eventTimestamp(event);
       if (timestamp !== undefined && state.firstEventTimestamp === undefined) state.firstEventTimestamp = timestamp;
       const candidate = event as { type?: number; data?: { tag?: unknown } };
-      if (candidate.type !== 5 || candidate.data?.tag !== "rec-tab-focused" || timestamp === undefined || state.firstEventTimestamp === undefined) continue;
+      if (candidate.type !== 5 || candidate.data?.tag !== "replay-tab-focused" || timestamp === undefined || state.firstEventTimestamp === undefined) continue;
       this.store?.addTabEvent({ type: "focused", segment_id: state.id, t_ms: state.clockOffsetMs + Math.max(0, timestamp - state.firstEventTimestamp) });
     }
   }
@@ -368,7 +368,7 @@ export class Recorder {
     if (!this.store || !request.isNavigationRequest() || request.frame() !== page.mainFrame()) return;
     const state = this.pages.get(page);
     // The first load of a newly opened tab is represented by the tab lifecycle,
-    // not a refresh transition. Existing recorded pages can start a transition.
+    // not a refresh transition. Existing captured pages can start a transition.
     if (!state) return;
     const pending = this.pendingNavigations.get(page);
     if (pending) {
@@ -460,7 +460,7 @@ export class Recorder {
           if (length > MAX_ASSET_BYTES) return;
           await this.persistAsset(sourceUrl, new Uint8Array(await response.arrayBuffer()), response.headers.get("content-type") ?? "application/octet-stream", response.url);
         } finally { clearTimeout(timer); }
-      } catch { /* A missing protected resource must not prevent a recording. */ }
+      } catch { /* A missing protected resource must not prevent a replay. */ }
     })();
     this.assetCaptures.set(sourceUrl, capture);
     return capture;
@@ -475,7 +475,7 @@ export class Recorder {
         const body = await read();
         if (body.byteLength > MAX_ASSET_BYTES || !isStaticContentType(contentType, sourceUrl)) return;
         await this.persistAsset(sourceUrl, body, contentType, alias);
-      } catch { /* A missing protected resource must not prevent a recording. */ }
+      } catch { /* A missing protected resource must not prevent a replay. */ }
     })();
     this.assetCaptures.set(sourceUrl, capture);
     return capture;
@@ -543,12 +543,12 @@ function inScope(url: string, origins: Set<string>) {
   return Boolean(origin && origins.has(origin));
 }
 
-function startConfig(maskAllInputs: boolean, recordCanvas: boolean, recordCrossOriginIframes: boolean) {
-  return { maskAllInputs, recordCanvas, recordCrossOriginIframes };
+function startConfig(maskAllInputs: boolean, captureCanvas: boolean, captureCrossOriginIframes: boolean) {
+  return { maskAllInputs, captureCanvas, captureCrossOriginIframes };
 }
-function invokeRecorder(config: { maskAllInputs: boolean; recordCanvas: boolean; recordCrossOriginIframes: boolean }) {
-  const api = window as typeof window & { __recStart?: (value: typeof config) => void };
-  api.__recStart?.(config);
+function invokeCapture(config: { maskAllInputs: boolean; captureCanvas: boolean; captureCrossOriginIframes: boolean }) {
+  const api = window as typeof window & { __replayStart?: (value: typeof config) => void };
+  api.__replayStart?.(config);
 }
 
 function isHttpUrl(url: string) { try { return ["http:", "https:"].includes(new URL(url).protocol); } catch { return false; } }
@@ -576,7 +576,7 @@ function rewriteCssUrls(value: string, baseUrl: string, sessionId: string | unde
 // srcset / imagesrcset are comma-separated "<url> <descriptor>" candidates, so a
 // single-URL assetPath() lookup on the whole value never matches — each captured
 // candidate has to be rewritten in place or the responsive image keeps pointing
-// at the recorded (private-network) origin.
+// at the captured (private-network) origin.
 function rewriteSrcset(value: string, baseUrl: string, sessionId: string | undefined, assets: { id: string; source_urls: string[] }[]) {
   return value.split(",").map((candidate) => {
     const trimmed = candidate.trim();
@@ -645,11 +645,11 @@ function iframeFallback(value: Record<string, unknown>, baseUrl: string, allowed
   try { source = new URL(attributes.src, baseUrl); } catch { return value; }
   if (allowedOrigins.has(source.origin)) return value;
   const label = escapeIframeText(source.host || source.href);
-  return { ...value, attributes: { ...attributes, src: "about:blank", srcdoc: `<body style="margin:0;display:grid;place-items:center;background:#f4f4f7;color:#4b4b58;font:14px system-ui"><div style="max-width:260px;padding:24px;text-align:center"><strong>External frame unavailable</strong><p style="margin:8px 0 0">${label} was not included in this recording.</p></div></body>`, "data-rec-frame-fallback": "external" } };
+  return { ...value, attributes: { ...attributes, src: "about:blank", srcdoc: `<body style="margin:0;display:grid;place-items:center;background:#f4f4f7;color:#4b4b58;font:14px system-ui"><div style="max-width:260px;padding:24px;text-align:center"><strong>External frame unavailable</strong><p style="margin:8px 0 0">${label} was not included in this replay.</p></div></body>`, "data-replay-frame-fallback": "external" } };
 }
 function escapeIframeText(value: string) { return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character); }
 
-async function recorderScript() {
+async function captureScript() {
   // The package exports only its module entrypoint. Resolve that supported path
   // first, then select the adjacent browser-safe UMD bundle.
   const path = join(dirname(require.resolve("@rrweb/record")), "record.umd.min.cjs");
@@ -657,16 +657,16 @@ async function recorderScript() {
   return `${rrweb}\n;(() => {
     let stop; let stopTabFocus; let buffer = []; let timer;
     const rrwebRecord = window.rrweb || window.rrwebRecord;
-    const flush = async () => { if (buffer.length) await window.__rec_emit(buffer.splice(0)); if (timer) { clearTimeout(timer); timer = undefined; } };
-    window.__recStart = ({ maskAllInputs, recordCanvas, recordCrossOriginIframes }) => {
+    const flush = async () => { if (buffer.length) await window.__replay_emit(buffer.splice(0)); if (timer) { clearTimeout(timer); timer = undefined; } };
+    window.__replayStart = ({ maskAllInputs, captureCanvas, captureCrossOriginIframes }) => {
       if (stop || !rrwebRecord) return;
       stop = rrwebRecord.record({
         emit(event) { buffer.push(event); if (buffer.length >= 200) void flush(); else if (!timer) timer = setTimeout(() => void flush(), ${FLUSH_MS}); },
         checkoutEveryNms: 60000,
         inlineStylesheet: true,
         collectFonts: true,
-        recordCanvas,
-        recordCrossOriginIframes,
+        captureCanvas,
+        captureCrossOriginIframes,
         // We immediately replace unscoped cross-origin frames with a visible
         // replay placeholder before persisting events. Keeping src here lets us
         // retain the source host for that explanation.
@@ -677,13 +677,13 @@ async function recorderScript() {
         sampling: { mousemove: 50, scroll: 150 },
       });
       if (window.top === window) {
-        const reportFocus = () => { if (document.visibilityState === "visible") rrwebRecord.record.addCustomEvent("rec-tab-focused", {}); };
+        const reportFocus = () => { if (document.visibilityState === "visible") rrwebRecord.record.addCustomEvent("replay-tab-focused", {}); };
         document.addEventListener("visibilitychange", reportFocus);
         stopTabFocus = () => document.removeEventListener("visibilitychange", reportFocus);
         reportFocus();
       }
     };
-    window.__recAddMarker = (label, note, placement) => rrwebRecord?.record?.addCustomEvent?.("rec-marker", { label, note, placement });
-    window.__recStop = async () => { await flush(); stopTabFocus?.(); stopTabFocus = undefined; stop?.(); stop = undefined; };
+    window.__replayAddMarker = (label, note, placement) => rrwebRecord?.record?.addCustomEvent?.("replay-marker", { label, note, placement });
+    window.__replayStop = async () => { await flush(); stopTabFocus?.(); stopTabFocus = undefined; stop?.(); stop = undefined; };
   })();`;
 }

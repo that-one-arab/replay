@@ -9,16 +9,16 @@ import { promisify } from "node:util";
 const execFile = promisify(execute);
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const userHome = homedir();
-const developmentHome = join(userHome, ".rec-dev");
+const developmentHome = join(userHome, ".replay-dev");
 const developmentPort = 7718;
 const developmentShareUrl = "https://stitch-production-2492.up.railway.app";
-const marketplaceName = "rec-dev";
+const marketplaceName = "replay-dev";
 const marketplaceRoot = join(developmentHome, "codex-marketplace");
-const developmentPluginRoot = join(marketplaceRoot, "plugins", "rec-mcp-dev");
+const developmentPluginRoot = join(marketplaceRoot, "plugins", "replay-mcp-dev");
 const marketplacePath = join(marketplaceRoot, ".agents", "plugins", "marketplace.json");
 
 if (isMain()) void main().catch((error) => {
-  process.stderr.write(`rec Codex profile: ${messageOf(error)}\n`);
+  process.stderr.write(`replay Codex profile: ${messageOf(error)}\n`);
   process.exitCode = 1;
 });
 
@@ -27,42 +27,42 @@ async function main() {
   if (action === "dev") return activateDevelopment();
   if (action === "production") return activateProduction();
   if (action === "status") return printStatus();
-  throw new Error("Usage: node scripts/codex-rec-profile.mjs <dev|production|status>");
+  throw new Error("Usage: node scripts/codex-replay-profile.mjs <dev|production|status>");
 }
 
 async function activateDevelopment() {
   await assertDevelopmentBuild();
   await writeDevelopmentPlugin();
-  await runCodex(["plugin", "remove", "rec-mcp@rec"], true);
+  await runCodex(["plugin", "remove", "replay-mcp@replay"], true);
   if (!await marketplaceIsConfigured()) await runCodex(["plugin", "marketplace", "add", marketplaceRoot]);
-  await runCodex(["plugin", "add", `rec-mcp-dev@${marketplaceName}`]);
-  console.log(`Rec development is active: ${developmentHome} on http://127.0.0.1:${developmentPort}. Open a new Codex task.`);
+  await runCodex(["plugin", "add", `replay-mcp-dev@${marketplaceName}`]);
+  console.log(`Replay development is active: ${developmentHome} on http://127.0.0.1:${developmentPort}. Open a new Codex task.`);
 }
 
 async function activateProduction() {
-  await runCodex(["plugin", "remove", `rec-mcp-dev@${marketplaceName}`], true);
-  await runCodex(["plugin", "add", "rec-mcp@rec"]);
-  console.log("Rec production is active. Open a new Codex task.");
+  await runCodex(["plugin", "remove", `replay-mcp-dev@${marketplaceName}`], true);
+  await runCodex(["plugin", "add", "replay-mcp@replay"]);
+  console.log("Replay production is active. Open a new Codex task.");
 }
 
 async function printStatus() {
   const output = await runCodex(["plugin", "list"]);
-  const development = installedPlugin(output, `rec-mcp-dev@${marketplaceName}`);
-  const production = installedPlugin(output, "rec-mcp@rec");
+  const development = installedPlugin(output, `replay-mcp-dev@${marketplaceName}`);
+  const production = installedPlugin(output, "replay-mcp@replay");
   console.log(JSON.stringify({
     active: development ? "development" : production ? "production" : "none",
     development: {
-      plugin: `rec-mcp-dev@${marketplaceName}`,
-      recHome: developmentHome,
+      plugin: `replay-mcp-dev@${marketplaceName}`,
+      replayHome: developmentHome,
       daemonUrl: `http://127.0.0.1:${developmentPort}`,
       source: repositoryRoot,
       sharing: developmentShareUrl,
     },
     production: {
-      plugin: "rec-mcp@rec",
-      recHome: join(userHome, ".rec"),
+      plugin: "replay-mcp@replay",
+      replayHome: join(userHome, ".replay"),
       daemonUrl: "http://127.0.0.1:7717",
-      runtimeHome: join(userHome, ".rec", "runtimes"),
+      runtimeHome: join(userHome, ".replay", "runtimes"),
     },
   }, null, 2));
 }
@@ -83,7 +83,7 @@ async function writeDevelopmentPlugin() {
   const pluginVersion = `${version}+codex.dev.${new Date().toISOString().replace(/[-:.TZ]/g, "")}`;
   await rm(developmentPluginRoot, { recursive: true, force: true });
   await mkdir(join(developmentPluginRoot, ".codex-plugin"), { recursive: true });
-  await cp(join(repositoryRoot, "plugins", "rec-mcp", "skills"), join(developmentPluginRoot, "skills"), { recursive: true });
+  await cp(join(repositoryRoot, "plugins", "replay-mcp", "skills"), join(developmentPluginRoot, "skills"), { recursive: true });
   await writeJson(join(developmentPluginRoot, ".codex-plugin", "plugin.json"), developmentPluginManifest(pluginVersion));
   await writeJson(join(developmentPluginRoot, ".mcp.json"), developmentMcpConfig(repositoryRoot, developmentHome, developmentPort));
   await mkdir(dirname(marketplacePath), { recursive: true });
@@ -92,17 +92,17 @@ async function writeDevelopmentPlugin() {
 
 export function developmentMcpConfig(root, home, port) {
   const environment = {
-    REC_HOME: home,
-    REC_PORT: String(port),
-    REC_DAEMON_URL: `http://127.0.0.1:${port}`,
-    REC_SHARE_URL: developmentShareUrl,
+    REPLAY_HOME: home,
+    REPLAY_PORT: String(port),
+    REPLAY_DAEMON_URL: `http://127.0.0.1:${port}`,
+    REPLAY_SHARE_URL: developmentShareUrl,
   };
-  // A single server: rec-mcp embeds the pinned stock Playwright MCP tool
+  // A single server: replay-mcp embeds the pinned stock Playwright MCP tool
   // surface itself. A separate playwright entry would show duplicate browser
-  // tools, and an agent driving the duplicate would not bind rec_marker.
+  // tools, and an agent driving the duplicate would not bind replay_marker.
   return {
     mcpServers: {
-      rec: {
+      replay: {
         command: process.execPath,
         args: [join(root, "packages", "mcp", "dist", "main.js")],
         cwd: root,
@@ -114,19 +114,19 @@ export function developmentMcpConfig(root, home, port) {
 
 function developmentPluginManifest(version) {
   return {
-    name: "rec-mcp-dev",
+    name: "replay-mcp-dev",
     version,
-    description: "Local development build of Rec browser recordings.",
-    author: { name: "Rec development" },
+    description: "Local development build of Replay browser replays.",
+    author: { name: "Replay development" },
     skills: "./skills/",
     interface: {
-      displayName: "Rec browser recordings (development)",
-      shortDescription: "Use the current Rec checkout in an isolated local lane.",
-      longDescription: "Runs the source build against an isolated browser and recording home.",
-      developerName: "Rec development",
+      displayName: "Replay browser replays (development)",
+      shortDescription: "Use the current Replay checkout in an isolated local lane.",
+      longDescription: "Runs the source build against an isolated browser and replay home.",
+      developerName: "Replay development",
       category: "Productivity",
       capabilities: ["Interactive", "Write"],
-      defaultPrompt: "Reproduce this browser bug and return a Rec replay using the development build.",
+      defaultPrompt: "Reproduce this browser bug and return a Replay replay using the development build.",
     },
     mcpServers: "./.mcp.json",
   };
@@ -135,10 +135,10 @@ function developmentPluginManifest(version) {
 function developmentMarketplace() {
   return {
     name: marketplaceName,
-    interface: { displayName: "Rec development" },
+    interface: { displayName: "Replay development" },
     plugins: [{
-      name: "rec-mcp-dev",
-      source: { source: "local", path: "./plugins/rec-mcp-dev" },
+      name: "replay-mcp-dev",
+      source: { source: "local", path: "./plugins/replay-mcp-dev" },
       policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" },
       category: "Productivity",
     }],

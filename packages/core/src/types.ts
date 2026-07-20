@@ -12,11 +12,11 @@ export interface Marker {
   placement?: "after_previous" | "before_next";
   /** Optional visual emphasis. A yellow or green marker stands out from the default checkpoints. */
   color?: "yellow" | "green";
-  /** The agent action this marker was recorded atomically with, when it was. */
+  /** The agent action this marker was captured atomically with, when it was. */
   action_id?: string;
 }
 
-/** One embedded browser tool call the agent issued while recording. */
+/** One embedded browser tool call the agent issued while capturing. */
 export interface AgentAction {
   id: string;
   tool: string;
@@ -45,7 +45,7 @@ export interface Segment {
 }
 
 /** A static visual resource copied into the session bundle for replay. */
-export interface RecordedAsset {
+export interface CapturedAsset {
   id: string;
   source_urls: string[];
   path: string;
@@ -59,7 +59,7 @@ export interface TabEvent {
   type: "opened" | "focused" | "closed";
 }
 
-/** A top-level document transition observed by Rec while recording. */
+/** A top-level document transition observed by Replay while capturing. */
 export interface NavigationEvent {
   segment_id: string;
   kind: "reload" | "navigate";
@@ -70,7 +70,7 @@ export interface NavigationEvent {
   to_url: string;
 }
 
-export interface RecordingManifest {
+export interface ReplayManifest {
   format_version: 1;
   id: string;
   title: string;
@@ -78,10 +78,10 @@ export interface RecordingManifest {
   notes?: string;
   created_at: string;
   stopped_at?: string;
-  recorder: { version: string; rrweb: string; record_canvas: boolean; record_cross_origin_iframes: boolean };
+  capture: { version: string; rrweb: string; capture_canvas: boolean; capture_cross_origin_iframes: boolean };
   origins: string[];
   masking: { mask_all_inputs: boolean; passwords: true };
-  /** Author defaults for player-only pacing; absent on recordings made before configuration support. */
+  /** Author defaults for player-only pacing; absent on replays made before configuration support. */
   replay_defaults?: {
     idle_mode: "cut" | "fast_forward" | "preserve";
     idle_retained_ms: number;
@@ -92,12 +92,12 @@ export interface RecordingManifest {
   active_duration_ms?: number;
   segments: Segment[];
   tab_events: TabEvent[];
-  /** Optional for compatibility with recordings created before navigation capture. */
+  /** Optional for compatibility with replays created before navigation capture. */
   navigation_events?: NavigationEvent[];
   markers: Marker[];
-  /** Optional for compatibility with recordings created before action capture. */
+  /** Optional for compatibility with replays created before action capture. */
   actions?: AgentAction[];
-  assets: RecordedAsset[];
+  assets: CapturedAsset[];
 }
 
 export interface StartOptions {
@@ -105,9 +105,9 @@ export interface StartOptions {
   origins?: string[];
   maskAllInputs?: boolean;
   /** Opt-in because canvas pixels can add sensitive visual data and bundle size. */
-  recordCanvas?: boolean;
-  /** Resolved by Rec's daemon, not normally passed by a coding agent. */
-  replayDefaults?: RecordingManifest["replay_defaults"];
+  captureCanvas?: boolean;
+  /** Resolved by Replay's daemon, not normally passed by a coding agent. */
+  replayDefaults?: ReplayManifest["replay_defaults"];
 }
 
 export interface StopResult {

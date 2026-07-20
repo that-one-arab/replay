@@ -1,15 +1,15 @@
-import type { RecordingManifest } from "./types.js";
+import type { ReplayManifest } from "./types.js";
 
 /**
  * A single reviewer-meaningful moment distilled from the raw rrweb stream.
- * Times are raw recording milliseconds (the same clock as manifest markers),
+ * Times are raw replay milliseconds (the same clock as manifest markers),
  * not idle-projected player time.
  */
 export interface ReplayStep {
   t_ms: number;
   kind: "page" | "navigation" | "click" | "input" | "scroll" | "marker" | "tab" | "idle";
   description: string;
-  /** Segment (recorded tab) the step happened in, when known. */
+  /** Segment (captured tab) the step happened in, when known. */
   segment_id?: string;
   /** Extra machine-readable context: URLs, typed values, marker notes. */
   detail?: string;
@@ -61,11 +61,11 @@ const SCROLL_BURST_MS = 1_500;
 const TEXT_LIMIT = 80;
 
 /**
- * Distill a recording into an ordered, human-readable action timeline. This is
- * the model-facing view of a replay: everything speaks raw recording time so
+ * Distill a replay into an ordered, human-readable action timeline. This is
+ * the model-facing view of a replay: everything speaks raw replay time so
  * answers, markers, and seek targets stay on one clock.
  */
-export function summarizeReplay(manifest: RecordingManifest, eventsBySegment: Map<string, unknown[]>): ReplaySummary {
+export function summarizeReplay(manifest: ReplayManifest, eventsBySegment: Map<string, unknown[]>): ReplaySummary {
   const steps: ReplayStep[] = [];
   const activity: number[] = [];
   let end = 0;
@@ -186,13 +186,13 @@ export function summarizeReplay(manifest: RecordingManifest, eventsBySegment: Ma
 /** Render the summary as compact prompt-ready text with m:ss timestamps. */
 export function renderSummaryText(summary: ReplaySummary, maxSteps = 400): string {
   const lines = [
-    `Recording: ${summary.title} (${summary.id})`,
+    `Replay: ${summary.title} (${summary.id})`,
     `Created: ${summary.created_at}${summary.outcome ? ` — outcome: ${summary.outcome}` : ""}`,
     `Duration: ${formatTime(summary.duration_ms)} raw${summary.idle_total_ms >= 1_000 ? ` (${formatTime(summary.idle_total_ms)} idle)` : ""}; ${summary.tab_count} tab${summary.tab_count === 1 ? "" : "s"}`,
     `Pages: ${summary.urls.join(", ")}`,
     ...(summary.notes ? [`Notes: ${summary.notes}`] : []),
     "",
-    "Timeline (raw recording time — use these t_ms values with replay tools):",
+    "Timeline (raw replay time — use these t_ms values with replay tools):",
   ];
   const steps = thinSteps(summary.steps, maxSteps);
   for (const step of steps) {
@@ -239,7 +239,7 @@ function inputStep(time: number, segmentId: string, node: NodeInfo | undefined, 
   return { t_ms: time, kind: "input", segment_id: segmentId, description: `Typed ${value} into ${target}`, detail: key };
 }
 
-/** Human label for a recorded element: its text or accessible name, then tag. */
+/** Human label for a captured element: its text or accessible name, then tag. */
 export function describeNode(node: NodeInfo | undefined): string {
   if (!node) return "an element";
   const attrs = node.attributes;

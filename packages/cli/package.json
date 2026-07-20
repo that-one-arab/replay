@@ -1,5 +1,5 @@
 {
-  "name": "@rec/cli",
+  "name": "@replay/cli",
   "version": "0.2.2",
   "private": true,
   "type": "module",
@@ -7,10 +7,10 @@
     "dist"
   ],
   "bin": {
-    "rec": "./dist/main.js"
+    "replay": "./dist/main.js"
   },
   "dependencies": {
-    "@rec/core": "workspace:*"
+    "@replay/core": "workspace:*"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

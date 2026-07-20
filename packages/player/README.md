@@ -1,9 +1,9 @@
-# `@rec/player`
+# `@replay/player`
 
 The browser replay UI, built with Vite and rrweb replay. The daemon and hosted
 share server both serve its compiled `dist/` assets.
 
-The player renders a full browser-session timeline: recorded tabs, markers,
+The player renders a full browser-session timeline: captured tabs, markers,
 navigation/refresh intervals, reconstructed cursor movement, and captured assets.
 It reads replay defaults embedded in the manifest and lets reviewers switch idle
 treatment between **Cut**, configured fast-forward, and **Keep** without changing

@@ -27,7 +27,7 @@ body.chat-open #app { width: calc(100% - 404px); }
 }
 .replay-screen #replay > .replayer-wrapper { flex: 0 0 auto; transform-origin: center; background: #111218; }
 .replay-screen #replay iframe { border: 0 !important; }
-/* Replayed cursor: a real pointer arrow (screen-recording style) rather than
+/* Replayed cursor: a real pointer arrow (screen-replay style) rather than
    rrweb's default. left/top mark the pointer point, so the arrow's tip — the
    top-left of the art — sits there with no centering offset. */
 .replay-screen .replayer-mouse {
@@ -42,9 +42,9 @@ body.chat-open #app { width: calc(100% - 404px); }
   filter: drop-shadow(0 2px 2.5px rgba(0, 0, 0, .5));
   will-change: left, top;
 }
-.replay-screen .replayer-wrapper.rec-cursor-live .replayer-mouse { opacity: 1; }
+.replay-screen .replayer-wrapper.replay-cursor-live .replayer-mouse { opacity: 1; }
 .replay-screen .replayer-mouse::after { content: none; }
-.replay-screen .rec-click-ripple {
+.replay-screen .replay-click-ripple {
   position: absolute;
   z-index: 11;
   width: 46px;
@@ -54,9 +54,9 @@ body.chat-open #app { width: calc(100% - 404px); }
   border: 2px solid rgba(169, 155, 255, .95);
   background: radial-gradient(circle, rgba(169, 155, 255, .5), rgba(169, 155, 255, 0) 70%);
   pointer-events: none;
-  animation: rec-ripple .55s cubic-bezier(.2, .6, .35, 1) forwards;
+  animation: replay-ripple .55s cubic-bezier(.2, .6, .35, 1) forwards;
 }
-@keyframes rec-ripple {
+@keyframes replay-ripple {
   from { transform: scale(.25); opacity: 1; }
   to { transform: scale(1.35); opacity: 0; }
 }
@@ -95,8 +95,8 @@ body.chat-open #app { width: calc(100% - 404px); }
   opacity: 0;
   pointer-events: none;
 }
-.state-flash.is-animating { animation: rec-state-flash .55s ease-out forwards; }
-@keyframes rec-state-flash {
+.state-flash.is-animating { animation: replay-state-flash .55s ease-out forwards; }
+@keyframes replay-state-flash {
   from { opacity: .95; transform: scale(.7); }
   60% { opacity: .95; }
   to { opacity: 0; transform: scale(1.15); }
@@ -124,7 +124,7 @@ body.chat-open #app { width: calc(100% - 404px); }
 .replay-screen.is-idle .control-deck { opacity: 0; transform: translateX(-50%) translateY(10px); pointer-events: none; }
 .replay-screen.is-idle .segment-picker { opacity: 0; pointer-events: none; }
 
-/* Recorded tab strip */
+/* Captured tab strip */
 .segment-picker {
   position: absolute;
   z-index: 4;
@@ -183,10 +183,10 @@ body.chat-open #app { width: calc(100% - 404px); }
   border-top-color: #fff;
   border-radius: 50%;
   box-shadow: 0 0 0 8px rgba(255, 255, 255, .07);
-  animation: rec-spin .82s linear infinite;
+  animation: replay-spin .82s linear infinite;
 }
 .refresh-indicator strong { margin-top: 8px; font-size: 20px; letter-spacing: -.02em; }
-@keyframes rec-spin { to { transform: rotate(360deg); } }
+@keyframes replay-spin { to { transform: rotate(360deg); } }
 
 /* Narration lower third */
 .caption-card {
@@ -432,7 +432,7 @@ body.chat-open #app { width: calc(100% - 404px); }
   border: 2px solid rgba(23, 23, 32, .3);
   border-top-color: #171720;
   border-radius: 50%;
-  animation: rec-spin .82s linear infinite;
+  animation: replay-spin .82s linear infinite;
   vertical-align: -1px;
 }
 .share-link {
@@ -659,7 +659,7 @@ body.chat-open #app { width: calc(100% - 404px); }
 .error { max-width: 620px; margin: 15vh auto; padding: 30px; background: #1d1b25; border: 1px solid #34303e; border-radius: 12px; }
 .error p:last-child { color: #aaa7b6; }
 
-/* Loading state — shown while a (possibly remote) recording streams in */
+/* Loading state — shown while a (possibly remote) replay streams in */
 .replay-loading {
   position: absolute;
   inset: 0;
@@ -677,7 +677,7 @@ body.chat-open #app { width: calc(100% - 404px); }
   border: 4px solid rgba(255, 255, 255, .16);
   border-top-color: #fff;
   border-radius: 50%;
-  animation: rec-spin .82s linear infinite;
+  animation: replay-spin .82s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) { .loading-spinner { animation-duration: 1.8s; } }
 

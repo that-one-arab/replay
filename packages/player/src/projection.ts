@@ -1,5 +1,5 @@
 /**
- * The playback projection: detect idle gaps in raw recording time, collapse
+ * The playback projection: detect idle gaps in raw replay time, collapse
  * or compress them per the selected idle mode, and remap the manifest, event
  * sets, and timeline metadata onto the projected playback clock.
  */

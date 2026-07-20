@@ -11,14 +11,14 @@ type JsonRpcMessage = {
   error?: { code?: number; message?: string };
 };
 
-/** The subset of the embedded Playwright MCP server Rec relies on. */
+/** The subset of the embedded Playwright MCP server Replay relies on. */
 type EmbeddedServer = { connect(transport: LocalTransport): Promise<void>; close?: () => Promise<void> };
 type EmbeddedModule = { createConnection(config?: unknown): Promise<EmbeddedServer> };
 
 export const MANAGED_CDP_ENDPOINT = "http://127.0.0.1:9333";
 
 export function embeddedPlaywrightEnabled() {
-  return process.env.REC_EMBEDDED_PLAYWRIGHT !== "0";
+  return process.env.REPLAY_EMBEDDED_PLAYWRIGHT !== "0";
 }
 
 /**
@@ -53,7 +53,7 @@ class LocalTransport {
 
 /**
  * An in-process MCP client for the embedded stock Playwright MCP server.
- * Rec's front end forwards browser tool traffic through it; a connection is
+ * Replay's front end forwards browser tool traffic through it; a connection is
  * created lazily and rebuilt only when the target CDP endpoint changes.
  */
 export class PlaywrightBridge {
@@ -101,7 +101,7 @@ export class PlaywrightBridge {
     await this.request("initialize", {
       protocolVersion: "2025-03-26",
       capabilities: {},
-      clientInfo: { name: "rec-mcp", version: "0.2.2" },
+      clientInfo: { name: "replay-mcp", version: "0.2.2" },
     });
     await this.transport.send({ jsonrpc: "2.0", method: "notifications/initialized" });
   }
@@ -120,10 +120,10 @@ export class PlaywrightBridge {
   private receive(message: JsonRpcMessage) {
     if (message.method !== undefined) {
       // The embedded server may issue client requests (for example roots/list)
-      // or notifications. Rec implements none of them; answer requests so the
+      // or notifications. Replay implements none of them; answer requests so the
       // server never awaits forever, and let notifications pass.
       if (message.id !== undefined && message.id !== null) {
-        void this.transport?.send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: `rec-mcp does not implement ${message.method}.` } });
+        void this.transport?.send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: `replay-mcp does not implement ${message.method}.` } });
       }
       return;
     }
@@ -153,16 +153,16 @@ export class PlaywrightBridge {
 }
 
 /**
- * REC_EMBEDDED_MCP_MODULE points tests (or an adventurous user) at an
+ * REPLAY_EMBEDDED_MCP_MODULE points tests (or an adventurous user) at an
  * alternate module implementing createConnection; the default is the pinned
  * @playwright/mcp dependency.
  */
 async function loadEmbeddedModule(): Promise<EmbeddedModule> {
-  const override = process.env.REC_EMBEDDED_MCP_MODULE;
+  const override = process.env.REPLAY_EMBEDDED_MCP_MODULE;
   const specifier = override ? (override.startsWith("/") ? pathToFileURL(override).href : override) : "@playwright/mcp";
   const loaded = await import(specifier) as Partial<EmbeddedModule>;
   if (typeof loaded.createConnection !== "function") {
-    throw new Error(`${specifier} does not export createConnection; Rec cannot embed Playwright MCP.`);
+    throw new Error(`${specifier} does not export createConnection; Replay cannot embed Playwright MCP.`);
   }
   return loaded as EmbeddedModule;
 }

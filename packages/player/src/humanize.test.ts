@@ -40,7 +40,7 @@ test("raw driver mouse-move streams are dropped", () => {
 
 test("an approach glide is synthesized between distant pointer targets", () => {
   const out = humanizeEvents([{ type: 2, timestamp: 0 }, clickAt(500, 100, 100), clickAt(2_000, 400, 300)]);
-  const approach = out.find((event) => event.data?.recSynthetic === "approach");
+  const approach = out.find((event) => event.data?.replaySynthetic === "approach");
   assert.ok(approach, "expected a synthetic approach before the second click");
   assert.equal(approach!.timestamp, 2_000 - CURSOR_APPROACH_MS);
   const last = approach!.data!.positions!.at(-1)!;
@@ -56,7 +56,7 @@ test("withCursorLeadIns inserts a cue one approach-plus-dwell ahead of a click",
   assert.equal(out.length, 3);
   const cue = out[1]!;
   assert.equal(cue.type, 5);
-  assert.equal(cue.data?.tag, "rec-cursor");
+  assert.equal(cue.data?.tag, "replay-cursor");
   assert.equal(cue.data?.id, 3);
   assert.equal(cue.timestamp, 5_000 - CURSOR_APPROACH_MS - CURSOR_DWELL_MS);
 });

@@ -12,19 +12,19 @@ import test from "node:test";
 const run = promisify(execFile);
 
 test("bootstrap installs a verified runtime from the release feed", async () => {
-  const root = await mkdtemp(join(tmpdir(), "rec-bootstrap-"));
+  const root = await mkdtemp(join(tmpdir(), "replay-bootstrap-"));
   const version = "0.2.0";
   const platform = "darwin-arm64";
-  const releaseRoot = join(root, `rec-${version}-${platform}`);
+  const releaseRoot = join(root, `replay-${version}-${platform}`);
   const runtime = join(releaseRoot, "runtime");
   const archive = join(root, "runtime.tar.gz");
   const installed = join(root, "installed");
   const server = createServer();
   try {
     await mkdir(join(runtime, "bin"), { recursive: true });
-    await writeFile(join(runtime, "bin", "rec-mcp"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    await writeFile(join(runtime, "bin", "rec-playwright-launcher"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    await run("tar", ["-C", root, "-czf", archive, `rec-${version}-${platform}`]);
+    await writeFile(join(runtime, "bin", "replay-mcp"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await writeFile(join(runtime, "bin", "replay-playwright-launcher"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await run("tar", ["-C", root, "-czf", archive, `replay-${version}-${platform}`]);
     const artifact = await readFile(archive);
     const checksum = createHash("sha256").update(artifact).digest("hex");
     server.on("request", (request, response) => {
@@ -41,11 +41,11 @@ test("bootstrap installs a verified runtime from the release feed", async () => 
     await once(server, "listening");
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Could not start the release feed fixture.");
-    const bootstrapUrl = new URL("../../../plugins/rec-mcp/scripts/rec-bootstrap.mjs", import.meta.url).href;
+    const bootstrapUrl = new URL("../../../plugins/replay-mcp/scripts/replay-bootstrap.mjs", import.meta.url).href;
     const { ensureRuntime } = await import(bootstrapUrl) as { ensureRuntime: (options: { releaseEndpoint: string; runtimeHome: string; platform: string; version: string }) => Promise<string> };
     const result = await ensureRuntime({ releaseEndpoint: `http://127.0.0.1:${address.port}/v1/releases`, runtimeHome: installed, platform, version });
     assert.equal(result, join(installed, version));
-    assert.equal(await readFile(join(result, "bin", "rec-mcp"), "utf8"), "#!/bin/sh\nexit 0\n");
+    assert.equal(await readFile(join(result, "bin", "replay-mcp"), "utf8"), "#!/bin/sh\nexit 0\n");
   } finally {
     server.close();
     await rm(root, { recursive: true, force: true });

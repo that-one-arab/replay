@@ -11,7 +11,7 @@ function fixture(): { manifest: Manifest; eventSets: Map<string, ReplayEvent[]> 
   const events: ReplayEvent[] = [{ type: 2, timestamp: 1_000 }, click(1_000), click(2_000), click(62_000)];
   const manifest: Manifest = {
     id: "r1",
-    title: "Recording",
+    title: "Replay",
     markers: [{ t_ms: 61_000, label: "End of gap" }],
     segments: [{ id: "s1", page_url: "https://example.test/", clock_offset_ms: 0 }],
   };

@@ -12,7 +12,7 @@
 type ChatAvailability = { available: boolean; provider?: string; model?: string; reason?: string };
 
 export type ReplayControl = {
-  /** Seek to a raw recording time. Resolves after the new replay instance is live. */
+  /** Seek to a raw replay time. Resolves after the new replay instance is live. */
   seek(rawMs: number, play: boolean): Promise<string>;
   setPlayback(action: "play" | "pause"): string;
   readScreen(): Promise<string>;
@@ -34,7 +34,7 @@ const SUGGESTIONS = [
 let control: ReplayControl | undefined;
 let panel: HTMLElement | undefined;
 let availability: ChatAvailability = { available: false };
-let recordingId = "";
+let replayId = "";
 let chatId = "";
 let source: EventSource | undefined;
 let transcript: TranscriptEntry[] = [];
@@ -50,7 +50,7 @@ export function registerReplayControl(value: ReplayControl) { control = value; }
 
 /** Called once per page load; probes availability and prepares the panel. */
 export async function initChat(id: string, onOpen?: () => void) {
-  recordingId = id;
+  replayId = id;
   onOpenPanel = onOpen;
   availability = await probeAvailability();
   if (!availability.available && !isSetupReason(availability.reason)) return;
@@ -97,7 +97,7 @@ function formatModelLabel(model: string) {
 }
 
 function restoreChatId() {
-  const key = `rec-chat:${recordingId}`;
+  const key = `replay-chat:${replayId}`;
   try {
     const saved = sessionStorage.getItem(key);
     if (saved) return saved;
@@ -138,7 +138,7 @@ function syncToggles() {
 
 function connect() {
   source?.close();
-  source = new EventSource(`/api/chat/stream?chat=${encodeURIComponent(chatId)}&session=${encodeURIComponent(recordingId)}`);
+  source = new EventSource(`/api/chat/stream?chat=${encodeURIComponent(chatId)}&session=${encodeURIComponent(replayId)}`);
   source.addEventListener("ready", (event) => {
     connected = true;
     const data = JSON.parse((event as MessageEvent).data as string) as { busy?: boolean; provider?: string; model?: string };
@@ -179,7 +179,7 @@ function connect() {
   });
   source.onerror = () => {
     connected = false;
-    setConnectionNote("Reconnecting to the recorder…");
+    setConnectionNote("Reconnecting to the capture…");
   };
 }
 
@@ -277,7 +277,7 @@ function resetConversation() {
   streamingText = "";
   editingIndex = undefined;
   chatId = newChatId();
-  try { sessionStorage.setItem(`rec-chat:${recordingId}`, chatId); } catch { /* private browsing */ }
+  try { sessionStorage.setItem(`replay-chat:${replayId}`, chatId); } catch { /* private browsing */ }
   setBusy(false);
   connect();
   renderTranscript();
@@ -410,14 +410,14 @@ function renderTranscript() {
   const nearBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 60;
   if (isSetupReason(availability.reason)) {
     scroll.innerHTML = availability.reason === "missing_api_key"
-      ? `<div class="chat-empty"><b>No OpenAI API key</b><p>The replay assistant is set to the OpenAI API but no key is configured. Add one, then reopen this replay.</p><code>export OPENAI_API_KEY=sk-…\n# or in ~/.rec/config.toml\n[chat]\napi_key = "sk-…"</code></div>`
+      ? `<div class="chat-empty"><b>No OpenAI API key</b><p>The replay assistant is set to the OpenAI API but no key is configured. Add one, then reopen this replay.</p><code>export OPENAI_API_KEY=sk-…\n# or in ~/.replay/config.toml\n[chat]\napi_key = "sk-…"</code></div>`
       : `<div class="chat-empty"><b>Codex is not installed</b><p>The replay assistant is powered by the Codex CLI. Install it and sign in, then reopen this replay.</p><code>npm install -g @openai/codex\ncodex login</code></div>`;
     panel?.querySelector<HTMLTextAreaElement>(".chat-composer textarea")?.setAttribute("disabled", "");
     panel?.querySelector<HTMLButtonElement>(".chat-send")?.setAttribute("disabled", "");
     return;
   }
   if (!transcript.length) {
-    scroll.innerHTML = `<div class="chat-empty"><b>Ask about this replay</b><p>The assistant has read the whole recording and can move the player while it answers.</p><div class="chat-suggestions">${SUGGESTIONS.map((item) => `<button type="button" data-suggestion="${escapeHtml(item)}">${escapeHtml(item)}</button>`).join("")}</div></div>`;
+    scroll.innerHTML = `<div class="chat-empty"><b>Ask about this replay</b><p>The assistant has read the whole replay and can move the player while it answers.</p><div class="chat-suggestions">${SUGGESTIONS.map((item) => `<button type="button" data-suggestion="${escapeHtml(item)}">${escapeHtml(item)}</button>`).join("")}</div></div>`;
     scroll.querySelectorAll<HTMLButtonElement>("[data-suggestion]").forEach((button) => {
       button.onclick = () => void send(button.dataset.suggestion ?? "");
     });

@@ -14,14 +14,14 @@ import { fileURLToPath } from "node:url";
 test("MCP tools make browser setup explicit and preserve ordered marker metadata", async () => {
   const calls: { method: string; path: string; body?: Record<string, unknown> }[] = [];
   let attached = false;
-  const recHome = await mkdtemp(join(tmpdir(), "rec-mcp-share-"));
-  await mkdir(join(recHome, "sessions", "rec_test"), { recursive: true });
-  await writeFile(join(recHome, "sessions", "rec_test", "manifest.json"), JSON.stringify({
+  const replayHome = await mkdtemp(join(tmpdir(), "replay-mcp-share-"));
+  await mkdir(join(replayHome, "sessions", "replay_test"), { recursive: true });
+  await writeFile(join(replayHome, "sessions", "replay_test", "manifest.json"), JSON.stringify({
     format_version: 1,
-    id: "rec_test",
+    id: "replay_test",
     title: "MCP fixture",
     created_at: new Date().toISOString(),
-    recorder: { version: "0.1.0", rrweb: "2.0.0-alpha.20", record_canvas: false, record_cross_origin_iframes: false },
+    capture: { version: "0.1.0", rrweb: "2.0.0-alpha.20", capture_canvas: false, capture_cross_origin_iframes: false },
     origins: [],
     masking: { mask_all_inputs: false, passwords: true },
     segments: [],
@@ -35,7 +35,7 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
     let body: Record<string, unknown> | undefined;
     if (raw) {
       try { body = JSON.parse(raw) as Record<string, unknown>; }
-      catch { /* The share endpoint accepts the binary .rec bundle. */ }
+      catch { /* The share endpoint accepts the binary .replay bundle. */ }
     }
     calls.push({ method: request.method ?? "", path, body });
     if (request.method === "GET" && path === "/health") return json(response, {
@@ -52,10 +52,10 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
     if (request.method === "POST" && path === "/api/leases/release") return json(response, { released: true });
     if (request.method === "POST" && path === "/api/browser/ensure") { attached = true; return json(response, { managed: true, launched: true, cdp_endpoint: "http://127.0.0.1:9333", browser_state: "ready" }); }
     if (request.method === "POST" && path === "/api/browser/attach") return json(response, { managed: false, cdp_endpoint: body?.cdp_endpoint, browser_state: "ready" });
-    if (request.method === "POST" && path === "/api/sessions/start") return json(response, { sessionId: "rec_test" });
+    if (request.method === "POST" && path === "/api/sessions/start") return json(response, { sessionId: "replay_test" });
     if (request.method === "POST" && path === "/api/sessions/marker") return empty(response);
-    if (request.method === "POST" && path === "/api/sessions/stop") return json(response, { sessionId: "rec_test", path: "/tmp/rec_test", rawDurationMs: 1200, activeDurationMs: 900, markers: [] });
-    if (request.method === "POST" && path === "/v1/recordings") return json(response, { shareUrl: "https://share.fixture/r/abc123" }, 201);
+    if (request.method === "POST" && path === "/api/sessions/stop") return json(response, { sessionId: "replay_test", path: "/tmp/replay_test", rawDurationMs: 1200, activeDurationMs: 900, markers: [] });
+    if (request.method === "POST" && path === "/v1/replays") return json(response, { shareUrl: "https://share.fixture/r/abc123" }, 201);
     return json(response, { error: "not found" }, 404);
   });
   daemon.listen(0, "127.0.0.1");
@@ -63,39 +63,39 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
   const address = daemon.address();
   if (!address || typeof address === "string") throw new Error("Fixture daemon did not expose a TCP port.");
   // Embedded Playwright is exercised by its own test below; this one pins the
-  // recording tool surface and the escape hatch that disables embedding.
-  const server = spawn(process.execPath, [resolve(dirname(fileURLToPath(import.meta.url)), "main.js")], { env: { ...process.env, REC_HOME: recHome, REC_DAEMON_URL: `http://127.0.0.1:${address.port}`, REC_SHARE_URL: `http://127.0.0.1:${address.port}`, REC_EMBEDDED_PLAYWRIGHT: "0" } });
+  // replay tool surface and the escape hatch that disables embedding.
+  const server = spawn(process.execPath, [resolve(dirname(fileURLToPath(import.meta.url)), "main.js")], { env: { ...process.env, REPLAY_HOME: replayHome, REPLAY_DAEMON_URL: `http://127.0.0.1:${address.port}`, REPLAY_SHARE_URL: `http://127.0.0.1:${address.port}`, REPLAY_EMBEDDED_PLAYWRIGHT: "0" } });
   try {
     const client = new McpClient(server);
     const initialized = await client.request("initialize", { protocolVersion: "2025-03-26" });
-    assert.equal(initialized.result.serverInfo.name, "rec-mcp");
+    assert.equal(initialized.result.serverInfo.name, "replay-mcp");
     const listed = await client.request("tools/list", {});
-    assert.deepEqual(listed.result.tools.map((tool: { name: string }) => tool.name), ["recording_browser_ensure", "recording_attach_browser", "recording_start", "recording_marker", "recording_status", "recording_stop", "recording_share"]);
-    const noBrowser = await client.request("tools/call", { name: "recording_start", arguments: { title: "No browser" } });
+    assert.deepEqual(listed.result.tools.map((tool: { name: string }) => tool.name), ["capture_browser_ensure", "capture_attach_browser", "capture_start", "capture_marker", "capture_status", "capture_stop", "replay_share"]);
+    const noBrowser = await client.request("tools/call", { name: "capture_start", arguments: { title: "No browser" } });
     assert.equal(noBrowser.result.isError, true);
-    assert.match(noBrowser.result.content[0].text, /recording_browser_ensure/);
+    assert.match(noBrowser.result.content[0].text, /capture_browser_ensure/);
     assert.equal(calls.filter((call) => call.path === "/api/browser/ensure").length, 0);
-    const ensured = await client.request("tools/call", { name: "recording_browser_ensure", arguments: {} });
+    const ensured = await client.request("tools/call", { name: "capture_browser_ensure", arguments: {} });
     assert.match(ensured.result.content[0].text, /9333/);
-    const started = await client.request("tools/call", { name: "recording_start", arguments: { title: "MCP fixture" } });
-    assert.match(started.result.content[0].text, /rec_test/);
-    await client.request("tools/call", { name: "recording_marker", arguments: { label: "Observed issue", placement: "before_next" } });
-    await client.request("tools/call", { name: "recording_marker", arguments: { label: "Green checkpoint", color: "green" } });
-    const badColor = await client.request("tools/call", { name: "recording_marker", arguments: { label: "Bad", color: "blue" } });
+    const started = await client.request("tools/call", { name: "capture_start", arguments: { title: "MCP fixture" } });
+    assert.match(started.result.content[0].text, /replay_test/);
+    await client.request("tools/call", { name: "capture_marker", arguments: { label: "Observed issue", placement: "before_next" } });
+    await client.request("tools/call", { name: "capture_marker", arguments: { label: "Green checkpoint", color: "green" } });
+    const badColor = await client.request("tools/call", { name: "capture_marker", arguments: { label: "Bad", color: "blue" } });
     assert.equal(badColor.result.isError, true);
-    const stopped = await client.request("tools/call", { name: "recording_stop", arguments: { outcome: "reproduced" } });
+    const stopped = await client.request("tools/call", { name: "capture_stop", arguments: { outcome: "reproduced" } });
     assert.match(stopped.result.content[0].text, /replayUrl/);
     assert.match(stopped.result.content[0].text, /portableArtifactPath/);
     // Stopping saves locally and does not upload. Sharing is a separate, explicit step.
     assert.doesNotMatch(stopped.result.content[0].text, /shareUrl/);
-    assert.equal(calls.some((call) => call.path === "/v1/recordings"), false);
-    assert.equal(existsSync(join(recHome, "exports", "rec_test.rec")), true);
-    const shared = await client.request("tools/call", { name: "recording_share", arguments: { sessionId: "rec_test" } });
+    assert.equal(calls.some((call) => call.path === "/v1/replays"), false);
+    assert.equal(existsSync(join(replayHome, "exports", "replay_test.replay")), true);
+    const shared = await client.request("tools/call", { name: "replay_share", arguments: { sessionId: "replay_test" } });
     assert.match(shared.result.content[0].text, /https:\/\/share\.fixture\/r\/abc123/);
-    assert.equal(calls.filter((call) => call.path === "/v1/recordings").length, 1);
-    const status = await client.request("tools/call", { name: "recording_status", arguments: {} });
+    assert.equal(calls.filter((call) => call.path === "/v1/replays").length, 1);
+    const status = await client.request("tools/call", { name: "capture_status", arguments: {} });
     assert.match(status.result.content[0].text, /page_ready/);
-    const external = await client.request("tools/call", { name: "recording_attach_browser", arguments: { cdpEndpoint: "http://127.0.0.1:9222" } });
+    const external = await client.request("tools/call", { name: "capture_attach_browser", arguments: { cdpEndpoint: "http://127.0.0.1:9222" } });
     assert.match(external.result.content[0].text, /9222/);
     assert.equal(calls.filter((call) => call.path === "/api/browser/ensure").length, 1);
     assert.equal(calls.filter((call) => call.path === "/api/sessions/start").length, 1);
@@ -105,15 +105,15 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
     server.kill();
     daemon.close();
     await once(daemon, "close");
-    await rm(recHome, { recursive: true, force: true });
+    await rm(replayHome, { recursive: true, force: true });
   }
 });
 
-test("embedded browser tools carry rec_marker and bind markers to actions atomically", async () => {
+test("embedded browser tools carry replay_marker and bind markers to actions atomically", async () => {
   const calls: { method: string; path: string; body?: Record<string, unknown> }[] = [];
   let attached = false;
-  let recording = false;
-  const fixtureDir = await mkdtemp(join(tmpdir(), "rec-mcp-embedded-"));
+  let replay = false;
+  const fixtureDir = await mkdtemp(join(tmpdir(), "replay-mcp-embedded-"));
   const fakeModule = join(fixtureDir, "fake-playwright-mcp.mjs");
   await writeFile(fakeModule, FAKE_PLAYWRIGHT_MCP);
   const daemon = createServer(async (request, response) => {
@@ -124,7 +124,7 @@ test("embedded browser tools carry rec_marker and bind markers to actions atomic
     calls.push({ method: request.method ?? "", path, body });
     if (request.method === "GET" && path === "/health") return json(response, {
       ok: true,
-      state: recording ? "recording" : "idle",
+      state: replay ? "replay" : "idle",
       cdp_endpoint: attached ? "http://127.0.0.1:9333" : undefined,
       managed_browser: attached,
       browser_state: attached ? "ready" : "unavailable",
@@ -133,8 +133,8 @@ test("embedded browser tools carry rec_marker and bind markers to actions atomic
     });
     if (request.method === "POST" && path.startsWith("/api/leases/")) return json(response, { lease_id: "mcp-lease" }, path.endsWith("acquire") ? 201 : 200);
     if (request.method === "POST" && path === "/api/browser/ensure") { attached = true; return json(response, { managed: true, launched: true, cdp_endpoint: "http://127.0.0.1:9333", browser_state: "ready" }); }
-    if (request.method === "POST" && path === "/api/sessions/start") { recording = true; return json(response, { sessionId: "rec_embedded" }); }
-    if (request.method === "POST" && path === "/api/sessions/action") return json(response, { recorded: recording });
+    if (request.method === "POST" && path === "/api/sessions/start") { replay = true; return json(response, { sessionId: "replay_embedded" }); }
+    if (request.method === "POST" && path === "/api/sessions/action") return json(response, { captured: replay });
     return json(response, { error: "not found" }, 404);
   });
   daemon.listen(0, "127.0.0.1");
@@ -142,7 +142,7 @@ test("embedded browser tools carry rec_marker and bind markers to actions atomic
   const address = daemon.address();
   if (!address || typeof address === "string") throw new Error("Fixture daemon did not expose a TCP port.");
   const server = spawn(process.execPath, [resolve(dirname(fileURLToPath(import.meta.url)), "main.js")], {
-    env: { ...process.env, REC_DAEMON_URL: `http://127.0.0.1:${address.port}`, REC_EMBEDDED_MCP_MODULE: fakeModule },
+    env: { ...process.env, REPLAY_DAEMON_URL: `http://127.0.0.1:${address.port}`, REPLAY_EMBEDDED_MCP_MODULE: fakeModule },
   });
   try {
     const client = new McpClient(server);
@@ -150,25 +150,25 @@ test("embedded browser tools carry rec_marker and bind markers to actions atomic
 
     const listed = await client.request("tools/list", {});
     const names = listed.result.tools.map((tool: { name: string }) => tool.name);
-    assert.ok(names.includes("recording_start"));
+    assert.ok(names.includes("capture_start"));
     assert.ok(names.includes("browser_navigate"));
     assert.ok(names.includes("browser_click"));
     const navigate = listed.result.tools.find((tool: { name: string }) => tool.name === "browser_navigate");
-    assert.equal(navigate.inputSchema.properties.rec_marker.required[0], "label");
-    const recordingStart = listed.result.tools.find((tool: { name: string }) => tool.name === "recording_start");
-    assert.equal(recordingStart.inputSchema.properties.rec_marker, undefined);
+    assert.equal(navigate.inputSchema.properties.replay_marker.required[0], "label");
+    const captureStart = listed.result.tools.find((tool: { name: string }) => tool.name === "capture_start");
+    assert.equal(captureStart.inputSchema.properties.replay_marker, undefined);
 
-    // Before any recording: the action still runs, rec_marker is stripped from
+    // Before any replay: the action still runs, replay_marker is stripped from
     // what Playwright sees, and the dropped marker surfaces as a warning.
-    const early = await client.request("tools/call", { name: "browser_navigate", arguments: { url: "https://example.test/", rec_marker: { label: "too early" } } });
+    const early = await client.request("tools/call", { name: "browser_navigate", arguments: { url: "https://example.test/", replay_marker: { label: "too early" } } });
     const earlyEcho = JSON.parse(early.result.content[0].text);
     assert.deepEqual(earlyEcho.args, { url: "https://example.test/" });
     assert.equal(earlyEcho.cdpEndpoint, "http://127.0.0.1:9333");
-    assert.match(early.result.content[1].text, /no recording is active/);
+    assert.match(early.result.content[1].text, /no replay is active/);
     assert.equal(calls.filter((call) => call.path === "/api/browser/ensure").length, 1);
 
-    await client.request("tools/call", { name: "recording_start", arguments: { title: "Embedded" } });
-    const marked = await client.request("tools/call", { name: "browser_click", arguments: { selector: "#submit", rec_marker: { label: "Submitted form", note: "confirmed", color: "green" } } });
+    await client.request("tools/call", { name: "capture_start", arguments: { title: "Embedded" } });
+    const marked = await client.request("tools/call", { name: "browser_click", arguments: { selector: "#submit", replay_marker: { label: "Submitted form", note: "confirmed", color: "green" } } });
     assert.equal(marked.result.content.length, 1);
     const markedEcho = JSON.parse(marked.result.content[0].text);
     assert.deepEqual(markedEcho.args, { selector: "#submit" });
@@ -177,9 +177,9 @@ test("embedded browser tools carry rec_marker and bind markers to actions atomic
     assert.equal(plain.result.content.length, 1);
 
     // A malformed marker fails loudly before the browser action executes.
-    const invalid = await client.request("tools/call", { name: "browser_click", arguments: { selector: "#x", rec_marker: { note: "missing label" } } });
+    const invalid = await client.request("tools/call", { name: "browser_click", arguments: { selector: "#x", replay_marker: { note: "missing label" } } });
     assert.equal(invalid.result.isError, true);
-    assert.match(invalid.result.content[0].text, /rec_marker label/);
+    assert.match(invalid.result.content[0].text, /replay_marker label/);
 
     const actions = calls.filter((call) => call.path === "/api/sessions/action");
     assert.equal(actions.length, 3);
@@ -192,7 +192,7 @@ test("embedded browser tools carry rec_marker and bind markers to actions atomic
     assert.deepEqual(actions[1]?.body?.marker, { label: "Submitted form", note: "confirmed", color: "green" });
     assert.equal(actions[1]?.body?.tool, "browser_click");
     assert.match(String(actions[1]?.body?.args_summary), /#submit/);
-    assert.doesNotMatch(String(actions[1]?.body?.args_summary), /rec_marker/);
+    assert.doesNotMatch(String(actions[1]?.body?.args_summary), /replay_marker/);
     assert.equal(actions[2]?.body?.marker, undefined);
   } finally {
     server.kill();
@@ -242,13 +242,13 @@ test("a foreign process on the daemon endpoint fails fast with a conflict error 
   await once(squatter, "listening");
   const address = squatter.address();
   if (!address || typeof address === "string") throw new Error("Fixture squatter did not expose a TCP port.");
-  const server = spawn(process.execPath, [resolve(dirname(fileURLToPath(import.meta.url)), "main.js")], { env: { ...process.env, REC_DAEMON_URL: `http://127.0.0.1:${address.port}` } });
+  const server = spawn(process.execPath, [resolve(dirname(fileURLToPath(import.meta.url)), "main.js")], { env: { ...process.env, REPLAY_DAEMON_URL: `http://127.0.0.1:${address.port}` } });
   try {
     const client = new McpClient(server);
     await client.request("initialize", { protocolVersion: "2025-03-26" });
-    const status = await client.request("tools/call", { name: "recording_status", arguments: {} });
+    const status = await client.request("tools/call", { name: "capture_status", arguments: {} });
     assert.equal(status.result.isError, true);
-    assert.match(status.result.content[0].text, /not a rec daemon/);
+    assert.match(status.result.content[0].text, /not a replay daemon/);
     assert.match(status.result.content[0].text, new RegExp(`127\\.0\\.0\\.1:${address.port}`));
   } finally {
     server.kill();

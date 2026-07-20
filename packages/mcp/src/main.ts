@@ -4,33 +4,33 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
-import { exportSession, uploadRecording } from "@rec/core";
+import { exportSession, uploadReplay } from "@replay/core";
 import { embeddedPlaywrightEnabled, PlaywrightBridge } from "./playwright-bridge.js";
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type JsonObject = { [key: string]: Json };
 type Request = { jsonrpc?: string; id?: string | number | null; method?: string; params?: unknown };
 
-const endpoint = process.env.REC_DAEMON_URL ?? "http://127.0.0.1:7717";
+const endpoint = process.env.REPLAY_DAEMON_URL ?? "http://127.0.0.1:7717";
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
-const daemonEntry = process.env.REC_DAEMON_ENTRY ?? resolve(moduleDirectory, "../../daemon/dist/main.js");
+const daemonEntry = process.env.REPLAY_DAEMON_ENTRY ?? resolve(moduleDirectory, "../../daemon/dist/main.js");
 let daemonLease: DaemonLease | undefined;
 
 const tools: JsonObject[] = [
   {
-    name: "recording_browser_ensure",
-    description: "Ensure Rec's dedicated local Chrome is running and return the CDP endpoint that Playwright MCP must use.",
+    name: "capture_browser_ensure",
+    description: "Ensure Replay's dedicated local Chrome is running and return the CDP endpoint that Playwright MCP must use.",
     inputSchema: {
       type: "object",
       properties: {
-        browserExecutable: { type: "string", description: "Optional Chrome executable for Rec to launch." },
+        browserExecutable: { type: "string", description: "Optional Chrome executable for Replay to launch." },
       },
       additionalProperties: false,
     },
   },
   {
-    name: "recording_attach_browser",
-    description: "Attach Rec to an explicitly supplied loopback Chrome CDP endpoint. Do not call while recording.",
+    name: "capture_attach_browser",
+    description: "Attach Replay to an explicitly supplied loopback Chrome CDP endpoint. Do not call while capturing.",
     inputSchema: {
       type: "object",
       required: ["cdpEndpoint"],
@@ -41,21 +41,21 @@ const tools: JsonObject[] = [
     },
   },
   {
-    name: "recording_start",
+    name: "capture_start",
     description: "Start capture on an attached browser after Playwright MCP has navigated to an in-scope page.",
     inputSchema: {
       type: "object",
       properties: {
-        title: { type: "string", description: "Human-readable recording title." },
+        title: { type: "string", description: "Human-readable replay title." },
         origins: { type: "array", items: { type: "string" }, description: "Optional allowed page origins. Defaults to the active page origin." },
-        recordCanvas: { type: "boolean", description: "Capture canvas mutations. Disabled by default." },
+        captureCanvas: { type: "boolean", description: "Capture canvas mutations. Disabled by default." },
       },
       additionalProperties: false,
     },
   },
   {
-    name: "recording_marker",
-    description: "Add a labelled checkpoint to the active recording that is not tied to a browser action. For a checkpoint on an action itself, pass rec_marker on that browser tool call instead.",
+    name: "capture_marker",
+    description: "Add a labelled checkpoint to the active replay that is not tied to a browser action. For a checkpoint on an action itself, pass replay_marker on that browser tool call instead.",
     inputSchema: {
       type: "object",
       required: ["label"],
@@ -69,46 +69,46 @@ const tools: JsonObject[] = [
     },
   },
   {
-    name: "recording_status",
-    description: "Read local recorder and browser attachment status. Includes `viewport` (the live emulated viewport vs. the display); when `viewport.clipped` is true the page renders off-screen, and `viewport.recommendedViewport` is a safe size to resize to. Clipping is also reported in `configWarnings`.",
+    name: "capture_status",
+    description: "Read local capture and browser attachment status. Includes `viewport` (the live emulated viewport vs. the display); when `viewport.clipped` is true the page renders off-screen, and `viewport.recommendedViewport` is a safe size to resize to. Clipping is also reported in `configWarnings`.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
-    name: "recording_stop",
-    description: "Stop the active recording, save it locally, and return its local replay URL and portable artifact path. Sharing is a separate, explicit step: call recording_share or use the Share button in the player.",
+    name: "capture_stop",
+    description: "Stop the active replay, save it locally, and return its local replay URL and portable artifact path. Sharing is a separate, explicit step: call replay_share or use the Share button in the player.",
     inputSchema: {
       type: "object",
       properties: {
-        outcome: { type: "string", enum: ["reproduced", "verified", "other"], description: "Optional recording outcome." },
+        outcome: { type: "string", enum: ["reproduced", "verified", "other"], description: "Optional replay outcome." },
         notes: { type: "string", description: "Optional handoff notes." },
       },
       additionalProperties: false,
     },
   },
   {
-    name: "recording_share",
-    description: "Explicitly upload a completed portable recording to the configured Rec share service and return its public bearer link.",
+    name: "replay_share",
+    description: "Explicitly upload a completed portable replay to the configured Replay share service and return its public bearer link.",
     inputSchema: {
       type: "object",
       required: ["sessionId"],
-      properties: { sessionId: { type: "string", description: "Completed recording ID returned by recording_stop." } },
+      properties: { sessionId: { type: "string", description: "Completed replay ID returned by capture_stop." } },
       additionalProperties: false,
     },
   },
 ];
 
-const recordingToolNames = new Set(tools.map((tool) => String(tool.name)));
+const captureToolNames = new Set(tools.map((tool) => String(tool.name)));
 const bridge = new PlaywrightBridge();
 let embeddedToolsError: string | undefined;
 
 /**
- * Rec's checkpoint parameter, injected into every embedded browser tool
+ * Replay's checkpoint parameter, injected into every embedded browser tool
  * schema. It is stripped before the call reaches Playwright, so association
  * with the action is atomic: same request, same identity.
  */
-const REC_MARKER_SCHEMA: JsonObject = {
+const REPLAY_MARKER_SCHEMA: JsonObject = {
   type: "object",
-  description: "Optional Rec replay checkpoint recorded atomically with this browser action. Provide it when this action is a meaningful, confirmed step worth labelling in the session replay.",
+  description: "Optional replay checkpoint captured atomically with this browser action. Provide it when this action is a meaningful, confirmed step worth labelling in the session replay.",
   required: ["label"],
   properties: {
     label: { type: "string", description: "Short checkpoint label." },
@@ -157,7 +157,7 @@ async function dispatch(method: string, params: unknown): Promise<JsonObject> {
     return {
       protocolVersion: typeof requested === "string" ? requested : "2025-03-26",
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: "rec-mcp", version: "0.1.0" },
+      serverInfo: { name: "replay-mcp", version: "0.1.0" },
     };
   }
   if (method === "notifications/initialized") return {};
@@ -174,13 +174,13 @@ async function dispatch(method: string, params: unknown): Promise<JsonObject> {
 async function callTool(name: string, argumentsValue: JsonObject): Promise<JsonObject> {
   try {
     switch (name) {
-      case "recording_browser_ensure": return toolResult(await ensureBrowser(argumentsValue));
-      case "recording_attach_browser": return toolResult(await attachBrowser(argumentsValue));
-      case "recording_start": return toolResult(await startRecording(argumentsValue));
-      case "recording_marker": return toolResult(await addMarker(argumentsValue));
-      case "recording_status": return toolResult(await recordingStatus());
-      case "recording_stop": return toolResult(await stopRecording(argumentsValue));
-      case "recording_share": return toolResult(await shareRecording(argumentsValue));
+      case "capture_browser_ensure": return toolResult(await ensureBrowser(argumentsValue));
+      case "capture_attach_browser": return toolResult(await attachBrowser(argumentsValue));
+      case "capture_start": return toolResult(await startCapture(argumentsValue));
+      case "capture_marker": return toolResult(await addMarker(argumentsValue));
+      case "capture_status": return toolResult(await captureStatus());
+      case "capture_stop": return toolResult(await stopCapture(argumentsValue));
+      case "replay_share": return toolResult(await shareReplay(argumentsValue));
       default: return await callBrowserTool(name, argumentsValue);
     }
   } catch (error) {
@@ -190,34 +190,34 @@ async function callTool(name: string, argumentsValue: JsonObject): Promise<JsonO
 
 /**
  * The embedded browser tool surface is stock Playwright MCP with one addition:
- * an optional rec_marker parameter on every tool. Listing failures degrade to
- * the recording tools alone instead of breaking the server.
+ * an optional replay_marker parameter on every tool. Listing failures degrade to
+ * the replay tools alone instead of breaking the server.
  */
 async function embeddedTools(): Promise<JsonObject[]> {
   if (!embeddedPlaywrightEnabled()) return [];
   try {
     const listed = await bridge.listTools();
     embeddedToolsError = undefined;
-    return listed.filter((tool) => !recordingToolNames.has(String(tool.name))).map(injectRecMarker);
+    return listed.filter((tool) => !captureToolNames.has(String(tool.name))).map(injectReplayMarker);
   } catch (error) {
     embeddedToolsError = messageOf(error);
-    process.stderr.write(`rec-mcp: embedded Playwright MCP tools are unavailable: ${embeddedToolsError}\n`);
+    process.stderr.write(`replay-mcp: embedded Playwright MCP tools are unavailable: ${embeddedToolsError}\n`);
     return [];
   }
 }
 
-function injectRecMarker(tool: JsonObject): JsonObject {
+function injectReplayMarker(tool: JsonObject): JsonObject {
   const schema = object(tool.inputSchema);
   if (schema.type !== "object") return tool;
-  return { ...tool, inputSchema: { ...schema, properties: { ...object(schema.properties), rec_marker: REC_MARKER_SCHEMA } } };
+  return { ...tool, inputSchema: { ...schema, properties: { ...object(schema.properties), replay_marker: REPLAY_MARKER_SCHEMA } } };
 }
 
 async function callBrowserTool(name: string, argumentsValue: JsonObject): Promise<JsonObject> {
-  if (!embeddedPlaywrightEnabled()) throw new Error(`Unknown tool: ${name}. Embedded browser tools are disabled by REC_EMBEDDED_PLAYWRIGHT=0.`);
+  if (!embeddedPlaywrightEnabled()) throw new Error(`Unknown tool: ${name}. Embedded browser tools are disabled by REPLAY_EMBEDDED_PLAYWRIGHT=0.`);
   if (embeddedToolsError) throw new Error(`Unknown tool: ${name}. Embedded Playwright MCP is unavailable: ${embeddedToolsError}`);
-  const marker = extractRecMarker(argumentsValue);
+  const marker = extractReplayMarker(argumentsValue);
   const cleaned = { ...argumentsValue };
-  delete cleaned.rec_marker;
+  delete cleaned.replay_marker;
   const endpoint = await ensureDrivableBrowser();
   const actionId = `act_${randomUUID()}`;
   const startedAtEpochMs = Date.now();
@@ -231,23 +231,23 @@ async function callBrowserTool(name: string, argumentsValue: JsonObject): Promis
   const outcome = await postAction({ actionId, tool: name, cleaned, startedAtEpochMs, ok: result.isError !== true, marker });
   if (marker && outcome.warning) {
     const content = Array.isArray(result.content) ? result.content : [];
-    return { ...result, content: [...content, { type: "text", text: `rec_marker was not recorded: ${outcome.warning}` }] };
+    return { ...result, content: [...content, { type: "text", text: `replay_marker was not captured: ${outcome.warning}` }] };
   }
   return result;
 }
 
-/** Mirror the launcher's rendezvous: reuse an attached browser, else ensure Rec's managed Chrome. */
+/** Mirror the launcher's rendezvous: reuse an attached browser, else ensure Replay's managed Chrome. */
 async function ensureDrivableBrowser(): Promise<string> {
   const health = await ensureDaemon();
   const attached = optionalString(health.cdp_endpoint as Json);
   if (attached) return attached;
   const ensured = object(await api("POST", "/api/browser/ensure", {}));
-  return requiredString(ensured.cdp_endpoint as Json, "Rec browser CDP endpoint");
+  return requiredString(ensured.cdp_endpoint as Json, "Replay browser CDP endpoint");
 }
 
 /**
  * Report the action (and its optional atomic marker) to the daemon. This must
- * never fail the browser action itself: a daemon hiccup or an idle recorder
+ * never fail the browser action itself: a daemon hiccup or an idle capture
  * degrades to a warning on the tool result, not a failed drive.
  */
 async function postAction(input: { actionId: string; tool: string; cleaned: JsonObject; startedAtEpochMs: number; ok: boolean; marker?: JsonObject }): Promise<{ warning?: string }> {
@@ -261,19 +261,19 @@ async function postAction(input: { actionId: string; tool: string; cleaned: Json
       ok: input.ok,
       ...(input.marker ? { marker: input.marker } : {}),
     }, false));
-    if (input.marker && result.recorded !== true) return { warning: "no recording is active. Call recording_start first." };
+    if (input.marker && result.captured !== true) return { warning: "no replay is active. Call capture_start first." };
     return {};
   } catch (error) {
     return { warning: messageOf(error) };
   }
 }
 
-function extractRecMarker(argumentsValue: JsonObject): JsonObject | undefined {
-  const raw = argumentsValue.rec_marker;
+function extractReplayMarker(argumentsValue: JsonObject): JsonObject | undefined {
+  const raw = argumentsValue.replay_marker;
   if (raw === undefined) return undefined;
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new Error("rec_marker must be an object with a label.");
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new Error("replay_marker must be an object with a label.");
   const marker = raw as JsonObject;
-  const label = requiredString(marker.label, "rec_marker label");
+  const label = requiredString(marker.label, "replay_marker label");
   const color = optionalColor(marker.color);
   return { label, ...(optionalString(marker.note) ? { note: optionalString(marker.note) } : {}), ...(color ? { color } : {}) };
 }
@@ -284,18 +284,18 @@ function summarizeArguments(argumentsValue: JsonObject) {
   return rendered.length > 300 ? `${rendered.slice(0, 297)}...` : rendered;
 }
 
-async function startRecording(argumentsValue: JsonObject) {
+async function startCapture(argumentsValue: JsonObject) {
   const health = await ensureDaemon();
   if (!health.cdp_endpoint) {
-    throw new Error("No browser is attached. Call recording_browser_ensure, configure Playwright MCP with its cdpEndpoint, navigate to the target page, then call recording_start.");
+    throw new Error("No browser is attached. Call capture_browser_ensure, configure Playwright MCP with its cdpEndpoint, navigate to the target page, then call capture_start.");
   }
   const result = object(await api("POST", "/api/sessions/start", {
     title: optionalString(argumentsValue.title),
     origins: optionalStringArray(argumentsValue.origins),
-    recordCanvas: optionalBoolean(argumentsValue.recordCanvas),
+    captureCanvas: optionalBoolean(argumentsValue.captureCanvas),
   }));
-  const sessionId = requiredString(result.sessionId, "Recorder session ID");
-  const status = await recordingStatus();
+  const sessionId = requiredString(result.sessionId, "Capture session ID");
+  const status = await captureStatus();
   return { ...result, cdpEndpoint: status.cdpEndpoint, state: status.state, replayUrl: replayUrl(sessionId) };
 }
 
@@ -333,13 +333,13 @@ async function addMarker(argumentsValue: JsonObject) {
   return { ok: true, label, placement, ...(color ? { color } : {}) };
 }
 
-async function recordingStatus() {
+async function captureStatus() {
   const health = object(await api("GET", "/health"));
-  const recording = health.state === "recording";
+  const replay = health.state === "capture";
   const hasBrowser = typeof health.cdp_endpoint === "string";
   const navigatedPageCount = numberOrZero(health.navigated_page_count);
   return {
-    state: recording ? "recording" : hasBrowser ? navigatedPageCount > 0 ? "page_ready" : "browser_ready" : "browser_unavailable",
+    state: replay ? "replay" : hasBrowser ? navigatedPageCount > 0 ? "page_ready" : "browser_ready" : "browser_unavailable",
     cdpEndpoint: health.cdp_endpoint,
     managedBrowser: health.managed_browser === true,
     pageCount: numberOrZero(health.page_count),
@@ -351,7 +351,7 @@ async function recordingStatus() {
     configWarnings: health.config_warnings,
     configError: health.config_error,
     viewport: health.viewport,
-    recording: recording ? {
+    replay: replay ? {
       sessionId: health.sessionId,
       elapsedMs: health.elapsedMs,
       segmentCount: numberOrZero(health.segmentCount),
@@ -361,17 +361,17 @@ async function recordingStatus() {
   };
 }
 
-async function stopRecording(argumentsValue: JsonObject) {
+async function stopCapture(argumentsValue: JsonObject) {
   const result = object(await api("POST", "/api/sessions/stop", {
     outcome: optionalOutcome(argumentsValue.outcome),
     notes: optionalString(argumentsValue.notes),
   }));
-  const sessionId = requiredString(result.sessionId, "Recorder session ID");
+  const sessionId = requiredString(result.sessionId, "Capture session ID");
   // Older already-running daemons predate portable_bundle. Export in the MCP as
   // a compatibility fallback so an updated MCP can still publish their session.
   const portableArtifactPath = optionalString(result.portable_bundle) ?? (await exportSession(sessionId)).path;
   // Stopping only saves and previews locally. Sharing is an explicit follow-up
-  // through recording_share or the player's Share button.
+  // through replay_share or the player's Share button.
   return {
     ...result,
     ...(portableArtifactPath ? { portableArtifactPath } : {}),
@@ -380,25 +380,25 @@ async function stopRecording(argumentsValue: JsonObject) {
   };
 }
 
-async function shareRecording(argumentsValue: JsonObject) {
-  const sessionId = requiredString(argumentsValue.sessionId, "Recorder session ID");
+async function shareReplay(argumentsValue: JsonObject) {
+  const sessionId = requiredString(argumentsValue.sessionId, "Capture session ID");
   const shareEndpoint = configuredShareEndpoint();
-  if (!shareEndpoint) throw new Error("REC_SHARE_URL is not configured for this Rec MCP server.");
-  const home = process.env.REC_HOME ?? join(process.env.HOME ?? process.cwd(), ".rec");
-  const artifact = join(home, "exports", `${sessionId}.rec`);
-  if (!existsSync(artifact)) throw new Error(`Portable artifact ${artifact} was not found. Call recording_stop before recording_share.`);
-  const { shareUrl } = await uploadRecording(shareEndpoint, artifact);
+  if (!shareEndpoint) throw new Error("REPLAY_SHARE_URL is not configured for this Replay MCP server.");
+  const home = process.env.REPLAY_HOME ?? join(process.env.HOME ?? process.cwd(), ".replay");
+  const artifact = join(home, "exports", `${sessionId}.replay`);
+  if (!existsSync(artifact)) throw new Error(`Portable artifact ${artifact} was not found. Call capture_stop before replay_share.`);
+  const { shareUrl } = await uploadReplay(shareEndpoint, artifact);
   return { sessionId, shareUrl };
 }
 
-function configuredShareEndpoint() { return process.env.REC_SHARE_URL?.replace(/\/$/, "") || undefined; }
+function configuredShareEndpoint() { return process.env.REPLAY_SHARE_URL?.replace(/\/$/, "") || undefined; }
 
 async function ensureDaemon(): Promise<JsonObject> {
   const running = await probeDaemon();
   if (running.health) return running.health;
   if (running.listening) throw new Error(portConflict());
-  if (!existsSync(daemonEntry)) throw new Error("rec is not built. Run pnpm build before starting the MCP server.");
-  const child = spawn(process.execPath, [daemonEntry], { detached: true, stdio: "ignore", cwd: resolve(moduleDirectory, "../../.."), env: { ...process.env, REC_CONFIG_CWD: process.cwd() } });
+  if (!existsSync(daemonEntry)) throw new Error("replay is not built. Run pnpm build before starting the MCP server.");
+  const child = spawn(process.execPath, [daemonEntry], { detached: true, stdio: "ignore", cwd: resolve(moduleDirectory, "../../.."), env: { ...process.env, REPLAY_CONFIG_CWD: process.cwd() } });
   child.unref();
   let daemonGone = false;
   child.once("exit", () => { daemonGone = true; });
@@ -410,16 +410,16 @@ async function ensureDaemon(): Promise<JsonObject> {
     if (probe.listening) throw new Error(portConflict());
     // A daemon that lost a startup race leaves the winner answering health
     // above; an exit with nothing listening means the daemon itself failed.
-    if (daemonGone) throw new Error(`The rec daemon exited during startup. Run \`node ${daemonEntry}\` to see why.`);
+    if (daemonGone) throw new Error(`The replay daemon exited during startup. Run \`node ${daemonEntry}\` to see why.`);
   }
-  throw new Error(`The rec daemon did not respond at ${endpoint} within 2.5s of spawning.`);
+  throw new Error(`The replay daemon did not respond at ${endpoint} within 2.5s of spawning.`);
 }
 
 /**
- * A valid /health body is the only proof a rec daemon owns the endpoint.
+ * A valid /health body is the only proof a replay daemon owns the endpoint.
  * Anything else answering there is a foreign process: spawning a daemon behind
  * it would die on the taken port, and treating it as the daemon (the old
- * response.ok check did) would misroute recording calls into it.
+ * response.ok check did) would misroute replay calls into it.
  */
 async function probeDaemon(): Promise<{ health?: JsonObject; listening: boolean }> {
   let response: Response;
@@ -429,7 +429,7 @@ async function probeDaemon(): Promise<{ health?: JsonObject; listening: boolean 
 }
 
 function portConflict() {
-  return `Something that is not a rec daemon is already listening at ${endpoint}. Stop that process or point REC_PORT / REC_DAEMON_URL at a free port.`;
+  return `Something that is not a replay daemon is already listening at ${endpoint}. Stop that process or point REPLAY_PORT / REPLAY_DAEMON_URL at a free port.`;
 }
 
 type DaemonLease = { id: string; renewTimer: NodeJS.Timeout };
@@ -440,7 +440,7 @@ async function acquireDaemonLease() {
     const response = await fetch(`${endpoint}/api/leases/acquire`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ owner: "rec-mcp", kind: "agent", ttl_ms: 30_000 }),
+      body: JSON.stringify({ owner: "replay-mcp", kind: "agent", ttl_ms: 30_000 }),
     });
     const value = await response.json().catch(() => ({})) as { lease_id?: string };
     if (!response.ok || !value.lease_id) return;

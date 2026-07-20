@@ -7,7 +7,7 @@ import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import type { ServerResponse } from "node:http";
-import { renderSummaryText, sessionPath, stepsInRange, summarizeReplay, type ChatConfig, type RecordingManifest, type ReplaySummary } from "@rec/core";
+import { renderSummaryText, sessionPath, stepsInRange, summarizeReplay, type ChatConfig, type ReplayManifest, type ReplaySummary } from "@replay/core";
 
 /**
  * The replay chat backend. One ChatSession per open player panel, answered by
@@ -48,7 +48,7 @@ type CodexTurn = ActiveTurn & { child: ChildProcess; stallTimer?: NodeJS.Timeout
 
 type ChatSession = {
   id: string;
-  recordingId: string;
+  replayId: string;
   /** Codex CLI thread id, for `codex exec resume`. */
   threadId?: string;
   /** OpenAI Conversations object id. */
@@ -84,18 +84,18 @@ const SAFE_CONTROL = { annotations: { readOnlyHint: false, destructiveHint: fals
 export const CHAT_TOOLS = [
   {
     name: "get_replay_overview",
-    description: "Re-read the recording's distilled action timeline (titles, markers, navigations, clicks, typing, idle gaps) with raw t_ms values.",
+    description: "Re-read the replay's distilled action timeline (titles, markers, navigations, clicks, typing, idle gaps) with raw t_ms values.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     ...SAFE_READ,
   },
   {
     name: "get_steps",
-    description: "List every recorded step between two raw recording times, un-elided. Use when the overview thinned a busy stretch or you need exact detail around a moment.",
+    description: "List every captured step between two raw replay times, un-elided. Use when the overview thinned a busy stretch or you need exact detail around a moment.",
     inputSchema: {
       type: "object",
       properties: {
-        from_ms: { type: "number", description: "Window start in raw recording milliseconds" },
-        to_ms: { type: "number", description: "Window end in raw recording milliseconds" },
+        from_ms: { type: "number", description: "Window start in raw replay milliseconds" },
+        to_ms: { type: "number", description: "Window end in raw replay milliseconds" },
       },
       required: ["from_ms", "to_ms"],
       additionalProperties: false,
@@ -107,18 +107,18 @@ export const CHAT_TOOLS = [
     description: "Read the rendered page as the viewer sees it in the replay: seeks the player (paused) to a time and returns the page URL and visible text. Omit t_ms to read wherever the viewer currently is.",
     inputSchema: {
       type: "object",
-      properties: { t_ms: { type: "number", description: "Raw recording time to inspect; omit for the current playhead" } },
+      properties: { t_ms: { type: "number", description: "Raw replay time to inspect; omit for the current playhead" } },
       additionalProperties: false,
     },
     ...SAFE_READ,
   },
   {
     name: "seek",
-    description: "Move the viewer's playhead to a raw recording time so they see the moment you are describing.",
+    description: "Move the viewer's playhead to a raw replay time so they see the moment you are describing.",
     inputSchema: {
       type: "object",
       properties: {
-        t_ms: { type: "number", description: "Raw recording time to jump to" },
+        t_ms: { type: "number", description: "Raw replay time to jump to" },
         play: { type: "boolean", description: "Resume playback after the jump (default: stay paused)" },
       },
       required: ["t_ms"],
@@ -176,7 +176,7 @@ export class ChatManager {
 
   /** "auto" prefers the OpenAI API when a key is configured, else the Codex CLI. */
   private selectProvider(config: ChatConfig): ProviderSelection {
-    const apiKey = config.api_key || process.env.REC_CHAT_API_KEY || process.env.OPENAI_API_KEY || undefined;
+    const apiKey = config.api_key || process.env.REPLAY_CHAT_API_KEY || process.env.OPENAI_API_KEY || undefined;
     const baseUrl = (process.env.OPENAI_BASE_URL || OPENAI_DEFAULT_BASE_URL).replace(/\/$/, "");
     const provider = config.provider === "auto" ? (apiKey ? "openai" : "codex") : config.provider;
     return { provider, command: config.command, ...(config.model ? { model: config.model } : {}), ...(apiKey ? { apiKey } : {}), baseUrl };
@@ -201,9 +201,9 @@ export class ChatManager {
   }
 
   /** SSE attach; creates the chat on first connect and replays its transcript. */
-  async connect(chatId: string, recordingId: string, response: ServerResponse) {
-    if (!existsSync(sessionPath(recordingId))) throw new Error(`Recording ${recordingId} was not found.`);
-    const chat = this.ensure(chatId, recordingId);
+  async connect(chatId: string, replayId: string, response: ServerResponse) {
+    if (!existsSync(sessionPath(replayId))) throw new Error(`Replay ${replayId} was not found.`);
+    const chat = this.ensure(chatId, replayId);
     const selection = this.selectProvider(await this.config());
     response.writeHead(200, {
       "content-type": "text/event-stream",
@@ -233,7 +233,7 @@ export class ChatManager {
     if (!clean) throw new Error("Message text is required.");
     if (clean.length > 8_000) throw new Error("Message is too long.");
     const config = await this.config();
-    if (!config.enabled) throw new Error("Chat is disabled in the Rec config.");
+    if (!config.enabled) throw new Error("Chat is disabled in the Replay config.");
     const selection = this.selectProvider(config);
     if (selection.provider === "openai" && !selection.apiKey) throw new Error("No OpenAI API key is configured. Set OPENAI_API_KEY or chat.api_key.");
     this.record(chat, { type: "user_message", text: clean });
@@ -293,7 +293,7 @@ export class ChatManager {
       const from = numberArg(args.from_ms, "from_ms");
       const to = numberArg(args.to_ms, "to_ms");
       const steps = stepsInRange(summary, Math.min(from, to), Math.max(from, to));
-      if (!steps.length) return `No recorded steps between ${Math.round(from)}ms and ${Math.round(to)}ms.`;
+      if (!steps.length) return `No captured steps between ${Math.round(from)}ms and ${Math.round(to)}ms.`;
       return steps.map((step) => `- [t_ms=${Math.round(step.t_ms)}] ${step.description}${step.detail && step.kind !== "input" ? ` (${step.detail})` : ""}`).join("\n");
     }
     throw new Error(`Unknown tool ${name}`);
@@ -317,13 +317,13 @@ export class ChatManager {
     this.chats.clear();
   }
 
-  private ensure(chatId: string, recordingId: string) {
+  private ensure(chatId: string, replayId: string) {
     if (!/^[A-Za-z0-9_-]{8,64}$/.test(chatId)) throw new Error("Chat id must be 8-64 url-safe characters.");
     let chat = this.chats.get(chatId);
-    if (chat && chat.recordingId !== recordingId) throw new Error("Chat id is already bound to another recording.");
+    if (chat && chat.replayId !== replayId) throw new Error("Chat id is already bound to another replay.");
     if (!chat) {
       this.evictStale();
-      chat = { id: chatId, recordingId, clients: new Set(), pendingUiCalls: new Map(), history: [], lastSeenAt: Date.now() };
+      chat = { id: chatId, replayId, clients: new Set(), pendingUiCalls: new Map(), history: [], lastSeenAt: Date.now() };
       this.chats.set(chatId, chat);
     }
     return chat;
@@ -356,7 +356,7 @@ export class ChatManager {
   private async assistantPreamble(chat: ChatSession) {
     const summary = await this.summaryFor(chat);
     return [
-      "You are Rec's replay assistant, embedded in the player for a finished browser-session recording. The viewer is watching the replay next to this chat. Help them understand what happened: answer questions, explain failures, and point at moments.",
+      "You are Replay's replay assistant, embedded in the player for a finished browser-session replay. The viewer is watching the replay next to this chat. Help them understand what happened: answer questions, explain failures, and point at moments.",
       "",
       "You have tools to inspect and control the player:",
       "- get_screen reads the rendered page text at any time (the most reliable way to know what was on screen).",
@@ -365,8 +365,8 @@ export class ChatManager {
       "",
       "Rules:",
       "- The timeline lists times as [m:ss] with exact t_ms values; pass t_ms numbers to tools and write m:ss in prose.",
-      "- This is a narrow chat panel: keep answers short, concrete, and grounded in the recording. Never invent steps that are not in the timeline or on screen.",
-      "- The recording is immutable history; you control only the playback.",
+      "- This is a narrow chat panel: keep answers short, concrete, and grounded in the replay. Never invent steps that are not in the timeline or on screen.",
+      "- The replay is immutable history; you control only the playback.",
       "",
       "<replay_context>",
       renderSummaryText(summary),
@@ -376,8 +376,8 @@ export class ChatManager {
 
   private async summaryFor(chat: ChatSession) {
     if (chat.summary) return chat.summary;
-    const root = sessionPath(chat.recordingId);
-    const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as RecordingManifest;
+    const root = sessionPath(chat.replayId);
+    const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as ReplayManifest;
     const eventsBySegment = new Map<string, unknown[]>();
     for (const segment of manifest.segments) {
       const events: unknown[] = [];
@@ -422,9 +422,9 @@ export class ChatManager {
       "--skip-git-repo-check",
       "--ignore-user-config",
       "-c", `sandbox_mode="read-only"`,
-      "-c", `mcp_servers.rec_replay.command=${JSON.stringify(process.execPath)}`,
-      "-c", `mcp_servers.rec_replay.args=[${JSON.stringify(bridge)}, "--url", ${JSON.stringify(`http://127.0.0.1:${this.port}`)}, "--chat", ${JSON.stringify(chat.id)}]`,
-      ...(chat.threadId ? [] : ["-C", sessionPath(chat.recordingId), ...(selection.model ? ["-m", selection.model] : [])]),
+      "-c", `mcp_servers.replay_replay.command=${JSON.stringify(process.execPath)}`,
+      "-c", `mcp_servers.replay_replay.args=[${JSON.stringify(bridge)}, "--url", ${JSON.stringify(`http://127.0.0.1:${this.port}`)}, "--chat", ${JSON.stringify(chat.id)}]`,
+      ...(chat.threadId ? [] : ["-C", sessionPath(chat.replayId), ...(selection.model ? ["-m", selection.model] : [])]),
       prompt,
     ];
     let child: ChildProcess;
@@ -473,7 +473,7 @@ export class ChatManager {
       const error = event.error as { message?: string } | undefined;
       turn.stderr = error?.message ?? turn.stderr;
     }
-    // Activities are recorded on completion only — one chip per action; the
+    // Activities are captured on completion only — one chip per action; the
     // panel's thinking indicator already covers "in progress".
     if (type !== "item.completed") return;
     const item = event.item as { type?: string; text?: string; command?: string; server?: string; tool?: string; query?: string; status?: string } | undefined;

@@ -1,5 +1,5 @@
 /**
- * Synthetic cursor presentation for recordings without pointer coordinates:
+ * Synthetic cursor presentation for replays without pointer coordinates:
  * placing and revealing rrweb's cursor element, and the click ripple drawn at
  * each interaction point.
  */
@@ -36,7 +36,7 @@ export function makeCursorPlacer(replayer: Replayer) {
     mouse.style.left = `${x}px`;
     mouse.style.top = `${y}px`;
     placed = true;
-    replayer.wrapper.classList.add("rec-cursor-live");
+    replayer.wrapper.classList.add("replay-cursor-live");
   };
 }
 
@@ -45,13 +45,13 @@ export function revealCursorOnFirstMove(replayer: Replayer, lifetime: AbortContr
   if (!mouse) return;
   // rrweb parks the cursor at the page origin until the first pointer event
   // positions it. Keep it invisible until it actually lands somewhere real —
-  // recordings whose only "positions" are origin clicks never reveal a cursor
+  // replays whose only "positions" are origin clicks never reveal a cursor
   // stranded in the top-left corner.
   const reveal = new MutationObserver(() => {
     const x = parseFloat(mouse.style.left);
     const y = parseFloat(mouse.style.top);
     if (!isRealPoint(x, y)) return;
-    replayer.wrapper.classList.add("rec-cursor-live");
+    replayer.wrapper.classList.add("replay-cursor-live");
     reveal.disconnect();
   });
   reveal.observe(mouse, { attributes: true, attributeFilter: ["style"] });
@@ -64,7 +64,7 @@ export function spawnClickRipple(replayer: Replayer, interaction: { x?: number; 
   const y = typeof interaction.y === "number" ? interaction.y : parseFloat(mouse?.style.top ?? "");
   if (!isRealPoint(x, y)) return;
   const ripple = document.createElement("span");
-  ripple.className = "rec-click-ripple";
+  ripple.className = "replay-click-ripple";
   ripple.style.left = `${x}px`;
   ripple.style.top = `${y}px`;
   replayer.wrapper.appendChild(ripple);

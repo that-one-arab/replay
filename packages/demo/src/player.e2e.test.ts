@@ -9,7 +9,7 @@ import { chromium, type Browser, type Page } from "playwright-core";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const playerDist = resolve(root, "packages/player/dist");
 const chrome = [
-  process.env.REC_BROWSER_EXECUTABLE,
+  process.env.REPLAY_BROWSER_EXECUTABLE,
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
   "/Applications/Chromium.app/Contents/MacOS/Chromium",
 ].find((path): path is string => Boolean(path && existsSync(path)));
@@ -44,7 +44,7 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
     assert.equal(await page.locator("[data-idle-mode='cut']").evaluate((element) => element.classList.contains("selected")), true);
     await selectIdleMode(page, "fast_forward");
     await page.waitForFunction(() => document.querySelector("[data-idle-mode='fast_forward']")?.classList.contains("selected") === true);
-    assert.equal(await page.locator("[data-idle-range]").first().getAttribute("data-timeline-tooltip"), "Idle time — played at 8× (6.2s recorded)");
+    assert.equal(await page.locator("[data-idle-range]").first().getAttribute("data-timeline-tooltip"), "Idle time — played at 8× (6.2s captured)");
     await selectIdleMode(page, "cut");
     await page.waitForFunction(() => document.querySelector("[data-idle-mode='cut']")?.classList.contains("selected") === true);
 
@@ -115,7 +115,7 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
   }
 });
 
-test("paused seeks show a recorded navigation only inside its transition interval", { skip: !chrome }, async () => {
+test("paused seeks show a captured navigation only inside its transition interval", { skip: !chrome }, async () => {
   const server = createFixtureServer();
   await new Promise<void>((resolveListen, reject) => server.listen(0, "127.0.0.1", () => resolveListen()).on("error", reject));
   const address = server.address();
@@ -141,11 +141,11 @@ test("paused seeks show a recorded navigation only inside its transition interva
 
     await seek(7_000);
     await page.waitForTimeout(75);
-    assert.equal(await page.locator("#refresh-indicator").evaluate((element) => element.classList.contains("is-visible")), false, "seeking outside the recorded navigation interval clears the indicator");
+    assert.equal(await page.locator("#refresh-indicator").evaluate((element) => element.classList.contains("is-visible")), false, "seeking outside the captured navigation interval clears the indicator");
 
     await seek(3_700);
     await waitForRefresh(page, 1_000);
-    assert.equal(await page.locator("#refresh-indicator").evaluate((element) => element.classList.contains("is-visible")), true, "the refresh cue retains its recorded post-ready context for a seekable timeline interval");
+    assert.equal(await page.locator("#refresh-indicator").evaluate((element) => element.classList.contains("is-visible")), true, "the refresh cue retains its captured post-ready context for a seekable timeline interval");
 
     await seek(3_900);
     await page.waitForTimeout(75);
@@ -156,7 +156,7 @@ test("paused seeks show a recorded navigation only inside its transition interva
   }
 });
 
-test("browser replay creates and focuses a new tab at its recorded time", { skip: !chrome }, async () => {
+test("browser replay creates and focuses a new tab at its captured time", { skip: !chrome }, async () => {
   const server = createFixtureServer();
   await new Promise<void>((resolveListen, reject) => server.listen(0, "127.0.0.1", () => resolveListen()).on("error", reject));
   const address = server.address();
@@ -168,7 +168,7 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
     await page.goto(`http://127.0.0.1:${address.port}/replay?id=multi-page`, { waitUntil: "networkidle" });
 
     assert.equal(await page.locator("[data-segment]").count(), 2);
-    assert.equal(await page.locator(".segment-picker").getAttribute("aria-label"), "Recorded browser tabs");
+    assert.equal(await page.locator(".segment-picker").getAttribute("aria-label"), "Captured browser tabs");
     assert.equal(await page.locator(".segment-picker button").count(), 0, "tab state is not manually selectable");
     assert.equal(await page.locator("[data-segment='seg_1']").getAttribute("aria-current"), "page");
     assert.equal(await page.locator("[data-segment='seg_2']").isHidden(), true);
@@ -179,7 +179,7 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
     await page.frameLocator(".replayer-wrapper iframe").getByText("Invite preview").waitFor();
     assert.equal(await page.locator("[data-segment='seg_2']").isHidden(), false);
     assert.equal(await page.locator("[data-segment='seg_2']").getAttribute("aria-current"), "page");
-    // The recorded focus is at 3.3s raw; cut idle compacts it to ~2.2s. This is
+    // The captured focus is at 3.3s raw; cut idle compacts it to ~2.2s. This is
     // read while seg_2 is autoplaying, so it sits on the 2.5s rounding boundary —
     // assert the compacted band rather than one wall-clock-dependent frame. The
     // strict total-time below is the deterministic proof compaction is applied.
@@ -238,7 +238,7 @@ test("browser replay creates and focuses a new tab at its recorded time", { skip
   }
 });
 
-test("browser replay follows recorded focus returns and hides closed tabs", { skip: !chrome }, async () => {
+test("browser replay follows captured focus returns and hides closed tabs", { skip: !chrome }, async () => {
   const server = createFixtureServer();
   await new Promise<void>((resolveListen, reject) => server.listen(0, "127.0.0.1", () => resolveListen()).on("error", reject));
   const address = server.address();
@@ -266,7 +266,7 @@ test("browser replay follows recorded focus returns and hides closed tabs", { sk
 function createFixtureServer() {
   return createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://fixture");
-    if (url.pathname === "/api/sessions/fixture/manifest") return json(response, { id: "fixture", title: "Replay control fixture", raw_duration_ms: 16_000, markers: [{ t_ms: 900, label: "Action begins", note: "The fixture button is activated.", placement: "after_previous" }, { t_ms: 7_900, label: "Page refreshes", note: "The replay rebuilds after the recorded reload.", placement: "after_previous" }, { t_ms: 15_900, label: "Action confirmed", note: "The final fixture interaction is visible.", placement: "after_previous" }], navigation_events: [{ segment_id: "seg_1", kind: "reload", started_at_ms: 7_950, committed_at_ms: 8_000, ready_at_ms: 8_010, from_url: "http://fixture/", to_url: "http://fixture/" }], segments: [{ id: "seg_1", page_url: "http://fixture/", clock_offset_ms: 0 }] });
+    if (url.pathname === "/api/sessions/fixture/manifest") return json(response, { id: "fixture", title: "Replay control fixture", raw_duration_ms: 16_000, markers: [{ t_ms: 900, label: "Action begins", note: "The fixture button is activated.", placement: "after_previous" }, { t_ms: 7_900, label: "Page refreshes", note: "The replay rebuilds after the captured reload.", placement: "after_previous" }, { t_ms: 15_900, label: "Action confirmed", note: "The final fixture interaction is visible.", placement: "after_previous" }], navigation_events: [{ segment_id: "seg_1", kind: "reload", started_at_ms: 7_950, committed_at_ms: 8_000, ready_at_ms: 8_010, from_url: "http://fixture/", to_url: "http://fixture/" }], segments: [{ id: "seg_1", page_url: "http://fixture/", clock_offset_ms: 0 }] });
     if (url.pathname === "/api/sessions/navigation-window/manifest") return json(response, { id: "navigation-window", title: "Navigation interval fixture", raw_duration_ms: 16_000, markers: [], navigation_events: [{ segment_id: "seg_1", kind: "reload", started_at_ms: 3_000, committed_at_ms: 3_050, ready_at_ms: 3_100, from_url: "http://fixture/", to_url: "http://fixture/" }], segments: [{ id: "seg_1", page_url: "http://fixture/", clock_offset_ms: 0 }] });
     if (url.pathname === "/api/sessions/multi-page/manifest") return json(response, { id: "multi-page", title: "Multi-page fixture", raw_duration_ms: 6_500, markers: [], tab_events: [{ type: "opened", segment_id: "seg_1", t_ms: 0 }, { type: "focused", segment_id: "seg_1", t_ms: 0 }, { type: "opened", segment_id: "seg_2", t_ms: 3_000 }, { type: "focused", segment_id: "seg_2", t_ms: 3_300 }], segments: [{ id: "seg_1", page_url: "http://fixture/onboarding", clock_offset_ms: 0 }, { id: "seg_2", page_url: "http://fixture/invite-preview", clock_offset_ms: 3_000 }] });
     if (url.pathname === "/api/sessions/focus-cycle/manifest") return json(response, { id: "focus-cycle", title: "Focus lifecycle fixture", raw_duration_ms: 6_500, markers: [], tab_events: [{ type: "opened", segment_id: "seg_1", t_ms: 0 }, { type: "focused", segment_id: "seg_1", t_ms: 0 }, { type: "opened", segment_id: "seg_2", t_ms: 3_000 }, { type: "focused", segment_id: "seg_2", t_ms: 3_300 }, { type: "focused", segment_id: "seg_1", t_ms: 5_000 }, { type: "closed", segment_id: "seg_2", t_ms: 5_600 }], segments: [{ id: "seg_1", page_url: "http://fixture/onboarding", clock_offset_ms: 0 }, { id: "seg_2", page_url: "http://fixture/invite-preview", clock_offset_ms: 3_000 }] });
@@ -311,7 +311,7 @@ async function waitForRefresh(page: Page, timeoutMs: number) {
     if (await indicator.evaluate((element) => element.classList.contains("is-visible"))) return;
     await page.waitForTimeout(25);
   }
-  throw new Error("Replay did not announce the recorded refresh in time.");
+  throw new Error("Replay did not announce the captured refresh in time.");
 }
 async function waitForSelectedTab(page: Page, segmentId: string, timeoutMs: number) {
   const deadline = Date.now() + timeoutMs;
@@ -330,7 +330,7 @@ async function waitForHidden(locator: import("playwright-core").Locator, timeout
   throw new Error("Tab did not close in time.");
 }
 
-const fixtureRecordingStartedAt = 1_700_000_000_000;
+const fixtureCaptureStartedAt = 1_700_000_000_000;
 const fixtureEvents = [
   { type: 4, data: { href: "http://fixture/", width: 800, height: 450 }, timestamp: 0 },
   { type: 2, data: { node: { type: 0, childNodes: [{ type: 1, name: "html", publicId: "", systemId: "", id: 2 }, { type: 2, tagName: "html", attributes: {}, id: 3, childNodes: [{ type: 2, tagName: "head", attributes: {}, id: 4, childNodes: [] }, { type: 2, tagName: "body", attributes: {}, id: 5, childNodes: [{ type: 2, tagName: "button", attributes: { id: "fixture-action" }, id: 6, childNodes: [{ type: 3, textContent: "Continue", id: 7 }] }] }] }], id: 1 }, initialOffset: { left: 0, top: 0 } }, timestamp: 10 },
@@ -342,7 +342,7 @@ const fixtureEvents = [
   { type: 3, data: { source: 1, positions: [{ x: 160, y: 100, id: 6, timeOffset: 0 }] }, timestamp: 16_000 },
   { type: 3, data: { source: 2, type: 2, id: 6, x: 160, y: 100, pointerType: 0 }, timestamp: 16_000 },
   { type: 5, data: { tag: "fixture", payload: { step: "after-idle" } }, timestamp: 16_001 },
-].map((event) => ({ ...event, timestamp: event.timestamp + fixtureRecordingStartedAt }));
+].map((event) => ({ ...event, timestamp: event.timestamp + fixtureCaptureStartedAt }));
 
 function fixtureSnapshot() {
   return { type: 0, childNodes: [{ type: 1, name: "html", publicId: "", systemId: "", id: 2 }, { type: 2, tagName: "html", attributes: {}, id: 3, childNodes: [{ type: 2, tagName: "head", attributes: {}, id: 4, childNodes: [] }, { type: 2, tagName: "body", attributes: {}, id: 5, childNodes: [{ type: 2, tagName: "button", attributes: { id: "fixture-action" }, id: 6, childNodes: [{ type: 3, textContent: "Continue", id: 7 }] }] }] }], id: 1 };
@@ -352,21 +352,21 @@ const inviteEvents = [
   { type: 4, data: { href: "http://fixture/invite-preview", width: 800, height: 450 }, timestamp: 3_000 },
   { type: 2, data: { node: { type: 0, childNodes: [{ type: 1, name: "html", publicId: "", systemId: "", id: 2 }, { type: 2, tagName: "html", attributes: {}, id: 3, childNodes: [{ type: 2, tagName: "head", attributes: {}, id: 4, childNodes: [] }, { type: 2, tagName: "body", attributes: {}, id: 5, childNodes: [{ type: 2, tagName: "h1", attributes: {}, id: 6, childNodes: [{ type: 3, textContent: "Invite preview", id: 7 }] }] }] }], id: 1 }, initialOffset: { left: 0, top: 0 } }, timestamp: 3_010 },
   { type: 5, data: { tag: "fixture", payload: { step: "popup-opened" } }, timestamp: 6_000 },
-].map((event) => ({ ...event, timestamp: event.timestamp + fixtureRecordingStartedAt }));
+].map((event) => ({ ...event, timestamp: event.timestamp + fixtureCaptureStartedAt }));
 
 const onboardingEvents = [
   fixtureEvents[0],
   fixtureEvents[1],
-  { type: 5, data: { tag: "fixture", payload: { step: "onboarding-complete" } }, timestamp: fixtureRecordingStartedAt + 2_000 },
+  { type: 5, data: { tag: "fixture", payload: { step: "onboarding-complete" } }, timestamp: fixtureCaptureStartedAt + 2_000 },
 ];
 
 const focusCycleOnboardingEvents = [
   fixtureEvents[0],
   fixtureEvents[1],
-  { type: 5, data: { tag: "fixture", payload: { step: "returned-to-main-tab" } }, timestamp: fixtureRecordingStartedAt + 6_000 },
+  { type: 5, data: { tag: "fixture", payload: { step: "returned-to-main-tab" } }, timestamp: fixtureCaptureStartedAt + 6_000 },
 ];
 const focusCycleInviteEvents = [
   inviteEvents[0],
   inviteEvents[1],
-  { type: 5, data: { tag: "fixture", payload: { step: "background-tab-closed" } }, timestamp: fixtureRecordingStartedAt + 6_000 },
+  { type: 5, data: { tag: "fixture", payload: { step: "background-tab-closed" } }, timestamp: fixtureCaptureStartedAt + 6_000 },
 ];

@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
-// Pinned port/host so Rec recordings always target a stable origin.
+// Pinned port/host so replays always target a stable origin.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {

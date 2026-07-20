@@ -16,7 +16,7 @@ import test from "node:test";
 
 const BASE = 1_700_000_000_000;
 
-async function seedRecording(home: string, id: string) {
+async function seedReplay(home: string, id: string) {
   const root = join(home, "sessions", id);
   await mkdir(join(root, "events"), { recursive: true });
   const events = [
@@ -30,7 +30,7 @@ async function seedRecording(home: string, id: string) {
     id,
     title: "Chat fixture",
     created_at: new Date(BASE).toISOString(),
-    recorder: { version: "0", rrweb: "0", record_canvas: false, record_cross_origin_iframes: false },
+    capture: { version: "0", rrweb: "0", capture_canvas: false, capture_cross_origin_iframes: false },
     origins: [],
     masking: { mask_all_inputs: false, passwords: true },
     segments: [{ id: "seg-1", page_url: "http://127.0.0.1:4173/", clock_offset_ms: 0, chunks: ["events/seg-1-0000.jsonl.gz"] }],
@@ -63,11 +63,11 @@ process.exit(1);
 async function startDaemon(home: string, port: number, pathPrefix: string, extraEnv: Record<string, string> = {}) {
   // The host machine may carry an OPENAI_API_KEY; strip it so "auto" provider
   // selection inside these fixtures stays deterministic.
-  const env: NodeJS.ProcessEnv = { ...process.env, REC_HOME: home, REC_PORT: String(port), PATH: `${pathPrefix}:${process.env.PATH ?? ""}` };
+  const env: NodeJS.ProcessEnv = { ...process.env, REPLAY_HOME: home, REPLAY_PORT: String(port), PATH: `${pathPrefix}:${process.env.PATH ?? ""}` };
   delete env.OPENAI_API_KEY;
-  delete env.REC_CHAT_API_KEY;
+  delete env.REPLAY_CHAT_API_KEY;
   delete env.OPENAI_BASE_URL;
-  delete env.REC_CHAT_PROVIDER;
+  delete env.REPLAY_CHAT_PROVIDER;
   Object.assign(env, extraEnv);
   const daemon = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], { env, stdio: "ignore" });
   await waitForHealth(`http://127.0.0.1:${port}`);
@@ -75,11 +75,11 @@ async function startDaemon(home: string, port: number, pathPrefix: string, extra
 }
 
 test("chat turns stream over SSE, resume the provider thread, and expose tools", async () => {
-  const home = await mkdtemp(join(tmpdir(), "rec-chat-"));
+  const home = await mkdtemp(join(tmpdir(), "replay-chat-"));
   const bin = join(home, "bin");
   await mkdir(bin, { recursive: true });
   await fakeCodex(bin, "echo");
-  await seedRecording(home, "rec_fixture");
+  await seedReplay(home, "replay_fixture");
   const port = await unusedPort();
   const endpoint = `http://127.0.0.1:${port}`;
   const daemon = await startDaemon(home, port, bin);
@@ -95,7 +95,7 @@ test("chat turns stream over SSE, resume the provider thread, and expose tools",
     assert.ok(Array.isArray(tools.body) && tools.body.some((tool: { name?: string }) => tool.name === "seek"));
 
     const chatId = "chat-test-0001";
-    const stream = await startStream(endpoint, chatId, "rec_fixture");
+    const stream = await startStream(endpoint, chatId, "replay_fixture");
     const first = await request(endpoint, "POST", "/api/chat/message", { chat_id: chatId, text: "What happened here?" });
     assert.equal(first.status, 202, JSON.stringify(first.body));
     await stream.waitFor((events) => events.some((event) => event.event === "turn" && event.data.status === "completed"));
@@ -127,7 +127,7 @@ test("chat turns stream over SSE, resume the provider thread, and expose tools",
     assert.equal(seek.body.result, "Playhead moved");
 
     // Reconnecting replays the transcript.
-    const replayStream = await startStream(endpoint, chatId, "rec_fixture");
+    const replayStream = await startStream(endpoint, chatId, "replay_fixture");
     await replayStream.waitFor((events) => events.some((event) => event.event === "history"));
     const history = replayStream.events.find((event) => event.event === "history")!;
     assert.ok((history.data.events as { type: string }[]).some((item) => item.type === "user_message"));
@@ -140,17 +140,17 @@ test("chat turns stream over SSE, resume the provider thread, and expose tools",
 });
 
 test("editing a message drops later turns and rebuilds the conversation", async () => {
-  const home = await mkdtemp(join(tmpdir(), "rec-chat-edit-"));
+  const home = await mkdtemp(join(tmpdir(), "replay-chat-edit-"));
   const bin = join(home, "bin");
   await mkdir(bin, { recursive: true });
   await fakeCodex(bin, "echo");
-  await seedRecording(home, "rec_fixture");
+  await seedReplay(home, "replay_fixture");
   const port = await unusedPort();
   const endpoint = `http://127.0.0.1:${port}`;
   const daemon = await startDaemon(home, port, bin);
   try {
     const chatId = "chat-edit-0001";
-    const stream = await startStream(endpoint, chatId, "rec_fixture");
+    const stream = await startStream(endpoint, chatId, "replay_fixture");
     await request(endpoint, "POST", "/api/chat/message", { chat_id: chatId, text: "alpha question" });
     await stream.waitFor((events) => events.filter((event) => event.event === "turn" && event.data.status === "completed").length >= 1);
     await request(endpoint, "POST", "/api/chat/message", { chat_id: chatId, text: "bravo question" });
@@ -158,7 +158,7 @@ test("editing a message drops later turns and rebuilds the conversation", async 
     assert.ok(String(stream.events.filter((event) => event.event === "message").at(-1)?.data.text).startsWith("resumed:"), "the second turn resumed the thread");
 
     // Locate the second user message in the ordered transcript.
-    const peek = await startStream(endpoint, chatId, "rec_fixture");
+    const peek = await startStream(endpoint, chatId, "replay_fixture");
     await peek.waitFor((events) => events.some((event) => event.event === "history"));
     const before = peek.events.find((event) => event.event === "history")!.data.events as { type: string; text?: string }[];
     peek.close();
@@ -174,7 +174,7 @@ test("editing a message drops later turns and rebuilds the conversation", async 
     assert.match(String(rebuilt?.data.text), /charlie question/);
 
     // Reconnecting shows the transcript truncated: the replaced turn is gone.
-    const after = await startStream(endpoint, chatId, "rec_fixture");
+    const after = await startStream(endpoint, chatId, "replay_fixture");
     await after.waitFor((events) => events.some((event) => event.event === "history"));
     const events = after.events.find((event) => event.event === "history")!.data.events as { type: string; text?: string }[];
     after.close();
@@ -193,17 +193,17 @@ test("editing a message drops later turns and rebuilds the conversation", async 
 });
 
 test("chat surfaces provider failures and honors disabled config", async () => {
-  const home = await mkdtemp(join(tmpdir(), "rec-chat-fail-"));
+  const home = await mkdtemp(join(tmpdir(), "replay-chat-fail-"));
   const bin = join(home, "bin");
   await mkdir(bin, { recursive: true });
   await fakeCodex(bin, "unauthenticated");
-  await seedRecording(home, "rec_fixture");
+  await seedReplay(home, "replay_fixture");
   const port = await unusedPort();
   const endpoint = `http://127.0.0.1:${port}`;
   const daemon = await startDaemon(home, port, bin);
   try {
     const chatId = "chat-test-0002";
-    const stream = await startStream(endpoint, chatId, "rec_fixture");
+    const stream = await startStream(endpoint, chatId, "replay_fixture");
     await request(endpoint, "POST", "/api/chat/message", { chat_id: chatId, text: "hello" });
     await stream.waitFor((events) => events.some((event) => event.event === "turn" && event.data.status === "failed"));
     const failed = stream.events.find((event) => event.event === "turn" && event.data.status === "failed")!;
@@ -211,7 +211,7 @@ test("chat surfaces provider failures and honors disabled config", async () => {
     assert.match(String(failed.data.error), /codex login/);
     stream.close();
 
-    const missing = await request(endpoint, "GET", "/api/chat/stream?chat=chat-test-0003&session=rec_missing");
+    const missing = await request(endpoint, "GET", "/api/chat/stream?chat=chat-test-0003&session=replay_missing");
     assert.equal(missing.status, 500);
 
     const badChat = await request(endpoint, "POST", "/api/chat/message", { chat_id: "never-connected", text: "hi" });
@@ -224,13 +224,13 @@ test("chat surfaces provider failures and honors disabled config", async () => {
 });
 
 test("openai provider streams deltas, resolves tool calls, and reuses one conversation", async () => {
-  const home = await mkdtemp(join(tmpdir(), "rec-chat-openai-"));
-  await seedRecording(home, "rec_fixture");
+  const home = await mkdtemp(join(tmpdir(), "replay-chat-openai-"));
+  await seedReplay(home, "replay_fixture");
   const fake = await startFakeOpenAi();
   const port = await unusedPort();
   const endpoint = `http://127.0.0.1:${port}`;
   const daemon = await startDaemon(home, port, join(home, "bin-none"), {
-    REC_CHAT_PROVIDER: "openai",
+    REPLAY_CHAT_PROVIDER: "openai",
     OPENAI_API_KEY: "sk-test",
     OPENAI_BASE_URL: fake.url,
   });
@@ -240,7 +240,7 @@ test("openai provider streams deltas, resolves tool calls, and reuses one conver
     assert.equal(availability.body.provider, "openai");
 
     const chatId = "chat-openai-0001";
-    const stream = await startStream(endpoint, chatId, "rec_fixture");
+    const stream = await startStream(endpoint, chatId, "replay_fixture");
     await request(endpoint, "POST", "/api/chat/message", { chat_id: chatId, text: "What happened?" });
     await stream.waitFor((events) => events.some((event) => event.event === "turn" && event.data.status === "completed"));
     const deltas = stream.events.filter((event) => event.event === "message_delta").map((event) => event.data.text).join("");
@@ -270,19 +270,19 @@ test("openai provider streams deltas, resolves tool calls, and reuses one conver
 });
 
 test("openai provider maps a rejected key to an unauthenticated failure", async () => {
-  const home = await mkdtemp(join(tmpdir(), "rec-chat-openai-401-"));
-  await seedRecording(home, "rec_fixture");
+  const home = await mkdtemp(join(tmpdir(), "replay-chat-openai-401-"));
+  await seedReplay(home, "replay_fixture");
   const fake = await startFakeOpenAi({ reject: true });
   const port = await unusedPort();
   const endpoint = `http://127.0.0.1:${port}`;
   const daemon = await startDaemon(home, port, join(home, "bin-none"), {
-    REC_CHAT_PROVIDER: "openai",
+    REPLAY_CHAT_PROVIDER: "openai",
     OPENAI_API_KEY: "sk-bad",
     OPENAI_BASE_URL: fake.url,
   });
   try {
     const chatId = "chat-openai-0002";
-    const stream = await startStream(endpoint, chatId, "rec_fixture");
+    const stream = await startStream(endpoint, chatId, "replay_fixture");
     await request(endpoint, "POST", "/api/chat/message", { chat_id: chatId, text: "hello" });
     await stream.waitFor((events) => events.some((event) => event.event === "turn" && event.data.status === "failed"));
     const failed = stream.events.find((event) => event.event === "turn" && event.data.status === "failed")!;
@@ -292,7 +292,7 @@ test("openai provider maps a rejected key to an unauthenticated failure", async 
 
     // Without any key, an explicit openai provider reports why it is unavailable.
     const keylessPort = await unusedPort();
-    const keyless = await startDaemon(home, keylessPort, join(home, "bin-none"), { REC_CHAT_PROVIDER: "openai" });
+    const keyless = await startDaemon(home, keylessPort, join(home, "bin-none"), { REPLAY_CHAT_PROVIDER: "openai" });
     const keylessAvailability = await request(`http://127.0.0.1:${keylessPort}`, "GET", "/api/chat/availability");
     assert.equal(keylessAvailability.body.available, false);
     assert.equal(keylessAvailability.body.reason, "missing_api_key");
@@ -362,7 +362,7 @@ async function startFakeOpenAi(options: { reject?: boolean } = {}) {
 }
 
 test("chat availability reflects a disabled config and a missing provider", async () => {
-  const home = await mkdtemp(join(tmpdir(), "rec-chat-config-"));
+  const home = await mkdtemp(join(tmpdir(), "replay-chat-config-"));
   await mkdir(home, { recursive: true });
   await writeFile(join(home, "config.toml"), `[chat]\nenabled = false\n`);
   const port = await unusedPort();

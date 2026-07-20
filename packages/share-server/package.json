@@ -1,5 +1,5 @@
 {
-  "name": "@rec/share-server",
+  "name": "@replay/share-server",
   "version": "0.2.2",
   "private": true,
   "type": "module",

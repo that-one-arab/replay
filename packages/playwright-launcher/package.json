@@ -1,5 +1,5 @@
 {
-  "name": "@rec/playwright-launcher",
+  "name": "@replay/playwright-launcher",
   "version": "0.2.2",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     "dist"
   ],
   "bin": {
-    "rec-playwright-launcher": "./dist/main.js"
+    "replay-playwright-launcher": "./dist/main.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

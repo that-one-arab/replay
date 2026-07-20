@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "replay": {
+      "command": "node",
+      "args": [
+        "./scripts/replay-bootstrap.mjs",
+        "replay-mcp"
+      ],
+      "cwd": ".",
+      "env": {
+        "REPLAY_RELEASE_URL": "https://stitch-production-2492.up.railway.app/v1/releases",
+        "REPLAY_RUNTIME_VERSION": "0.2.2",
+        "REPLAY_SHARE_URL": "https://stitch-production-2492.up.railway.app"
+      }
+    }
+  }
+}

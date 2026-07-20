@@ -4,8 +4,8 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { gzipSync, gunzipSync } from "node:zlib";
-import { recHome, sessionPath, sessionsDir } from "./storage.js";
-import type { RecordingManifest } from "./types.js";
+import { replayHome, sessionPath, sessionsDir } from "./storage.js";
+import type { ReplayManifest } from "./types.js";
 
 export const PORTABLE_BUNDLE_VERSION = 1;
 
@@ -17,10 +17,10 @@ interface BundleFile {
 }
 
 interface PortableBundle {
-  kind: "rec-portable-bundle";
+  kind: "replay-portable-bundle";
   format_version: number;
   exported_at: string;
-  manifest: RecordingManifest;
+  manifest: ReplayManifest;
   manifest_sha256: string;
   files: BundleFile[];
 }
@@ -38,14 +38,14 @@ export interface ImportResult {
   fileCount: number;
 }
 
-/** Default handoff location for a self-contained portable recording. */
+/** Default handoff location for a self-contained portable replay. */
 export function exportPath(sessionId: string) {
-  return join(recHome(), "exports", `${sessionId}.rec`);
+  return join(replayHome(), "exports", `${sessionId}.replay`);
 }
 
 /**
  * Write a compressed, versioned portable bundle. The session remains untouched;
- * the resulting .rec file can be moved to another machine and imported there.
+ * the resulting .replay file can be moved to another machine and imported there.
  */
 export async function exportSession(sessionId: string, output = exportPath(sessionId)): Promise<ExportResult> {
   const root = sessionPath(sessionId);
@@ -58,7 +58,7 @@ export async function exportSession(sessionId: string, output = exportPath(sessi
     return { path, bytes: data.byteLength, sha256: digest(data), data: data.toString("base64") };
   }));
   const bundle: PortableBundle = {
-    kind: "rec-portable-bundle",
+    kind: "replay-portable-bundle",
     format_version: PORTABLE_BUNDLE_VERSION,
     exported_at: new Date().toISOString(),
     manifest,
@@ -72,10 +72,10 @@ export async function exportSession(sessionId: string, output = exportPath(sessi
 }
 
 /**
- * Verify then atomically install a portable recording in the local Rec spool.
+ * Verify then atomically install a portable replay in the local Replay spool.
  * Existing IDs are never overwritten: an artifact is either wholly imported or
- * rejected with its source recording left intact. Pass `reuseExisting` when a
- * re-import of the same recording should be a no-op (e.g. re-sharing) rather
+ * rejected with its source replay left intact. Pass `reuseExisting` when a
+ * re-import of the same replay should be a no-op (e.g. re-sharing) rather
  * than an error — the already-installed copy is left untouched and returned.
  */
 export async function importSession(input: string, options: { reuseExisting?: boolean } = {}): Promise<ImportResult> {
@@ -84,7 +84,7 @@ export async function importSession(input: string, options: { reuseExisting?: bo
   const root = sessionPath(bundle.manifest.id);
   if (existsSync(root)) {
     if (options.reuseExisting) return { sessionId: bundle.manifest.id, path: root, fileCount: bundle.files.length };
-    throw new Error(`A recording named ${bundle.manifest.id} already exists locally.`);
+    throw new Error(`A replay named ${bundle.manifest.id} already exists locally.`);
   }
   await mkdir(sessionsDir(), { recursive: true });
   const temporary = await mkdtemp(join(sessionsDir(), ".import-"));
@@ -105,13 +105,13 @@ export async function importSession(input: string, options: { reuseExisting?: bo
 
 async function readBundle(input: string): Promise<PortableBundle> {
   let decoded: Buffer;
-  try { decoded = gunzipSync(await readFile(input)); } catch { throw new Error("Not a valid .rec bundle (expected gzip-compressed Rec data)."); }
-  try { return JSON.parse(decoded.toString("utf8")) as PortableBundle; } catch { throw new Error("Not a valid .rec bundle (invalid JSON payload)."); }
+  try { decoded = gunzipSync(await readFile(input)); } catch { throw new Error("Not a valid .replay bundle (expected gzip-compressed Replay data)."); }
+  try { return JSON.parse(decoded.toString("utf8")) as PortableBundle; } catch { throw new Error("Not a valid .replay bundle (invalid JSON payload)."); }
 }
 
 function validateBundle(bundle: PortableBundle) {
-  if (!bundle || bundle.kind !== "rec-portable-bundle" || bundle.format_version !== PORTABLE_BUNDLE_VERSION) throw new Error("Unsupported Rec bundle version.");
-  if (!validManifest(bundle.manifest)) throw new Error("Portable bundle has an invalid recording manifest.");
+  if (!bundle || bundle.kind !== "replay-portable-bundle" || bundle.format_version !== PORTABLE_BUNDLE_VERSION) throw new Error("Unsupported Replay bundle version.");
+  if (!validManifest(bundle.manifest)) throw new Error("Portable bundle has an invalid replay manifest.");
   if (bundle.manifest_sha256 !== digest(Buffer.from(JSON.stringify(bundle.manifest)))) throw new Error("Portable bundle manifest checksum does not match.");
   if (!Array.isArray(bundle.files)) throw new Error("Portable bundle has no file list.");
   const expected = new Set(referencedPaths(bundle.manifest));
@@ -126,18 +126,18 @@ function validateBundle(bundle: PortableBundle) {
   for (const path of expected) if (!seen.has(path)) throw new Error(`Portable bundle is missing ${path}.`);
 }
 
-function validManifest(manifest: RecordingManifest | undefined): manifest is RecordingManifest {
+function validManifest(manifest: ReplayManifest | undefined): manifest is ReplayManifest {
   return Boolean(manifest && manifest.format_version === 1 && typeof manifest.id === "string" && /^[A-Za-z0-9_-]+$/.test(manifest.id) && Array.isArray(manifest.segments) && Array.isArray(manifest.assets));
 }
 
-function referencedPaths(manifest: RecordingManifest) {
+function referencedPaths(manifest: ReplayManifest) {
   const paths = [...manifest.segments.flatMap((segment) => segment.chunks), ...manifest.assets.map((asset) => asset.path)];
-  if (paths.some((path) => !isSafeBundlePath(path))) throw new Error("Recording manifest references an unsafe bundle path.");
+  if (paths.some((path) => !isSafeBundlePath(path))) throw new Error("Replay manifest references an unsafe bundle path.");
   return [...new Set(paths)].sort();
 }
 
 async function readManifest(root: string) {
-  try { return JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as RecordingManifest; } catch { throw new Error(`Could not read recording manifest in ${basename(root)}.`); }
+  try { return JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as ReplayManifest; } catch { throw new Error(`Could not read replay manifest in ${basename(root)}.`); }
 }
 
 async function readBundleFile(root: string, path: string) { return readFile(safeTarget(root, path)); }
@@ -145,6 +145,6 @@ function digest(data: Uint8Array) { return createHash("sha256").update(data).dig
 function isSafeBundlePath(path: string) { return /^(events\/[A-Za-z0-9_-]+-\d{4}\.jsonl\.gz|assets\/[a-f0-9]{64}|markers\.json)$/.test(path); }
 function safeTarget(root: string, relative: string) {
   const target = resolve(root, relative);
-  if (!isSafeBundlePath(relative) || !target.startsWith(`${resolve(root)}/`)) throw new Error(`Unsafe recording path: ${relative}`);
+  if (!isSafeBundlePath(relative) || !target.startsWith(`${resolve(root)}/`)) throw new Error(`Unsafe replay path: ${relative}`);
   return target;
 }

@@ -1,26 +1,26 @@
-# Rec configuration plan
+# Replay configuration plan
 
 ## Status
 
 Implemented. The first configuration release covers the typed TOML loader,
-browser launch settings, replay defaults persisted in recordings, the player’s
+browser launch settings, replay defaults persisted in replays, the player’s
 three idle modes, CLI diagnostics, and agent/launcher integration.
 
 ## Objective
 
-Let a developer configure Rec once and have those preferences apply consistently
+Let a developer configure Replay once and have those preferences apply consistently
 to Codex and other MCP-capable coding agents. Configuration must not require
 agents to repeat browser or replay instructions in each prompt.
 
 Initial settings in scope:
 
-- Launch Rec's managed browser headlessly or headed.
+- Launch Replay's managed browser headlessly or headed.
 - Choose the default replay treatment of inactive time: cut it, fast-forward it,
   or keep it in real time.
 - Configure the retained duration for a cut idle interval, the fast-forward
   multiplier, and the default playback speed.
 
-The configuration system should be Rec-owned, rather than tied to Codex's
+The configuration system should be Replay-owned, rather than tied to Codex's
 configuration format or to one MCP client.
 
 ## Product decisions
@@ -28,21 +28,21 @@ configuration format or to one MCP client.
 | Area | Decision |
 | --- | --- |
 | Canonical format | TOML, because it is readable, comment-friendly, and already familiar to Codex users. |
-| User defaults | `~/.rec/config.toml`. |
-| Project defaults | `<project>/.rec/config.toml`, discovered only from the MCP process working directory. Do not walk ancestor directories. |
-| Explicit config | `REC_CONFIG=/absolute/path/to/config.toml` selects one additional explicit file. |
-| Agent integration | Rec MCP and the Playwright launcher read resolved Rec configuration automatically. Agents do not need to mention options in prompts. |
-| Browser ownership | Browser launch settings are fixed for a running managed browser. Rec never silently relaunches a browser to apply a changed setting. |
-| Replay defaults | Store resolved replay defaults in each recording manifest at `recording_start`, so the intended behavior travels with a future exported artifact. |
+| User defaults | `~/.replay/config.toml`. |
+| Project defaults | `<project>/.replay/config.toml`, discovered only from the MCP process working directory. Do not walk ancestor directories. |
+| Explicit config | `REPLAY_CONFIG=/absolute/path/to/config.toml` selects one additional explicit file. |
+| Agent integration | Replay MCP and the Playwright launcher read resolved Replay configuration automatically. Agents do not need to mention options in prompts. |
+| Browser ownership | Browser launch settings are fixed for a running managed browser. Replay never silently relaunches a browser to apply a changed setting. |
+| Replay defaults | Store resolved replay defaults in each replay manifest at `capture_start`, so the intended behavior travels with a future exported artifact. |
 | UI controls | The player retains user controls. Configuration supplies initial values, not a locked policy. |
 
 ## Configuration model
 
 ```toml
-# ~/.rec/config.toml or <project>/.rec/config.toml
+# ~/.replay/config.toml or <project>/.replay/config.toml
 
 [browser]
-# Show Rec's dedicated Chrome window. Defaults to false for local interactive use.
+# Show Replay's dedicated Chrome window. Defaults to false for local interactive use.
 headless = false
 # Fixed browser viewport used when headless. Defaults: 1280 × 720.
 viewport = "1280x720"
@@ -84,45 +84,45 @@ Resolve individual keys in this order, from highest to lowest priority:
 
 1. An explicit MCP or CLI argument, where that interface intentionally exposes
    the setting.
-2. A corresponding `REC_*` environment variable for automation and debugging.
-3. `REC_CONFIG`, when it names an explicit configuration file.
-4. `<project>/.rec/config.toml`.
-5. `~/.rec/config.toml`.
+2. A corresponding `REPLAY_*` environment variable for automation and debugging.
+3. `REPLAY_CONFIG`, when it names an explicit configuration file.
+4. `<project>/.replay/config.toml`.
+5. `~/.replay/config.toml`.
 6. Built-in defaults.
 
 The exact environment names should be narrow and documented:
 
 ```text
-REC_BROWSER_HEADLESS
-REC_BROWSER_VIEWPORT
-REC_BROWSER_EXECUTABLE
-REC_REPLAY_IDLE_MODE
-REC_REPLAY_IDLE_RETAINED_MS
-REC_REPLAY_IDLE_FAST_FORWARD_SPEED
-REC_REPLAY_DEFAULT_SPEED
+REPLAY_BROWSER_HEADLESS
+REPLAY_BROWSER_VIEWPORT
+REPLAY_BROWSER_EXECUTABLE
+REPLAY_IDLE_MODE
+REPLAY_IDLE_RETAINED_MS
+REPLAY_IDLE_FAST_FORWARD_SPEED
+REPLAY_DEFAULT_SPEED
 ```
 
 Rules:
 
-- Unknown TOML keys generate a warning in `rec doctor` and diagnostics, but do
+- Unknown TOML keys generate a warning in `replay doctor` and diagnostics, but do
   not prevent startup. This makes forward-compatible shared project files safe.
 - Invalid values fail before a browser launches, with the file path and key in
   the error. Do not silently fall back for an invalid selected configuration.
 - Accept only `headless = true|false`; a viewport must be `WIDTHxHEIGHT`; speeds
   and durations must be finite positive numbers; `idle_mode` must be one of the
   documented enum values.
-- Configuration values must never be recorded as sensitive event data. The
+- Configuration values must never be captured as sensitive event data. The
   resolved non-sensitive replay defaults may be persisted in a manifest.
 
 ## Browser launch behavior
 
-Rec's daemon is the sole owner of managed browser launch options.
+Replay's daemon is the sole owner of managed browser launch options.
 
-1. The daemon resolves configuration when `recording_browser_ensure` or the
+1. The daemon resolves configuration when `capture_browser_ensure` or the
    Playwright launcher requests a browser.
 2. It launches Chrome with its normal remote-debugging arguments and, when
    configured, `--headless=new` plus the configured viewport.
-3. It returns the same loopback CDP endpoint to the launcher and Rec MCP.
+3. It returns the same loopback CDP endpoint to the launcher and Replay MCP.
 4. Stock Playwright MCP attaches through that endpoint exactly as it does today.
 
 Headless mode hides the Chrome window; it does not remove the local browser
@@ -130,15 +130,15 @@ process. rrweb capture, semantic cursor playback, markers, tabs, and replay must
 remain identical in both modes.
 
 If a managed browser already exists, compare the requested browser launch
-settings to the settings recorded in `browser.json`:
+settings to the settings captured in `browser.json`:
 
 - If they match, reuse the browser.
-- If they differ and no recording is active, return a status field such as
+- If they differ and no replay is active, return a status field such as
   `browserConfigState: "restart_required"` and actionable guidance to run
-  `rec browser stop` before ensuring again.
-- If a recording is active, return the same state without changing the browser.
+  `replay browser stop` before ensuring again.
+- If a replay is active, return the same state without changing the browser.
 
-Never terminate an external browser attached with `recording_attach_browser`.
+Never terminate an external browser attached with `capture_attach_browser`.
 Its launch options are informationally unavailable and must not be treated as a
 configuration mismatch.
 
@@ -146,9 +146,9 @@ configuration mismatch.
 
 The raw event stream must always retain original timestamps. Idle handling stays
 a player transformation, preserving the ability to seek accurately and to switch
-between modes after recording.
+between modes after capture.
 
-At `recording_start`, add a versioned manifest field, for example:
+At `capture_start`, add a versioned manifest field, for example:
 
 ```json
 {
@@ -165,12 +165,12 @@ Older manifests omit this field and receive today's hard-coded defaults.
 
 On replay load:
 
-1. Read the recording's `replay_defaults`.
+1. Read the replay's `replay_defaults`.
 2. Initialize the timeline transform and speed control from those values.
 3. Let the viewer switch modes or speed for the current viewing session.
 4. Do not mutate the source manifest merely because a viewer changes controls.
 
-This preserves author intent for portable recordings while allowing a reviewer to
+This preserves author intent for portable replays while allowing a reviewer to
 inspect original pacing when needed.
 
 ## Player UX
@@ -192,20 +192,20 @@ or `Idle played at 8×`.
 
 Changing modes must preserve the equivalent raw timeline location and the prior
 play/pause state. It must not unexpectedly pause playback, change the selected
-recorded tab, or lose keyboard controls.
+captured tab, or lose keyboard controls.
 
 ## MCP and CLI surface
 
 Keep agent tool calls minimal.
 
-- `recording_browser_ensure` reads the resolved browser configuration. It may
+- `capture_browser_ensure` reads the resolved browser configuration. It may
   return `headless`, viewport, and `browserConfigState` as diagnostics.
-- `recording_status` exposes the resolved and active browser configuration so an
+- `capture_status` exposes the resolved and active browser configuration so an
   agent can explain a restart-required state.
-- `recording_start` stores resolved replay defaults. It does not need replay
+- `capture_start` stores resolved replay defaults. It does not need replay
   parameters in normal agent prompts.
-- The CLI gains `rec config show` for effective configuration and source paths,
-  and `rec doctor` reports parse errors, shadowed files, and browser restart
+- The CLI gains `replay config show` for effective configuration and source paths,
+  and `replay doctor` reports parse errors, shadowed files, and browser restart
   requirements.
 
 Do not add a broad configuration MCP tool in the first iteration. Configuration
@@ -229,11 +229,11 @@ mid-task.
 - Detect settings mismatches without restarting or taking over external Chrome.
 - Add status/ensure diagnostics and CLI guidance.
 
-### 3. Recording metadata
+### 3. Replay metadata
 
-- Extend the recording manifest type and storage validation with
+- Extend the replay manifest type and storage validation with
   `replay_defaults`.
-- Persist the resolved replay defaults at recording start.
+- Persist the resolved replay defaults at replay start.
 - Maintain read compatibility for old manifests.
 
 ### 4. Player timeline modes
@@ -250,7 +250,7 @@ mid-task.
   `docs/mcp.md`.
 - Explain headless mode as invisible local Chrome, not browserless automation.
 - Add configuration examples for interactive debugging and unattended agent use.
-- Document `rec config show` and restart-required behavior.
+- Document `replay config show` and restart-required behavior.
 
 ## Validation
 
@@ -261,7 +261,7 @@ Run locally; do not add CI as part of this work.
 - Empty environment uses built-in defaults.
 - User config applies when no project config exists.
 - Project config overrides user config only for keys it specifies.
-- `REC_CONFIG`, environment values, and explicit CLI/MCP values each override
+- `REPLAY_CONFIG`, environment values, and explicit CLI/MCP values each override
   lower layers without erasing unrelated keys.
 - Malformed TOML and invalid values fail with a helpful source location.
 
@@ -270,7 +270,7 @@ Run locally; do not add CI as part of this work.
 - Headed and headless managed Chrome both attach successfully over CDP.
 - Stock Playwright MCP drives the same browser in both modes.
 - A changed headless or viewport setting reports restart-required; it never
-  interrupts an active recording.
+  interrupts an active replay.
 - External CDP attachments remain untouched.
 
 ### Replay
@@ -281,16 +281,16 @@ Run locally; do not add CI as part of this work.
   multiplier, and keep mode preserves wall-clock time.
 - Switching modes during play, pause, seek, and near the end preserves the
   equivalent raw position and control state.
-- Older recordings still open with the current built-in defaults.
+- Older replays still open with the current built-in defaults.
 
 ### Human acceptance
 
 1. Set `headless = true` in a project config.
-2. Start a fresh Codex task and ask for a reproduction recording without any
+2. Start a fresh Codex task and ask for a reproduction replay without any
    mention of browser setup.
 3. Confirm no browser window appears, a real replay is returned, and the replay
    opens with the configured idle mode.
-4. Change browser configuration, confirm Rec requests an explicit restart, then
+4. Change browser configuration, confirm Replay requests an explicit restart, then
    restart and verify the new configuration takes effect.
 
 ## Deferred
@@ -299,4 +299,4 @@ Run locally; do not add CI as part of this work.
 - Per-agent or per-user authorization to change configuration.
 - Hosted synchronization of configuration or replay preferences.
 - Arbitrary browser discovery and reconfiguration of externally attached Chrome.
-- Recording-specific overrides supplied by natural-language agent prompts.
+- Replay-specific overrides supplied by natural-language agent prompts.

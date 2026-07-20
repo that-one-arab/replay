@@ -9,10 +9,10 @@ import { join } from "node:path";
 import test from "node:test";
 
 test("daemon reports an unattached browser and rejects unsafe or premature capture requests", async () => {
-  const home = await mkdtemp(join(tmpdir(), "rec-daemon-"));
+  const home = await mkdtemp(join(tmpdir(), "replay-daemon-"));
   const port = await unusedPort();
   const daemon = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], {
-    env: { ...process.env, REC_HOME: home, REC_PORT: String(port) },
+    env: { ...process.env, REPLAY_HOME: home, REPLAY_PORT: String(port) },
     stdio: "ignore",
   });
   const endpoint = `http://127.0.0.1:${port}`;
@@ -33,11 +33,11 @@ test("daemon reports an unattached browser and rejects unsafe or premature captu
     assert.equal(unavailableAttach.status, 500);
     assert.match(String(unavailableAttach.body.error), /127\.0\.0\.1:1/);
 
-    // Driving the browser is never gated on the recorder: an action reported
-    // while nothing records is acknowledged and dropped, not failed.
+    // Driving the browser is never gated on the capture: an action reported
+    // while nothing captures is acknowledged and dropped, not failed.
     const idleAction = await request(endpoint, "/api/sessions/action", { id: "act_1", tool: "browser_click", started_at_epoch_ms: Date.now() - 5, finished_at_epoch_ms: Date.now(), ok: true, marker: { label: "ignored" } });
     assert.equal(idleAction.status, 200);
-    assert.equal(idleAction.body.recorded, false);
+    assert.equal(idleAction.body.captured, false);
 
     const invalidAction = await request(endpoint, "/api/sessions/action", { tool: "browser_click" });
     assert.equal(invalidAction.status, 500);
@@ -49,10 +49,10 @@ test("daemon reports an unattached browser and rejects unsafe or premature captu
 });
 
 test("replay leases keep the daemon alive while agent leases control browser ownership", async () => {
-  const home = await mkdtemp(join(tmpdir(), "rec-daemon-leases-"));
+  const home = await mkdtemp(join(tmpdir(), "replay-daemon-leases-"));
   const port = await unusedPort();
   const daemon = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], {
-    env: { ...process.env, REC_HOME: home, REC_PORT: String(port), REC_BROWSER_IDLE_TIMEOUT_MS: "1000", REC_DAEMON_IDLE_TIMEOUT_MS: "1000" },
+    env: { ...process.env, REPLAY_HOME: home, REPLAY_PORT: String(port), REPLAY_BROWSER_IDLE_TIMEOUT_MS: "1000", REPLAY_DAEMON_IDLE_TIMEOUT_MS: "1000" },
     stdio: "ignore",
   });
   const endpoint = `http://127.0.0.1:${port}`;
@@ -80,7 +80,7 @@ test("replay leases keep the daemon alive while agent leases control browser own
 });
 
 test("closing the managed browser shuts the daemon down even while agent leases persist", async () => {
-  const home = await mkdtemp(join(tmpdir(), "rec-daemon-browser-close-"));
+  const home = await mkdtemp(join(tmpdir(), "replay-daemon-browser-close-"));
   // A quiet long-lived process stands in for the managed Chrome; a pre-existing
   // browser.json makes the daemon adopt its pid at startup.
   const fakeBrowser = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], { stdio: "ignore" });
@@ -89,7 +89,7 @@ test("closing the managed browser shuts the daemon down even while agent leases 
   const daemon = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], {
     // Idle timeouts far beyond the test window prove any exit comes from the
     // browser-close path, not the idle timers.
-    env: { ...process.env, REC_HOME: home, REC_PORT: String(port), REC_BROWSER_IDLE_TIMEOUT_MS: "600000", REC_DAEMON_IDLE_TIMEOUT_MS: "600000" },
+    env: { ...process.env, REPLAY_HOME: home, REPLAY_PORT: String(port), REPLAY_BROWSER_IDLE_TIMEOUT_MS: "600000", REPLAY_DAEMON_IDLE_TIMEOUT_MS: "600000" },
     stdio: "ignore",
   });
   const endpoint = `http://127.0.0.1:${port}`;
@@ -120,14 +120,14 @@ test("closing the managed browser shuts the daemon down even while agent leases 
 });
 
 test("the daemon exits with a clear error when its port is already taken", async () => {
-  const home = await mkdtemp(join(tmpdir(), "rec-daemon-port-"));
-  const squatter = createServer((_, response) => { response.writeHead(200); response.end("not rec"); });
+  const home = await mkdtemp(join(tmpdir(), "replay-daemon-port-"));
+  const squatter = createServer((_, response) => { response.writeHead(200); response.end("not replay"); });
   squatter.listen(0, "127.0.0.1");
   await once(squatter, "listening");
   const address = squatter.address();
   if (!address || typeof address === "string") throw new Error("Could not reserve a fixture port.");
   const daemon = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], {
-    env: { ...process.env, REC_HOME: home, REC_PORT: String(address.port) },
+    env: { ...process.env, REPLAY_HOME: home, REPLAY_PORT: String(address.port) },
     stdio: ["ignore", "ignore", "pipe"],
   });
   let stderr = "";
@@ -173,7 +173,7 @@ async function request(endpoint: string, path: string, body: Record<string, unkn
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  return { status: response.status, body: await response.json() as { error?: string; lease_id?: string; recorded?: boolean } };
+  return { status: response.status, body: await response.json() as { error?: string; lease_id?: string; captured?: boolean } };
 }
 
 async function stop(child: ChildProcess) {

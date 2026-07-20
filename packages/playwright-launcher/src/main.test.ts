@@ -6,7 +6,7 @@ import test from "node:test";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-test("launcher forwards stdio transparently and provisions Rec's browser only on the first tool call", async () => {
+test("launcher forwards stdio transparently and provisions Replay's browser only on the first tool call", async () => {
   const calls: { path: string; body?: Record<string, unknown> }[] = [];
   const daemon = createServer(async (request, response) => {
     let raw = "";
@@ -26,9 +26,9 @@ test("launcher forwards stdio transparently and provisions Rec's browser only on
   const launcher = spawn(process.execPath, [resolve(dirname(fileURLToPath(import.meta.url)), "main.js")], {
     env: {
       ...process.env,
-      REC_DAEMON_URL: `http://127.0.0.1:${address.port}`,
-      REC_PLAYWRIGHT_MCP_COMMAND: process.execPath,
-      REC_PLAYWRIGHT_MCP_ARGS: JSON.stringify(["-e", "process.stdin.pipe(process.stdout)", "--"]),
+      REPLAY_DAEMON_URL: `http://127.0.0.1:${address.port}`,
+      REPLAY_PLAYWRIGHT_MCP_COMMAND: process.execPath,
+      REPLAY_PLAYWRIGHT_MCP_ARGS: JSON.stringify(["-e", "process.stdin.pipe(process.stdout)", "--"]),
     },
   });
   let output = "";
@@ -46,7 +46,7 @@ test("launcher forwards stdio transparently and provisions Rec's browser only on
 
     // The first tools/call provisions the managed browser before it is forwarded.
     launcher.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })}\n`);
-    await waitFor(() => calls.some((call) => call.path === "/api/browser/ensure"), "First tool call did not provision Rec's browser.");
+    await waitFor(() => calls.some((call) => call.path === "/api/browser/ensure"), "First tool call did not provision Replay's browser.");
     await waitFor(() => output.includes("\"method\":\"tools/call\""), "Launcher did not forward the tool call after provisioning.");
     assert.deepEqual(calls.map((call) => call.path), ["/health", "/api/leases/acquire", "/api/browser/ensure"]);
   } finally {

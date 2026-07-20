@@ -20,23 +20,23 @@ const DEFAULT_ATTEMPTS = 3;
 const BACKOFF_BASE_MS = 500;
 const BACKOFF_CAP_MS = 5_000;
 
-// Upload a portable `.rec` artifact to the remote share server. Turns the raw,
+// Upload a portable `.replay` artifact to the remote share server. Turns the raw,
 // cryptic failures of a bare fetch — connection refused, DNS failure, a hung
 // server — into clear, actionable errors that name the endpoint, and retries
 // transient failures with backoff before giving up.
-export async function uploadRecording(shareEndpoint: string, artifactPath: string, options: ShareUploadOptions = {}): Promise<ShareUploadResult> {
+export async function uploadReplay(shareEndpoint: string, artifactPath: string, options: ShareUploadOptions = {}): Promise<ShareUploadResult> {
   const endpoint = shareEndpoint.replace(/\/$/, "");
   const timeoutMs = options.timeoutMs ?? envTimeout() ?? DEFAULT_TIMEOUT_MS;
   const attempts = Math.max(1, options.attempts ?? DEFAULT_ATTEMPTS);
   const call = options.fetchImpl ?? fetch;
   const wait = options.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
   const body = await readFile(artifactPath);
-  const target = `${endpoint}/v1/recordings`;
+  const target = `${endpoint}/v1/replays`;
   let lastError: Error | undefined;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     let response: Response;
     try {
-      response = await call(target, { method: "POST", headers: { "content-type": "application/vnd.rec" }, body, signal: AbortSignal.timeout(timeoutMs) });
+      response = await call(target, { method: "POST", headers: { "content-type": "application/vnd.replay" }, body, signal: AbortSignal.timeout(timeoutMs) });
     } catch (error) {
       lastError = unreachable(endpoint, timeoutMs, error);
       if (attempt < attempts) { await wait(backoff(attempt)); continue; }
@@ -45,7 +45,7 @@ export async function uploadRecording(shareEndpoint: string, artifactPath: strin
     const result = asRecord(await response.json().catch(() => ({})));
     if (response.ok) {
       const shareUrl = text(result.shareUrl);
-      if (!shareUrl) throw new Error(`The share server at ${endpoint} accepted the recording but returned no share link.`);
+      if (!shareUrl) throw new Error(`The share server at ${endpoint} accepted the replay but returned no share link.`);
       return { shareUrl, sessionId: text(result.sessionId), shareId: text(result.shareId) };
     }
     const detail = text(result.error) ?? response.statusText ?? `HTTP ${response.status}`;
@@ -54,12 +54,12 @@ export async function uploadRecording(shareEndpoint: string, artifactPath: strin
       await wait(backoff(attempt));
       continue;
     }
-    throw new Error(`The share server at ${endpoint} rejected the recording (${response.status}: ${detail}).`);
+    throw new Error(`The share server at ${endpoint} rejected the replay (${response.status}: ${detail}).`);
   }
-  throw lastError ?? new Error(`Could not share the recording via ${endpoint}.`);
+  throw lastError ?? new Error(`Could not share the replay via ${endpoint}.`);
 }
 
-function envTimeout() { const raw = Number(process.env.REC_SHARE_TIMEOUT_MS); return Number.isFinite(raw) && raw > 0 ? raw : undefined; }
+function envTimeout() { const raw = Number(process.env.REPLAY_SHARE_TIMEOUT_MS); return Number.isFinite(raw) && raw > 0 ? raw : undefined; }
 function backoff(attempt: number) { return Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** (attempt - 1)); }
 // Retry only what a later attempt could plausibly fix: the timeout/rate-limit
 // codes and 5xx. A 4xx (400 malformed, 409 duplicate, 413 too large) is the
@@ -74,7 +74,7 @@ function unreachable(endpoint: string, timeoutMs: number, error: unknown): Error
   if (name === "AbortError") return new Error(`The upload to the share server at ${endpoint} was interrupted.`, { cause: error });
   const cause = (error as { cause?: { code?: string } }).cause ?? (error as { code?: string });
   const reason = describeCode(cause?.code) ?? (error instanceof Error ? error.message : String(error));
-  return new Error(`Could not reach the share server at ${endpoint}: ${reason}. Check REC_SHARE_URL and that the server is running.`, { cause: error });
+  return new Error(`Could not reach the share server at ${endpoint}: ${reason}. Check REPLAY_SHARE_URL and that the server is running.`, { cause: error });
 }
 
 function describeCode(code: string | undefined) {
