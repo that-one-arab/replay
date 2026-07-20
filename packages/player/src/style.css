@@ -288,7 +288,6 @@ body.chat-open #app { width: calc(100% - 404px); }
   overflow: hidden;
 }
 .watch-again {
-  margin-top: 24px;
   padding: 9px 22px;
   color: #171720;
   background: #f5f4fa;
@@ -1196,7 +1195,7 @@ body.onboarding-active #chapters-panel { display: none; }
 }
 
 /* End-card actions row. */
-.session-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 4px; }
+.session-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; align-items: stretch; margin-top: 24px; }
 .session-actions .ask-ai {
   padding: 10px 18px;
   border-radius: 999px;
