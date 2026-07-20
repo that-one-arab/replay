@@ -41,18 +41,10 @@ need Node.js installed. One command fetches the pinned runtime into `~/.replay`
 curl -fsSL https://raw.githubusercontent.com/that-one-arab/replay/main/install.sh | sh
 ```
 
-Then register the server in your agent's MCP config (Claude Code `~/.claude.json`,
-Cursor `~/.cursor/mcp.json`, etc.) using the `command` path the installer prints:
-
-```json
-{
-  "mcpServers": {
-    "replay": {
-      "command": "/Users/<you>/.replay/runtimes/current/bin/replay-mcp"
-    }
-  }
-}
-```
+The installer then asks which agent to register Replay with — **Codex** (default)
+or **Claude Code** — and runs the matching `mcp add` for you (it prints the exact
+manual command either way). To skip the prompt, e.g. in automation, set
+`REPLAY_AGENT=codex|claude|skip`.
 
 The `current` symlink tracks the latest installed version, so the config survives
 upgrades. Google Chrome is required (the managed browser Replay drives). To pin a
