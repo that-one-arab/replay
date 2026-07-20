@@ -1012,6 +1012,9 @@ body.chat-open #app { width: calc(100% - 404px); }
   background: rgba(8, 9, 14, .72);
   cursor: pointer;
 }
+/* Hide the chapters panel while the tour is up so it doesn't crowd the spotlight. */
+body.onboarding-active #chapters-panel { display: none; }
+
 .onboarding-ring {
   position: absolute;
   pointer-events: none;

@@ -122,6 +122,9 @@ function build() {
     `<button class="onboarding-next" type="button"></button>` +
     `</div></div>`;
   document.body.appendChild(root);
+  // While the tour is up, hide the chapters panel so it doesn't crowd the
+  // spotlight. The chapters *toggle* is still highlighted as a tour step.
+  document.body.classList.add("onboarding-active");
   root.querySelector<HTMLButtonElement>(".onboarding-skip")!.addEventListener("click", dismiss);
   root.querySelector<HTMLButtonElement>(".onboarding-next")!.addEventListener("click", next);
   root.querySelector<HTMLElement>(".onboarding-masks")!.addEventListener("click", dismiss);
@@ -257,6 +260,7 @@ function back() {
 
 function dismiss() {
   if (!root) return;
+  document.body.classList.remove("onboarding-active");
   markSeen();
   if (frame) {
     cancelAnimationFrame(frame);
