@@ -82,7 +82,6 @@ bin="$runtimes_dir/current/bin/replay-mcp"
 
 log ""
 log "Replay $VERSION installed at $dest"
-log "The runtime uses its bundled Node — no system Node.js required."
 log ""
 log "Add this MCP server to your coding agent's config"
 log "(Claude Code ~/.claude.json · Cursor ~/.cursor/mcp.json · etc.):"
