@@ -10,7 +10,7 @@ import { promisify } from "node:util";
 import { execFile as execute } from "node:child_process";
 
 const execFile = promisify(execute);
-const releaseEndpoint = process.env.REPLAY_RELEASE_URL ?? "https://stitch-production-2492.up.railway.app/v1/releases";
+const releaseEndpoint = process.env.REPLAY_RELEASE_URL ?? "https://share.replaythis.io/v1/releases";
 const runtimeHome = process.env.REPLAY_RUNTIME_HOME ?? join(homedir(), ".replay", "runtimes");
 const platform = `${process.platform}-${process.arch}`;
 const runtimeVersion = process.env.REPLAY_RUNTIME_VERSION;

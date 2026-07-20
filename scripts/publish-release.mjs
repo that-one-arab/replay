@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 
 const [archiveInput] = process.argv.slice(2);
-const endpoint = process.env.REPLAY_RELEASE_PUBLISH_URL?.replace(/\/$/, "") ?? "https://stitch-production-2492.up.railway.app";
+const endpoint = process.env.REPLAY_RELEASE_PUBLISH_URL?.replace(/\/$/, "") ?? "https://share.replaythis.io";
 const token = process.env.REPLAY_RELEASE_PUBLISH_TOKEN ?? (process.env.REPLAY_RELEASE_PUBLISH_TOKEN_FILE ? (await readFile(process.env.REPLAY_RELEASE_PUBLISH_TOKEN_FILE, "utf8")).trim() : undefined);
 if (!archiveInput) throw new Error("Usage: REPLAY_RELEASE_PUBLISH_TOKEN=<token> node scripts/publish-release.mjs <archive.tar.gz>");
 if (!token) throw new Error("REPLAY_RELEASE_PUBLISH_TOKEN or REPLAY_RELEASE_PUBLISH_TOKEN_FILE is required.");

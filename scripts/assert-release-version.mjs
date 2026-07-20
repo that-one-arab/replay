@@ -12,7 +12,9 @@ for (const name of packages) {
 const plugin = await readJson(join("plugins", "replay-mcp", ".codex-plugin", "plugin.json"));
 if (plugin.version !== version) throw new Error(`Codex plugin is ${plugin.version}; expected ${version}.`);
 const mcp = await readJson(join("plugins", "replay-mcp", ".mcp.json"));
-for (const name of ["replay", "playwright"]) {
+// The plugin ships a single `replay` MCP server with stock Playwright embedded
+// in-process (see README / docs/mcp.md) — no separate `playwright` server.
+for (const name of ["replay"]) {
   const pinned = mcp.mcpServers?.[name]?.env?.REPLAY_RUNTIME_VERSION;
   if (pinned !== version) throw new Error(`Codex ${name} MCP pins runtime ${String(pinned)}; expected ${version}.`);
 }

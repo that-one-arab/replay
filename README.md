@@ -31,6 +31,34 @@ when finished. With `REPLAY_SHARE_URL` configured, `capture_stop` also publishes
 the artifact automatically and returns a share URL. You do not need to start
 Chrome, choose a port, or describe the replay workflow.
 
+## Install for any MCP-capable agent
+
+Replay is just an MCP server and bundles its own Node runtime, so you do **not**
+need Node.js installed. One command fetches the pinned runtime into `~/.replay`
+(macOS Apple Silicon only):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/that-one-arab/replay/main/install.sh | sh
+```
+
+Then register the server in your agent's MCP config (Claude Code `~/.claude.json`,
+Cursor `~/.cursor/mcp.json`, etc.) using the `command` path the installer prints:
+
+```json
+{
+  "mcpServers": {
+    "replay": {
+      "command": "/Users/<you>/.replay/runtimes/current/bin/replay-mcp"
+    }
+  }
+}
+```
+
+The `current` symlink tracks the latest installed version, so the config survives
+upgrades. Google Chrome is required (the managed browser Replay drives). To pin a
+version, set `REPLAY_VERSION` (e.g. `REPLAY_VERSION=0.2.2`) before running the
+installer; set `REPLAY_HOME` to install elsewhere.
+
 ## Quick start against the live demo
 
 No project of your own? There is a live demo storefront — **Northstar Goods** at
