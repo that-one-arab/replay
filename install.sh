@@ -79,14 +79,7 @@ chmod +x "$dest/bin/replay" "$dest/bin/replay-mcp" "$dest/bin/replay-playwright-
 ln -snf "$VERSION" "$runtimes_dir/current"
 
 bin="$runtimes_dir/current/bin/replay-mcp"
-
+log "Replay $VERSION installed. Add it to your agent:"
 log ""
-log "Replay $VERSION installed at $dest"
-
-log ""
-log "Add Replay to your coding agent (copy the matching command):"
-log ""
-printf '  Codex:        codex mcp add replay -- %s\n' "$bin"
-printf '  Claude Code:  claude mcp add -s user replay -- %s\n' "$bin"
-log ""
-log "Google Chrome is required — it is the managed browser Replay drives."
+printf '  codex mcp add replay -- %s\n' "$bin"
+printf '  claude mcp add -s user replay -- %s\n' "$bin"
