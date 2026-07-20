@@ -11,7 +11,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test dist/storage.test.js"
+    "test": "node --test dist/storage.test.js dist/capture-navigation.test.js"
   },
   "dependencies": {
     "@rrweb/record": "2.0.0-alpha.20",

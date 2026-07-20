@@ -115,10 +115,8 @@ test("captures a completed top-level reload as manifest navigation metadata", as
       store?: SessionStore;
       startedAt: number;
       pages: Map<Page, { id: string; page: Page; baseUrl: string }>;
-      pendingNavigations: Map<Page, { committedAtWallClockMs?: number }>;
       observeNavigationRequest(page: Page, request: PlaywrightRequest): void;
       commitNavigation(page: Page, url: string): void;
-      observeNavigationSnapshots(state: { id: string; page: Page }, events: unknown[]): void;
     };
     internals.store = store;
     internals.startedAt = Date.now() - 100;
@@ -130,14 +128,73 @@ test("captures a completed top-level reload as manifest navigation metadata", as
       url: () => "http://example.test/todos",
     } as unknown as PlaywrightRequest;
     internals.observeNavigationRequest(page, request);
+    // Navigation events finalize on commit (no rrweb full-snapshot gate), so a
+    // reload that commits is recorded immediately.
     internals.commitNavigation(page, "http://example.test/todos");
-    const committedAt = internals.pendingNavigations.get(page)?.committedAtWallClockMs;
-    if (!committedAt) throw new Error("Fixture navigation did not commit.");
-    internals.observeNavigationSnapshots(state, [{ type: 2, timestamp: committedAt + 20 }]);
-    assert.equal(store.manifest.navigation_events?.length, 1);
-    assert.equal(store.manifest.navigation_events?.[0]?.kind, "reload");
-    assert.equal(store.manifest.navigation_events?.[0]?.from_url, "http://example.test/todos");
-    assert.equal(store.manifest.navigation_events?.[0]?.to_url, "http://example.test/todos");
+    const events = store.manifest.navigation_events ?? [];
+    assert.equal(events.length, 1);
+    assert.equal(events[0]?.kind, "reload");
+    assert.equal(events[0]?.from_url, "http://example.test/todos");
+    assert.equal(events[0]?.to_url, "http://example.test/todos");
+    assert.equal(events[0]?.ready_at_ms, events[0]?.committed_at_ms);
+    assert.ok((events[0]?.started_at_ms ?? -1) <= (events[0]?.committed_at_ms ?? -1));
+  } finally {
+    if (previousHome === undefined) delete process.env.REPLAY_HOME;
+    else process.env.REPLAY_HOME = previousHome;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("does not splice a stale pending navigation into a later one", async () => {
+  const root = await mkdtemp(join(tmpdir(), "replay-navigation-stale-"));
+  const previousHome = process.env.REPLAY_HOME;
+  process.env.REPLAY_HOME = root;
+  try {
+    const store = await SessionStore.create({
+      format_version: 1,
+      id: "replay_navigation_stale_fixture",
+      title: "Stale navigation fixture",
+      created_at: new Date().toISOString(),
+      capture: { version: "test", rrweb: "test", capture_canvas: false, capture_cross_origin_iframes: false },
+      origins: ["http://example.test"],
+      masking: { mask_all_inputs: false, passwords: true },
+      segments: [],
+      tab_events: [],
+      navigation_events: [],
+      markers: [],
+      assets: [],
+    });
+    store.segment("seg_1", "http://example.test/a", 0);
+    const frame = {};
+    const page = { mainFrame: () => frame } as unknown as Page;
+    const capture = new Capture();
+    const internals = capture as unknown as {
+      store?: SessionStore;
+      startedAt: number;
+      pages: Map<Page, { id: string; page: Page; baseUrl: string }>;
+      pendingNavigations: Map<Page, { fromUrl: string; toUrl: string; startedAtMs: number }>;
+      observeNavigationRequest(page: Page, request: PlaywrightRequest): void;
+      commitNavigation(page: Page, url: string): void;
+    };
+    internals.store = store;
+    internals.startedAt = Date.now() - 100;
+    const state = { id: "seg_1", page, baseUrl: "http://example.test/a" };
+    internals.pages.set(page, state);
+    const navRequest = (url: string) => ({ isNavigationRequest: () => true, frame: () => frame, url: () => url }) as unknown as PlaywrightRequest;
+    // A navigation request opens a pending but never commits (an aborted load
+    // or a phantom client-side route). Age it past the stale window.
+    internals.observeNavigationRequest(page, navRequest("http://example.test/phantom"));
+    internals.pendingNavigations.get(page)!.startedAtMs = -10_000;
+    // A later, unrelated navigation commits. It must start fresh — not inherit
+    // the phantom's start time or destination.
+    internals.observeNavigationRequest(page, navRequest("http://example.test/b"));
+    internals.commitNavigation(page, "http://example.test/b");
+    const events = store.manifest.navigation_events ?? [];
+    assert.equal(events.length, 1);
+    assert.equal(events[0]?.from_url, "http://example.test/a");
+    assert.equal(events[0]?.to_url, "http://example.test/b");
+    assert.ok((events[0]?.started_at_ms ?? -1) > 0, "started_at_ms was reset rather than inherited from the phantom");
+    assert.ok((events[0]?.started_at_ms ?? -1) <= (events[0]?.committed_at_ms ?? -1));
   } finally {
     if (previousHome === undefined) delete process.env.REPLAY_HOME;
     else process.env.REPLAY_HOME = previousHome;

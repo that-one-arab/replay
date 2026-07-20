@@ -12,6 +12,11 @@ const require = createRequire(import.meta.url);
 const FLUSH_MS = 500;
 const MAX_ASSET_BYTES = 10 * 1024 * 1024;
 const STATIC_RESOURCE_TYPES = new Set(["stylesheet", "image", "font"]);
+// A navigation request that never commits within this window was aborted or a
+// phantom (e.g., a client-side route the browser surfaced as a navigation
+// request). Expire it so the next real navigation starts fresh instead of
+// inheriting a stale start time and splicing two transitions into one record.
+const STALE_PENDING_MS = 5_000;
 
 interface PageState {
   id: string;
@@ -29,8 +34,6 @@ interface PendingNavigation {
   fromUrl: string;
   toUrl: string;
   startedAtMs: number;
-  committedAtMs?: number;
-  committedAtWallClockMs?: number;
 }
 
 /** One active capture bound to an existing Chromium CDP endpoint. */
@@ -298,7 +301,6 @@ export class Capture {
       // object identity, then resolve the active page by its current URL.
       const state = page ? this.pages.get(page) ?? [...this.pages.values()].find((candidate) => candidate.page.url() === page.url()) : undefined;
       if (!state || !Array.isArray(payload)) return;
-      this.observeNavigationSnapshots(state, payload);
       this.observeTabEvents(state, payload);
       state.queue.push(...payload);
       if (!state.flushTimer) state.flushTimer = setTimeout(() => void this.flush(state), FLUSH_MS);
@@ -416,9 +418,12 @@ export class Capture {
     // The first load of a newly opened tab is represented by the tab lifecycle,
     // not a refresh transition. Existing captured pages can start a transition.
     if (!state) return;
+    this.expireStalePending(page);
     const pending = this.pendingNavigations.get(page);
     if (pending) {
-      if (!pending.committedAtMs) pending.toUrl = request.url();
+      // A redirect chains another request into the same in-flight navigation;
+      // only the destination moves — the start time is preserved.
+      pending.toUrl = request.url();
       return;
     }
     this.pendingNavigations.set(page, {
@@ -433,37 +438,40 @@ export class Capture {
     if (!this.store) return;
     const state = this.pages.get(page);
     if (!state) return;
-    const now = Date.now();
+    const now = Date.now() - this.startedAt;
     const pending = this.pendingNavigations.get(page) ?? {
       state,
       fromUrl: state.baseUrl,
       toUrl: committedUrl,
-      startedAtMs: now - this.startedAt,
+      startedAtMs: now,
     };
     pending.toUrl = committedUrl;
-    pending.committedAtMs = now - this.startedAt;
-    pending.committedAtWallClockMs = now;
-    this.pendingNavigations.set(page, pending);
-  }
-
-  private observeNavigationSnapshots(state: PageState, events: unknown[]) {
-    const pending = this.pendingNavigations.get(state.page);
-    if (!pending?.committedAtMs || !pending.committedAtWallClockMs) return;
-    const snapshot = events.find((event) => isFullSnapshotAfter(event, pending.committedAtWallClockMs!));
-    if (!snapshot) return;
-    const timestamp = eventTimestamp(snapshot);
-    if (timestamp === undefined || !this.store) return;
+    // Finalize on commit rather than waiting for an rrweb full snapshot. SPAs
+    // reroute client-side and never produce that snapshot, so a pending left
+    // waiting for one would linger and be reused by a later, unrelated
+    // navigation — splicing the start of one transition onto the end of another.
     const event: NavigationEvent = {
       segment_id: state.id,
       kind: sameDocument(pending.fromUrl, pending.toUrl) ? "reload" : "navigate",
       started_at_ms: pending.startedAtMs,
-      committed_at_ms: pending.committedAtMs,
-      ready_at_ms: Math.max(pending.committedAtMs, timestamp - this.startedAt),
+      committed_at_ms: now,
+      ready_at_ms: now,
       from_url: pending.fromUrl,
       to_url: pending.toUrl,
     };
     this.store.addNavigationEvent(event);
-    this.pendingNavigations.delete(state.page);
+    this.pendingNavigations.delete(page);
+  }
+
+  private expireStalePending(page: Page) {
+    const pending = this.pendingNavigations.get(page);
+    // commitNavigation clears a pending as soon as it commits, so any pending
+    // found here is in-flight (opened by a request, awaiting commit). If it has
+    // waited past the window, the request was aborted or a phantom route; drop
+    // it so the next navigation does not inherit its start time.
+    if (pending && Date.now() - this.startedAt - pending.startedAtMs > STALE_PENDING_MS) {
+      this.pendingNavigations.delete(page);
+    }
   }
 
   private async captureResponse(response: PlaywrightResponse) {
@@ -564,14 +572,6 @@ function eventTimestamp(event: unknown) {
   if (!event || typeof event !== "object" || !("timestamp" in event)) return undefined;
   const value = Number((event as { timestamp: unknown }).timestamp);
   return Number.isFinite(value) ? value : undefined;
-}
-
-function isFullSnapshotAfter(event: unknown, wallClockMs: number) {
-  const candidate = event as { type?: unknown };
-  const timestamp = eventTimestamp(event);
-  // rrweb timestamps share the browser machine's wall clock. A short tolerance
-  // covers CDP callback ordering while excluding an old buffered snapshot.
-  return candidate.type === 2 && timestamp !== undefined && timestamp >= wallClockMs - 100;
 }
 
 function sameDocument(left: string, right: string) {
