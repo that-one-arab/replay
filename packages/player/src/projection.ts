@@ -18,7 +18,15 @@ export function projectPlayback(manifest: Manifest, eventSets: Map<string, Repla
   const navigationEvents = resolvedNavigationEvents(manifest, eventSets);
   const rawIdle = idleRanges(activities, playbackEnd);
   const scale = (range: IdleRange) => idleScale(range, idleMode, defaults);
-  const toPlayback = (time: number) => {
+  // The session clock (t=0) starts at recorder init, but the first rrweb
+  // snapshot arrives only after the capture wiring settles — a dead pre-roll
+  // with no events before the earliest segment. Drop it so the timeline's 0
+  // lands on the first real content; otherwise those opening seconds are
+  // unreachable and every seek into them clamps forward to the first frame.
+  const lead = manifest.segments.length
+    ? manifest.segments.reduce((min, segment) => Math.min(min, segment.clock_offset_ms), Infinity)
+    : 0;
+  const idleToPlayback = (time: number) => {
     let removed = 0;
     for (const range of rawIdle) {
       const projectedDuration = (range.end - range.start) * scale(range);
@@ -28,7 +36,7 @@ export function projectPlayback(manifest: Manifest, eventSets: Map<string, Repla
     }
     return time - removed;
   };
-  const toRaw = (time: number) => {
+  const idleToRaw = (time: number) => {
     let removed = 0;
     for (const range of rawIdle) {
       const projectedDuration = (range.end - range.start) * scale(range);
@@ -40,6 +48,8 @@ export function projectPlayback(manifest: Manifest, eventSets: Map<string, Repla
     }
     return time + removed;
   };
+  const toPlayback = (time: number) => idleToPlayback(time) - lead;
+  const toRaw = (time: number) => idleToRaw(time + lead);
   const projectedManifest: Manifest = {
     ...manifest,
     raw_duration_ms: toPlayback(playbackEnd),

@@ -34,6 +34,46 @@ test("toPlayback and toRaw invert each other inside a collapsed gap", () => {
   assert.equal(projection.toRaw(projection.toPlayback(500)), 500);
 });
 
+// A segment whose first snapshot lands after capture began (clock_offset_ms > 0)
+// carries a dead pre-roll: no events exist between session t=0 and the first
+// frame. The projection must drop that lead so the timeline's 0 is the first
+// real content — otherwise seeks into the opening seconds clamp forward.
+function preRollFixture(): { manifest: Manifest; eventSets: Map<string, ReplayEvent[]> } {
+  const events: ReplayEvent[] = [{ type: 2, timestamp: 1_000 }, click(1_000), click(62_000)];
+  return {
+    manifest: {
+      id: "r2",
+      title: "Replay",
+      markers: [],
+      segments: [{ id: "s1", page_url: "https://example.test/", clock_offset_ms: 3_018 }],
+    },
+    eventSets: new Map([["s1", events]]),
+  };
+}
+
+test("pre-roll before the first snapshot is dropped so playback starts at 0", () => {
+  const { manifest, eventSets } = preRollFixture();
+  const projection = projectPlayback(manifest, eventSets, "cut", DEFAULT_REPLAY_DEFAULTS);
+  // The first frame's playback time is 0, not the raw clock offset.
+  assert.equal(projection.toPlayback(3_018), 0);
+  assert.equal(projection.manifest.segments[0]!.clock_offset_ms, 0);
+  // The dead 3018ms lead is gone. The 61s idle gap between the two clicks
+  // collapses to the 2s retained span, and the second click sits at playbackEnd,
+  // so the whole timeline is just that retained 2s.
+  assert.equal(projection.duration, 2_000);
+  // A scrub into the former dead zone (1s, 2s) maps to a real offset from the
+  // first frame rather than clamping forward to it: requestedTime - tabStart >= 0.
+  for (const requested of [0, 1_000, 2_000]) {
+    const tabStart = projection.manifest.segments[0]!.clock_offset_ms;
+    assert.ok(requested - tabStart >= 0, `scrub to ${requested} should not precede the first frame`);
+  }
+  // toRaw remains the inverse of toPlayback across the lead (boundaries are
+  // exact; inside a collapsed gap the scale round-trip is sub-ms, so round).
+  assert.equal(projection.toRaw(projection.toPlayback(3_018)), 3_018);
+  assert.equal(projection.toRaw(projection.toPlayback(64_018)), 64_018);
+  assert.equal(Math.round(projection.toRaw(projection.toPlayback(31_000))), 31_000);
+});
+
 test("fast-forward mode compresses idle by the configured speed", () => {
   const { manifest, eventSets } = fixture();
   const projection = projectPlayback(manifest, eventSets, "fast_forward", DEFAULT_REPLAY_DEFAULTS);
