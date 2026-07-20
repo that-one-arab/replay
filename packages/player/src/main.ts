@@ -460,7 +460,12 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
     if (!scrubbing && !bridgingTabs) {
       const time = clamp(tabStart + replayer.getCurrentTime(), tabStart, tabEnd);
       updateTimelinePosition(time);
-      announceNavigations(time);
+      // announceNavigations arms the auto-hide timer; the pause/scrub handlers
+      // pin the overlay via syncNavigationAt(). A requestAnimationFrame scheduled
+      // while playing can land one frame after the pause flips `playing` off —
+      // that stray tick must not re-arm the timer and un-pin the overlay the
+      // pause just set, or the refresh ends on its own a moment later.
+      if (playing) announceNavigations(time);
       syncNarration(manifest.markers, time);
       if (playing && nextFocus && time >= nextFocus.t_ms) {
         announceAndFocusNewTab(nextFocus, time);
