@@ -31,6 +31,23 @@ when finished. With `REPLAY_SHARE_URL` configured, `capture_stop` also publishes
 the artifact automatically and returns a share URL. You do not need to start
 Chrome, choose a port, or describe the replay workflow.
 
+## Quick start against the live demo
+
+No project of your own? There is a live demo storefront — **Northstar Goods** at
+<https://demo.replaythis.io> — with a deliberate bug baked in: apply coupon
+`SAVE20` and the cart says *applied*, but the total never changes. Install the
+plugin, open a Codex task in any folder, and paste:
+
+> Reproduce a bug on the Northstar Goods demo store at https://demo.replaythis.io
+> using Replay's browser tools. Add two products to the cart, apply coupon code
+> `SAVE20`, and proceed to checkout. The bug: the cart announces *"Coupon SAVE20
+> applied — 20% off"*, but the order **total never changes** — it stays at the full
+> subtotal. Capture a replay of the whole reproduction, drop a `replay_marker` on
+> the action where you apply the coupon, then return the replay link.
+
+Your agent reproduces the bug on the live site and hands back a replay link with
+the dead air already cut.
+
 ## What a replay includes
 
 - A single browser-session timeline, including captured tabs, focus changes, and
