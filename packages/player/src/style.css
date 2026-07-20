@@ -80,7 +80,12 @@ body.chat-open #app { width: calc(100% - 404px); }
 }
 .state-flash {
   position: absolute;
-  z-index: 3;
+  /* Above the refresh/narration/session scrims (z-index 3) and the chrome (4):
+  each of those carries a backdrop-filter, so a flash at their level gets blurred
+  by the overlay that paints on top of it — most visibly the full-screen refresh
+  indicator when pausing mid-navigation. Keep the flash crisp and on top.
+  (The click ripple at 11 and the tooltip at 1000 stay above it.) */
+  z-index: 5;
   left: 50%;
   top: 50%;
   width: 76px;
