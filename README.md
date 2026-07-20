@@ -47,7 +47,7 @@ agent config itself.
 
 The `current` symlink tracks the latest installed version, so the config survives
 upgrades. Google Chrome is required (the managed browser Replay drives). To pin a
-version, set `REPLAY_VERSION` (e.g. `REPLAY_VERSION=0.2.2`) before running the
+version, set `REPLAY_VERSION` (e.g. `REPLAY_VERSION=0.2.3`) before running the
 installer; set `REPLAY_HOME` to install elsewhere.
 
 ## Quick start against the live demo

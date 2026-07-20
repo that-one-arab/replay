@@ -34,6 +34,15 @@ is immutable and is named `replay-<version>-darwin-arm64.tar.gz`.
   clicks with element labels, typed input, tab switches, markers, and idle
   gaps distilled from the raw rrweb stream.
 
+## [0.2.3] - 2026-07-21
+
+- Suppress action-bound markers on failed actions so a retried step no longer
+  produces duplicate chapters.
+- Fix `__replayResolveNodeId` (missing brace) so text-based highlight resolution
+  pins the element instead of silently returning null.
+- Guide agents (SKILL) to mark only successful actions and not re-mark retries.
+- Bake `REPLAY_SHARE_URL` into the installer's printed `mcp add` commands.
+
 ## [0.2.2] - 2026-07-18
 
 - Pin each marketplace plugin to its matching immutable runtime release.

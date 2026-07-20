@@ -11,7 +11,7 @@
 #   sh install.sh                                  # from a checkout
 #
 # Environment overrides:
-#   REPLAY_VERSION     version to install (default 0.2.2)
+#   REPLAY_VERSION     version to install (default 0.2.3)
 #   REPLAY_GITHUB      owner/repo hosting releases (default that-one-arab/replay)
 #   REPLAY_RELEASE_BASE  override the entire download base (default: the GitHub release URL)
 #   REPLAY_HOME        install root (default ~/.replay)
@@ -23,7 +23,7 @@
 set -eu
 
 GITHUB="${REPLAY_GITHUB:-that-one-arab/replay}"
-VERSION="${REPLAY_VERSION:-0.2.2}"
+VERSION="${REPLAY_VERSION:-0.2.3}"
 REPLAY_HOME="${REPLAY_HOME:-$HOME/.replay}"
 PLATFORM="darwin-arm64"
 ARCHIVE="replay-$VERSION-$PLATFORM.tar.gz"

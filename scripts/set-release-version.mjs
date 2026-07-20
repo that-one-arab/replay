@@ -25,6 +25,7 @@ for (const target of targets) {
 }
 const pluginMcpPath = join(root, "plugins/replay-mcp/.mcp.json");
 const pluginMcp = JSON.parse(await readFile(pluginMcpPath, "utf8"));
-for (const name of ["replay", "playwright"]) pluginMcp.mcpServers[name].env.REPLAY_RUNTIME_VERSION = version;
+// The plugin ships a single `replay` MCP server (Playwright is embedded).
+pluginMcp.mcpServers.replay.env.REPLAY_RUNTIME_VERSION = version;
 await writeFile(pluginMcpPath, JSON.stringify(pluginMcp, null, 2) + "\n");
 console.log(`Updated release version to ${version}. Add the matching CHANGELOG.md entry, then run pnpm release:check.`);

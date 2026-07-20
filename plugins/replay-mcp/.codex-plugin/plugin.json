@@ -1,6 +1,6 @@
 {
   "name": "replay-mcp",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Capture and share browser-session replays from Codex.",
   "author": {
     "name": "Local developer"
