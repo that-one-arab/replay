@@ -67,6 +67,11 @@ action. Use `capture_marker` only for checkpoints tied to no single action, such
 as a chapter boundary or precondition. Markers and highlights are both optional;
 mark visible milestones and the defect, not every step.
 
+Attach `replay_marker` only to an action that succeeds — a failed action is not a
+milestone, and marking both a failed attempt and its retry creates duplicate
+chapters. If an action fails, re-snapshot, retry it, and mark the successful
+retry. Do not re-perform and re-mark setup steps you have already completed.
+
 ## Start, stop, and share
 
 1. Navigate and inspect the target page with the `browser_*` tools. Replay's

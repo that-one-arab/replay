@@ -187,7 +187,10 @@ export class Capture {
       finished_at_ms: finished,
       ok: input.ok,
     });
-    if (input.marker) {
+    // Only record an action-bound marker when the action succeeded. A failed
+    // step that is retried is not a milestone, and marking both attempts
+    // produces duplicate chapters. The failed action itself is still logged above.
+    if (input.marker && input.ok) {
       this.store.addMarker({
         t_ms: finished,
         label: input.marker.label,
@@ -731,7 +734,7 @@ async function captureScript() {
       const rr = window.rrweb || window.rrwebRecord;
       if (!rr?.record?.mirror) return null;
       let el = null;
-      if (selector) { try { el = document.querySelector(selector); } catch {}
+      if (selector) { try { el = document.querySelector(selector); } catch {} }
       if (!el && text) {
         const all = Array.from(document.querySelectorAll("body *"));
         el = all.find((e) => e.children.length === 0 && (e.textContent || "").trim() === text.trim())

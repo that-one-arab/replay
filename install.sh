@@ -15,6 +15,7 @@
 #   REPLAY_GITHUB      owner/repo hosting releases (default that-one-arab/replay)
 #   REPLAY_RELEASE_BASE  override the entire download base (default: the GitHub release URL)
 #   REPLAY_HOME        install root (default ~/.replay)
+#   REPLAY_SHARE_URL   share server URL baked into the printed add command (default https://share.replaythis.io)
 #
 # Requires curl, tar, and shasum (or sha256sum). macOS Apple Silicon only.
 # The GitHub repo must be public for anonymous downloads.
@@ -79,7 +80,9 @@ chmod +x "$dest/bin/replay" "$dest/bin/replay-mcp" "$dest/bin/replay-playwright-
 ln -snf "$VERSION" "$runtimes_dir/current"
 
 bin="$runtimes_dir/current/bin/replay-mcp"
+share_url="${REPLAY_SHARE_URL:-https://share.replaythis.io}"
+
 log "Replay $VERSION installed. Add it to your agent:"
 log ""
-printf '  codex mcp add replay -- %s\n' "$bin"
-printf '  claude mcp add -s user replay -- %s\n' "$bin"
+printf '  codex mcp add replay --env REPLAY_SHARE_URL=%s -- %s\n' "$share_url" "$bin"
+printf '  claude mcp add -s user -e REPLAY_SHARE_URL=%s replay -- %s\n' "$share_url" "$bin"
