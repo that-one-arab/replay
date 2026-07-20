@@ -283,7 +283,9 @@ async function serveCapturedAsset(response: ServerResponse, id: string, assetId:
 function servePlayer(response: ServerResponse) {
   const path = resolve(process.cwd(), "packages/player/dist/index.html");
   if (!existsSync(path)) return reply(response, 503, { error: "Player not built." });
-  response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  // index.html references content-hashed assets, so it must always be fetched
+  // fresh — otherwise the browser keeps an old HTML pointing at a stale bundle.
+  response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
   createReadStream(path).pipe(response);
 }
 

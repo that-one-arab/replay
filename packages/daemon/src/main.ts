@@ -489,7 +489,9 @@ async function serveCapturedAsset(response: ServerResponse, sessionId: string, a
 function servePlayer(response: ServerResponse) {
   const path = join(playerRoot(), "index.html");
   if (!existsSync(path)) return reply(response, 503, { error: "Player not built. Run pnpm build." });
-  response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  // index.html references content-hashed assets, so it must always be fetched
+  // fresh — otherwise the browser keeps an old HTML pointing at a stale bundle.
+  response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
   createReadStream(path).pipe(response);
 }
 
