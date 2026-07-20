@@ -105,7 +105,12 @@ function build() {
   root.className = "onboarding";
   root.setAttribute("aria-hidden", "true");
   root.innerHTML =
-    `<div class="onboarding-backdrop"></div>` +
+    `<div class="onboarding-masks" aria-hidden="true">` +
+    `<div class="onboarding-mask" data-side="top"></div>` +
+    `<div class="onboarding-mask" data-side="bottom"></div>` +
+    `<div class="onboarding-mask" data-side="left"></div>` +
+    `<div class="onboarding-mask" data-side="right"></div>` +
+    `</div>` +
     `<div class="onboarding-ring" aria-hidden="true"></div>` +
     `<div class="onboarding-tip" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">` +
     `<span class="onboarding-kicker"><i></i>Replay</span>` +
@@ -119,7 +124,7 @@ function build() {
   document.body.appendChild(root);
   root.querySelector<HTMLButtonElement>(".onboarding-skip")!.addEventListener("click", dismiss);
   root.querySelector<HTMLButtonElement>(".onboarding-next")!.addEventListener("click", next);
-  root.querySelector<HTMLElement>(".onboarding-backdrop")!.addEventListener("click", dismiss);
+  root.querySelector<HTMLElement>(".onboarding-masks")!.addEventListener("click", dismiss);
   // Double rAF so the entry transition (fade/scale) plays from the initial state.
   requestAnimationFrame(() => requestAnimationFrame(() => root!.classList.add("is-visible")));
   const tick = () => {
@@ -169,13 +174,16 @@ function position() {
   if (!root) return;
   const step = STEPS[index];
   const target = resolveTarget(step);
-  const backdrop = root.querySelector<HTMLElement>(".onboarding-backdrop")!;
   const ring = root.querySelector<HTMLElement>(".onboarding-ring")!;
   const tip = root.querySelector<HTMLElement>(".onboarding-tip")!;
+  const W = window.innerWidth;
+  const H = window.innerHeight;
   if (!target) {
-    // Target vanished mid-step (a rebuild hasn't reinstated it yet) — open the
-    // hole to the full viewport and keep the tip centered so nothing flickers.
-    backdrop.style.clipPath = "none";
+    // Target vanished mid-step — dim the whole viewport and hide the ring.
+    mask("top", 0, 0, W, H);
+    mask("bottom", 0, 0, 0, 0);
+    mask("left", 0, 0, 0, 0);
+    mask("right", 0, 0, 0, 0);
     ring.style.opacity = "0";
     centerTip(tip);
     return;
@@ -185,17 +193,30 @@ function position() {
   const top = rect.top - HOLE_PAD;
   const right = rect.right + HOLE_PAD;
   const bottom = rect.bottom + HOLE_PAD;
-  // One backdrop element, with the target rectangle cut out via even-odd clip.
-  // The cut-out region passes pointer events through to the real control, so a
-  // viewer can click the highlighted play button to start (which dismisses).
-  backdrop.style.clipPath =
-    `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, ${left}px ${top}px, ${right}px ${top}px, ${right}px ${bottom}px, ${left}px ${bottom}px)`;
+  // Four rectangular masks tile the viewport except the target, dimming it
+  // without a clip-path. (The earlier even-odd clip hole rendered with corner
+  // artifacts in Firefox.) Clicks on a mask bubble up to dismiss; the un-masked
+  // target stays clickable.
+  mask("top", 0, 0, W, Math.max(0, top));
+  mask("bottom", 0, Math.max(bottom, 0), W, Math.max(0, H - bottom));
+  mask("left", 0, Math.max(top, 0), Math.max(0, left), Math.max(0, bottom - top));
+  mask("right", Math.max(right, 0), Math.max(top, 0), Math.max(0, W - right), Math.max(0, bottom - top));
   ring.style.opacity = "1";
   ring.style.left = `${left}px`;
   ring.style.top = `${top}px`;
   ring.style.width = `${right - left}px`;
   ring.style.height = `${bottom - top}px`;
   placeTip(tip, rect);
+}
+
+/** Position/size one of the four dimming rectangles. */
+function mask(side: string, left: number, top: number, width: number, height: number) {
+  const el = root?.querySelector<HTMLElement>(`.onboarding-mask[data-side="${side}"]`);
+  if (!el) return;
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+  el.style.width = `${width}px`;
+  el.style.height = `${height}px`;
 }
 
 function centerTip(tip: HTMLElement) {

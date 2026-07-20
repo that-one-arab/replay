@@ -1001,12 +1001,15 @@ body.chat-open #app { width: calc(100% - 404px); }
   transition: opacity .25s ease;
 }
 .onboarding.is-visible { opacity: 1; }
-.onboarding-backdrop {
+.onboarding-masks {
   position: absolute;
   inset: 0;
+  pointer-events: none;
+}
+.onboarding-mask {
+  position: absolute;
   pointer-events: auto;
   background: rgba(8, 9, 14, .72);
-  backdrop-filter: blur(2px);
   cursor: pointer;
 }
 .onboarding-ring {
