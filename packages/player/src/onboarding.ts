@@ -202,14 +202,12 @@ function centerTip(tip: HTMLElement) {
   tip.style.left = "50%";
   tip.style.top = "50%";
   tip.style.transform = "translate(-50%, -50%)";
-  tip.classList.remove("is-below");
 }
 
 function placeTip(tip: HTMLElement, rect: DOMRect) {
   const tipRect = tip.getBoundingClientRect();
   const spaceBelow = window.innerHeight - rect.bottom;
   const below = spaceBelow >= tipRect.height + TIP_MARGIN || spaceBottomDominates(rect);
-  tip.classList.toggle("is-below", below);
   const top = below ? rect.bottom + TIP_MARGIN : rect.top - tipRect.height - TIP_MARGIN;
   let left = rect.left + rect.width / 2 - tipRect.width / 2;
   left = Math.max(TIP_MARGIN, Math.min(left, window.innerWidth - tipRect.width - TIP_MARGIN));
@@ -217,9 +215,6 @@ function placeTip(tip: HTMLElement, rect: DOMRect) {
   tip.style.left = `${left}px`;
   tip.style.top = `${clampedTop}px`;
   tip.style.transform = "none";
-  // Aim the notch at the target's horizontal center, clamped inside the tip.
-  const notchX = rect.left + rect.width / 2 - left;
-  tip.style.setProperty("--notch-x", `${Math.max(10, Math.min(notchX, tipRect.width - 22))}px`);
 }
 
 /** Prefer "below" when the target sits in the top half of the viewport. */
