@@ -1307,28 +1307,38 @@ body.onboarding-active #chapters-panel { display: none; }
   transition: transform .25s ease;
 }
 
-/* Hold-continue affordance shown when a highlight holds for viewer ack. */
+/* Hold-continue affordance shown when a highlight holds for viewer ack.
+   Solid accent fill + dark text (the player's high-contrast CTA style) and a
+   pulsing glow so a paused viewer can't miss what unblocks playback. */
 .hold-continue {
   position: absolute;
   left: 50%;
   bottom: 132px;
   transform: translateX(-50%);
   z-index: 6;
-  padding: 9px 18px;
-  border: 1px solid rgba(196, 189, 255, .4);
+  padding: 12px 24px;
+  border: 0;
   border-radius: 999px;
-  background: rgba(183, 171, 255, .16);
-  color: #ece9ff;
-  font: 700 13px/1 Manrope, system-ui, sans-serif;
-  backdrop-filter: blur(12px);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, .45);
+  background: #b7abff;
+  color: #171720;
+  font: 800 15px/1 Manrope, system-ui, sans-serif;
+  letter-spacing: .01em;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .5), 0 0 0 0 rgba(183, 171, 255, .55);
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
-  transition: opacity .15s ease;
+  transition: opacity .15s ease, background .15s ease, transform .15s ease;
 }
-.hold-continue.is-visible { opacity: 1; pointer-events: auto; }
-.hold-continue:hover { background: rgba(183, 171, 255, .26); }
+.hold-continue.is-visible { opacity: 1; pointer-events: auto; animation: hold-continue-pulse 1.8s ease-out infinite; }
+.hold-continue:hover { background: #c6bcff; }
+.hold-continue:active { transform: translateX(-50%) scale(.97); }
+
+@keyframes hold-continue-pulse {
+  0% { box-shadow: 0 10px 30px rgba(0, 0, 0, .5), 0 0 0 0 rgba(183, 171, 255, .55); }
+  70% { box-shadow: 0 10px 30px rgba(0, 0, 0, .5), 0 0 0 14px rgba(183, 171, 255, 0); }
+  100% { box-shadow: 0 10px 30px rgba(0, 0, 0, .5), 0 0 0 0 rgba(183, 171, 255, 0); }
+}
+@media (prefers-reduced-motion: reduce) { .hold-continue.is-visible { animation: none; } }
 
 /* Chapter defect block + highlight indicator dot. */
 .chapter-defect { margin: 6px 0 0; display: grid; gap: 3px; }
