@@ -253,6 +253,65 @@ test("exposes token-guarded stats counters", async () => {
   }
 });
 
+test("keeps the assistant off until a key is configured", async () => {
+  const data = await mkdtemp(join(tmpdir(), "replay-share-nochat-"));
+  const previousHome = process.env.REPLAY_HOME;
+  const port = await unusedPort();
+  const endpoint = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | undefined;
+  try {
+    server = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], { env: { ...process.env, PORT: String(port), REPLAY_SHARE_DATA_DIR: data, REPLAY_SHARE_PUBLIC_URL: endpoint, REPLAY_CHAT_API_KEY: "", OPENAI_API_KEY: "" }, stdio: "ignore" });
+    await waitForHealth(endpoint);
+
+    // Availability always answers (the player probes it), reporting disabled so
+    // the Ask AI button stays hidden; the turn routes 404 rather than accept work.
+    const availability = await fetch(`${endpoint}/api/chat/availability`);
+    assert.equal(availability.status, 200);
+    assert.deepEqual(await availability.json(), { available: false, provider: "openai", reason: "disabled" });
+    assert.equal((await fetch(`${endpoint}/api/chat/message`, { method: "POST", body: JSON.stringify({ chat_id: "whatever0", text: "hi" }) })).status, 404);
+  } finally {
+    if (server) await stop(server);
+    if (previousHome === undefined) delete process.env.REPLAY_HOME;
+    else process.env.REPLAY_HOME = previousHome;
+    await rm(data, { recursive: true, force: true });
+  }
+});
+
+test("enables the assistant with a key, gating and rate-limiting turns", async () => {
+  const data = await mkdtemp(join(tmpdir(), "replay-share-chat-"));
+  const previousHome = process.env.REPLAY_HOME;
+  const port = await unusedPort();
+  const endpoint = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | undefined;
+  try {
+    // One chat turn per window makes the limiter observable in two requests. The
+    // rate check runs before the manager, so an unknown chat still spends budget.
+    server = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], { env: { ...process.env, PORT: String(port), REPLAY_SHARE_DATA_DIR: data, REPLAY_SHARE_PUBLIC_URL: endpoint, REPLAY_CHAT_API_KEY: "sk-test-key", REPLAY_CHAT_MODEL: "gpt-5.6-terra", REPLAY_SHARE_CHAT_RATE_LIMIT_POINTS: "1" }, stdio: "ignore" });
+    await waitForHealth(endpoint);
+
+    const availability = await fetch(`${endpoint}/api/chat/availability`);
+    assert.deepEqual(await availability.json(), { available: true, provider: "openai", model: "gpt-5.6-terra" });
+
+    // The assistant must not reach a session no share exposes.
+    assert.equal((await fetch(`${endpoint}/api/chat/stream?chat=chat0001a&session=replay_never_shared`)).status, 404);
+    // Malformed JSON is a client fault, not a 500.
+    assert.equal((await fetch(`${endpoint}/api/chat/message`, { method: "POST", body: "{not json" })).status, 400);
+
+    // First turn spends the sole budget point (then 404s on the unknown chat);
+    // the second is refused with a retry window.
+    const first = await fetch(`${endpoint}/api/chat/message`, { method: "POST", body: JSON.stringify({ chat_id: "chat0001a", text: "hi" }) });
+    assert.equal(first.status, 404);
+    const second = await fetch(`${endpoint}/api/chat/message`, { method: "POST", body: JSON.stringify({ chat_id: "chat0001a", text: "hi" }) });
+    assert.equal(second.status, 429);
+    assert.ok(Number(second.headers.get("retry-after")) >= 1);
+  } finally {
+    if (server) await stop(server);
+    if (previousHome === undefined) delete process.env.REPLAY_HOME;
+    else process.env.REPLAY_HOME = previousHome;
+    await rm(data, { recursive: true, force: true });
+  }
+});
+
 async function unusedPort() {
   const server = createServer();
   server.listen(0, "127.0.0.1");

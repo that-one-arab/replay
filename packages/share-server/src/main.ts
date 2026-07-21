@@ -4,7 +4,7 @@ import { mkdir, readFile, rename, readdir, rm, stat, writeFile } from "node:fs/p
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
-import { exportPath, exportSession, formatTime, importSession, renderSummaryText, sessionPath, stepsInRange, summarizeReplay, type AgentAction, type ReplayManifest, type ReplaySummary } from "../../core/dist/index.js";
+import { ChatManager, exportPath, exportSession, formatTime, importSession, renderSummaryText, sessionPath, stepsInRange, summarizeReplay, type AgentAction, type ChatConfig, type ReplayManifest, type ReplaySummary } from "../../core/dist/index.js";
 import { checkRateLimit, clientIp } from "./rate-limit.js";
 import { logger, metrics } from "./telemetry.js";
 
@@ -23,6 +23,20 @@ const releasePublishToken = process.env.REPLAY_RELEASE_PUBLISH_TOKEN;
 // GET /stats stays disabled unless a token is configured, so the counters are
 // never exposed on a public server by default.
 const statsToken = process.env.REPLAY_SHARE_STATS_TOKEN;
+// The replay assistant. On a public host only the OpenAI provider is viable
+// (the Codex path shells out to a local CLI), and every turn spends real
+// inference money — so it stays off unless an API key is configured, and is
+// capped by its own rate-limit budget. With no key the manager reports
+// `disabled`, which keeps the player's Ask AI button hidden entirely.
+const chatApiKey = process.env.REPLAY_CHAT_API_KEY || process.env.OPENAI_API_KEY;
+const chatConfig: ChatConfig = {
+  enabled: Boolean(chatApiKey),
+  provider: "openai",
+  command: "codex",
+  ...(process.env.REPLAY_CHAT_MODEL ? { model: process.env.REPLAY_CHAT_MODEL } : {}),
+  ...(chatApiKey ? { api_key: chatApiKey } : {}),
+};
+const chatManager = new ChatManager(port, async () => chatConfig);
 
 type Share = { id: string; session_id: string; title: string; created_at: string; bytes: number; revoked?: boolean };
 type Release = { version: string; platform: "darwin-arm64"; archive: string; sha256: string; bytes: number; published_at: string };
@@ -88,6 +102,7 @@ async function route(request: IncomingMessage, response: ServerResponse, url: UR
   const asset = /^\/api\/sessions\/([^/]+)\/assets\/([a-f0-9]{64})$/.exec(url.pathname);
   if (request.method === "GET" && asset) return serveCapturedAsset(response, decodeURIComponent(asset[1]), asset[2]);
   if (request.method === "GET" && url.pathname.startsWith("/assets/")) return servePlayerAsset(response, url.pathname);
+  if (url.pathname.startsWith("/api/chat/")) return serveChat(request, response, url);
   if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/replay")) return servePlayer(response);
   reply(response, 404, { error: "Not found" });
 }
@@ -316,6 +331,76 @@ function servePlayerAsset(response: ServerResponse, pathname: string) {
 async function readManifest(id: string) {
   try { return JSON.parse(await readFile(join(sessionPath(id), "manifest.json"), "utf8")) as ReplayManifest; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new HttpError(404, "Replay not found"); throw error; }
+}
+
+// The replay assistant, mirroring the daemon's /api/chat/* routes but backed by
+// the OpenAI provider only. Availability always answers (the player probes it on
+// load); every other route is a no-op unless a key is configured. The manager
+// throws plain Errors for client faults (unknown chat, oversize message, session
+// gone), so they are mapped to 4xx here rather than bubbling up as 500s.
+async function serveChat(request: IncomingMessage, response: ServerResponse, url: URL) {
+  const path = url.pathname;
+  if (request.method === "GET" && path === "/api/chat/availability") return reply(response, 200, await chatManager.availability());
+  if (!chatConfig.enabled) return reply(response, 404, { error: "The replay assistant is not enabled on this server." });
+  if (request.method === "GET" && path === "/api/chat/stream") {
+    const session = String(url.searchParams.get("session") ?? "");
+    // Only shared, unrevoked sessions get an assistant — the chat can summarize
+    // and read the page, so it must not reach a session no share exposes.
+    if (!session || !(await sessionShared(session))) return reply(response, 404, { error: "Replay not found" });
+    try {
+      await chatManager.connect(String(url.searchParams.get("chat") ?? ""), session, response);
+    } catch (error) {
+      // connect() validates before writing the SSE head, so a failure here means
+      // nothing was streamed yet and a normal JSON reply is still safe.
+      if (!response.headersSent) reply(response, chatErrorStatus(error), { error: messageOf(error) });
+    }
+    return;
+  }
+  if (request.method !== "POST") return reply(response, 405, { error: "Method not allowed" });
+  const body = await jsonBody(request).catch(() => { throw new HttpError(400, "Request body must be valid JSON."); });
+  try {
+    if (path === "/api/chat/message" || path === "/api/chat/edit") {
+      // Turns are the paid path, so they draw on the stricter chat budget.
+      const decision = await checkRateLimit("chat", clientIp(request));
+      if (!decision.allowed) {
+        metrics.recordRateLimited();
+        response.writeHead(429, { "content-type": "application/json; charset=utf-8", "retry-after": String(decision.retryAfterSeconds) });
+        return void response.end(JSON.stringify({ error: "Too many assistant requests. Retry after a moment." }));
+      }
+      if (path === "/api/chat/edit") return reply(response, 202, await chatManager.editMessage(String(body.chat_id ?? ""), Number(body.index), String(body.text ?? "")));
+      return reply(response, 202, await chatManager.message(String(body.chat_id ?? ""), String(body.text ?? "")));
+    }
+    if (path === "/api/chat/cancel") return reply(response, 200, chatManager.cancel(String(body.chat_id ?? "")));
+    if (path === "/api/chat/tool-result") return reply(response, 200, chatManager.toolResult(String(body.chat_id ?? ""), String(body.call_id ?? ""), body.ok !== false, body.result));
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    return reply(response, chatErrorStatus(error), { error: messageOf(error) });
+  }
+  return reply(response, 404, { error: "Not found" });
+}
+
+// The manager's client-fault messages carry no status; classify them so a bad
+// request is a 4xx (not a 500 that would alarm the operator and skew metrics).
+function chatErrorStatus(error: unknown) {
+  const message = messageOf(error).toLowerCase();
+  if (/not found|was not found|is gone|no longer available/.test(message)) return 404;
+  if (/too long/.test(message)) return 413;
+  return 400;
+}
+
+function jsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+  return new Promise((resolveBody, reject) => {
+    let raw = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk: string) => {
+      raw += chunk;
+      // A chat request body is small (a chat id and a short message); anything
+      // larger is refused outright so a giant body cannot exhaust memory.
+      if (raw.length > 64 * 1024) { request.destroy(); reject(new HttpError(413, "Request body is too large.")); }
+    });
+    request.on("end", () => { try { resolveBody(raw ? JSON.parse(raw) as Record<string, unknown> : {}); } catch (error) { reject(error); } });
+    request.on("error", reject);
+  });
 }
 // summaryUrl points agents at the machine-readable form of the same link, so a
 // sharer can hand one URL to humans and another to a coding agent.

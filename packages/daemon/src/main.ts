@@ -5,8 +5,7 @@ import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promi
 import { gunzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
-import { Capture, assessReplay, exportPath, exportSession, renderSummaryText, replayHome, resolveReplayConfig, sessionsDir, sessionPath, summarizeReplay, uploadReplay, type ActionInput, type BrowserConfig, type Defect, type Hold, type Outcome, type ReplayManifest, type StartOptions } from "@replay/core";
-import { ChatManager, CHAT_TOOLS } from "./chat.js";
+import { Capture, ChatManager, CHAT_TOOLS, assessReplay, exportPath, exportSession, renderSummaryText, replayHome, resolveReplayConfig, sessionsDir, sessionPath, summarizeReplay, uploadReplay, type ActionInput, type BrowserConfig, type Defect, type Hold, type Outcome, type ReplayManifest, type StartOptions } from "@replay/core";
 
 const port = Number(process.env.REPLAY_PORT ?? 7717);
 const capture = new Capture();

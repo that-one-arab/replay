@@ -5,6 +5,8 @@ export { parseReplayToml, resolveReplayConfig } from "./config.js";
 export { uploadReplay } from "./share-client.js";
 export type { ShareUploadOptions, ShareUploadResult } from "./share-client.js";
 export { describeNode, formatTime, renderSummaryText, stepsInRange, summarizeReplay } from "./summary.js";
+export { ChatManager, CHAT_TOOLS } from "./chat.js";
+export type { ChatEvent } from "./chat.js";
 export { assessReplay, authPageFinding, isAuthPage } from "./review.js";
 export { evaluateViewportFit } from "./viewport.js";
 export type { ViewportFit, ViewportMeasurement } from "./viewport.js";
