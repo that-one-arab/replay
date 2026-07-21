@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
@@ -172,6 +172,49 @@ test("capture_highlight validates defect claims before reaching the capture", as
     const valid = await request(endpoint, "/api/sessions/highlight", { element: { text: "1 of 3 completed" }, defect: { expected: "Step 2 of 3", actual: "1 of 3 completed" }, hold: "until_ack" });
     assert.equal(valid.status, 500);
     assert.match(String(valid.body.error), /No capture is active/);
+  } finally {
+    await stop(daemon);
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("the review endpoint assesses a stopped session on disk, and latest resolves the newest", async () => {
+  const home = await mkdtemp(join(tmpdir(), "replay-daemon-review-"));
+  const port = await unusedPort();
+  const sessionId = "replay_review_test";
+  await mkdir(join(home, "sessions", sessionId), { recursive: true });
+  await writeFile(join(home, "sessions", sessionId, "manifest.json"), JSON.stringify({
+    format_version: 1,
+    id: sessionId,
+    title: "Review fixture",
+    created_at: "2026-01-01T00:00:00.000Z",
+    stopped_at: "2026-01-01T00:04:14.000Z",
+    outcome: "reproduced",
+    capture: { version: "0.1.0", rrweb: "2.0.0-alpha.20", capture_canvas: false, capture_cross_origin_iframes: false },
+    origins: ["https://app.example.com"],
+    masking: { mask_all_inputs: false, passwords: true },
+    segments: [{ id: "seg_1", page_url: "https://app.example.com/login", clock_offset_ms: 0, chunks: [] }],
+    tab_events: [],
+    markers: [{ t_ms: 1_000, label: "Submitted" }],
+    actions: [{ id: "act_1", tool: "browser_find", started_at_ms: 2_000, finished_at_ms: 2_010, ok: true }],
+    assets: [],
+  }));
+  const daemon = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], {
+    env: { ...process.env, REPLAY_HOME: home, REPLAY_PORT: String(port) },
+    stdio: "ignore",
+  });
+  const endpoint = `http://127.0.0.1:${port}`;
+  try {
+    await waitForHealth(endpoint);
+    const review = await fetch(`${endpoint}/api/sessions/${sessionId}/review`);
+    assert.equal(review.status, 200);
+    const reviewBody = await review.json() as { summary_text: string; findings: { code: string; severity: string }[] };
+    assert.match(reviewBody.summary_text, /Review fixture/, "the distilled timeline is rendered from the on-disk session");
+    assert.deepEqual(reviewBody.findings.map((finding) => finding.code), ["opens_on_auth_page", "no_resolved_defect_highlight", "discovery_noise_after_last_marker"]);
+    assert.equal(reviewBody.findings.find((finding) => finding.code === "no_resolved_defect_highlight")!.severity, "error", "a reproduced outcome escalates the defect finding");
+    const latest = await fetch(`${endpoint}/api/sessions/latest`);
+    assert.equal(latest.status, 200);
+    assert.equal((await latest.json() as { sessionId: string }).sessionId, sessionId);
   } finally {
     await stop(daemon);
     await rm(home, { recursive: true, force: true });

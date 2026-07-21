@@ -6,6 +6,15 @@ export interface Defect {
   actual: string;
 }
 
+/** A deterministic replay-quality finding. See review.ts. */
+export type ReviewFindingCode = "opens_on_auth_page" | "no_resolved_defect_highlight" | "discovery_noise_after_last_marker";
+export interface ReviewFinding {
+  code: ReviewFindingCode;
+  severity: "warn" | "error";
+  message: string;
+  hint: string;
+}
+
 /** How the player behaves when playback reaches a highlight marker. */
 export type Hold = "beat" | "until_ack" | "none";
 
@@ -135,6 +144,8 @@ export interface StopResult {
   rawDurationMs: number;
   activeDurationMs: number;
   markers: Marker[];
+  /** Replay-quality findings computed at stop (auth-start, missing defect highlight, discovery noise). */
+  reviewFindings: ReviewFinding[];
   capture: CaptureSummary;
 }
 

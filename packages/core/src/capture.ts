@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import type { Browser, BrowserContext, Frame, Page, Request as PlaywrightRequest, Response as PlaywrightResponse } from "playwright-core";
 import { chromium } from "playwright-core";
 import { SessionStore } from "./storage.js";
+import { assessReplay, authPageFinding } from "./review.js";
 import { evaluateViewportFit, type ViewportFit } from "./viewport.js";
 import type { ActionInput, BrowserStatus, Defect, Hold, Marker, NavigationEvent, ReplayManifest, StartOptions, StopResult } from "./types.js";
 
@@ -120,7 +121,7 @@ export class Capture {
       await this.captureExistingAssets(page);
       this.observePage(page);
     }
-    return { sessionId: id };
+    return { sessionId: id, startWarning: authPageFinding(readyPage.url()) };
   }
 
   async marker(label: string, note?: string, placement: Marker["placement"] = "after_previous", color?: Marker["color"]) {
@@ -215,8 +216,15 @@ export class Capture {
     }));
   }
 
-  async stop(outcome?: ReplayManifest["outcome"], notes?: string): Promise<StopResult> {
+  async stop(outcome?: ReplayManifest["outcome"], notes?: string, options: { strict?: boolean } = {}): Promise<StopResult> {
     const store = this.requireStore();
+    // Assess before finalize so a rejected outcome is never persisted, and so the
+    // capture stays active (this.store is still set below only on success) — the
+    // agent can add a defect highlight and retry stop.
+    const findings = assessReplay(store.manifest, outcome);
+    if (options.strict && outcome === "reproduced" && findings.some((finding) => finding.code === "no_resolved_defect_highlight")) {
+      throw new Error("outcome=reproduced requires a defect highlight that resolves to an element. Call capture_highlight with { element: { text }, defect: { expected, actual } } at the defect, then call capture_stop again.");
+    }
     // URL rewriting happens while flushing events. Finish any in-flight static
     // resource copies first so the final snapshot can point at the bundle.
     await Promise.all([...this.assetCaptures.values()]);
@@ -236,6 +244,7 @@ export class Capture {
       rawDurationMs: store.manifest.raw_duration_ms ?? 0,
       activeDurationMs: store.manifest.active_duration_ms ?? 0,
       markers: store.manifest.markers,
+      reviewFindings: findings,
       capture,
     };
     this.pages.clear();

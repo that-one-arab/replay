@@ -95,7 +95,7 @@ test("MCP tools make browser setup explicit and preserve ordered marker metadata
     const initialized = await client.request("initialize", { protocolVersion: "2025-03-26" });
     assert.equal(initialized.result.serverInfo.name, "replay-mcp");
     const listed = await client.request("tools/list", {});
-    assert.deepEqual(listed.result.tools.map((tool: { name: string }) => tool.name), ["capture_browser_ensure", "capture_attach_browser", "capture_start", "capture_marker", "capture_highlight", "capture_status", "capture_stop", "replay_share", "replay_overview", "replay_steps", "replay_fetch"]);
+    assert.deepEqual(listed.result.tools.map((tool: { name: string }) => tool.name), ["capture_browser_ensure", "capture_attach_browser", "capture_start", "capture_marker", "capture_highlight", "capture_status", "capture_stop", "replay_share", "replay_overview", "replay_steps", "replay_fetch", "replay_review"]);
     const noBrowser = await client.request("tools/call", { name: "capture_start", arguments: { title: "No browser" } });
     assert.equal(noBrowser.result.isError, true);
     assert.match(noBrowser.result.content[0].text, /capture_browser_ensure/);
@@ -242,6 +242,52 @@ test("embedded browser tools carry replay_marker and bind markers to actions ato
     daemon.close();
     await once(daemon, "close");
     await rm(fixtureDir, { recursive: true, force: true });
+  }
+});
+
+test("review warnings surface in tool results and replay_review reads the just-stopped session", async () => {
+  const replayHome = await mkdtemp(join(tmpdir(), "replay-mcp-review-"));
+  const daemon = createServer(async (request, response) => {
+    const path = request.url ?? "/";
+    let raw = "";
+    for await (const chunk of request) raw += chunk;
+    if (request.method === "GET" && path === "/health") return json(response, { ok: true, state: "capture", cdp_endpoint: "http://127.0.0.1:9333", managed_browser: true, browser_state: "ready", page_count: 1, navigated_page_count: 1 });
+    if (request.method === "POST" && path.startsWith("/api/leases/")) return json(response, { lease_id: "mcp-lease" }, path.endsWith("acquire") ? 201 : 200);
+    if (request.method === "POST" && path === "/api/browser/ensure") return json(response, { managed: true, launched: true, cdp_endpoint: "http://127.0.0.1:9333", browser_state: "ready" });
+    if (request.method === "POST" && path === "/api/sessions/start") return json(response, { sessionId: "replay_review_test", startWarning: { code: "opens_on_auth_page", severity: "warn", message: "Capture started on an auth/setup screen (https://app.example.com/login).", hint: "Navigate to the feature first." } });
+    if (request.method === "POST" && path === "/api/sessions/highlight") return json(response, { node_id: null });
+    if (request.method === "POST" && path === "/api/sessions/stop") return json(response, { sessionId: "replay_review_test", reviewFindings: [{ code: "no_resolved_defect_highlight", severity: "error", message: "No defect highlight resolved to an element on the page.", hint: "Call capture_highlight at the defect." }], portable_bundle: join(replayHome, "exports", "replay_review_test.replay") });
+    if (request.method === "GET" && path === "/api/sessions/latest") return json(response, { sessionId: "replay_review_test" });
+    if (request.method === "GET" && path === "/api/sessions/replay_review_test/review") return json(response, { summary_text: "Replay: Review fixture\n- [0:00] Opened the feature", findings: [{ code: "no_resolved_defect_highlight", severity: "error", message: "No defect highlight resolved.", hint: "Call capture_highlight." }] });
+    return json(response, { error: "not found" }, 404);
+  });
+  daemon.listen(0, "127.0.0.1");
+  await once(daemon, "listening");
+  const address = daemon.address();
+  if (!address || typeof address === "string") throw new Error("Fixture daemon did not expose a TCP port.");
+  const server = spawn(process.execPath, [resolve(dirname(fileURLToPath(import.meta.url)), "main.js")], { env: { ...process.env, REPLAY_HOME: replayHome, REPLAY_DAEMON_URL: `http://127.0.0.1:${address.port}`, REPLAY_EMBEDDED_PLAYWRIGHT: "0" } });
+  try {
+    const client = new McpClient(server);
+    await client.request("initialize", { protocolVersion: "2025-03-26" });
+    await client.request("tools/call", { name: "capture_browser_ensure", arguments: {} });
+    const started = await client.request("tools/call", { name: "capture_start", arguments: { title: "Review fixture" } });
+    assert.equal(started.result.content.length, 2, "the start warning is appended as a second content block");
+    assert.match(started.result.content[1].text, /opens_on_auth_page/);
+    const highlighted = await client.request("tools/call", { name: "capture_highlight", arguments: { element: { text: "1 of 3" }, defect: { expected: "Step 2 of 3", actual: "1 of 3" } } });
+    assert.equal(highlighted.result.content.length, 2, "an unresolved defect highlight appends a warning");
+    assert.match(highlighted.result.content[0].text, /"resolved": false/);
+    assert.match(highlighted.result.content[1].text, /did not resolve/);
+    const stopped = await client.request("tools/call", { name: "capture_stop", arguments: { outcome: "reproduced" } });
+    assert.equal(stopped.result.content.length, 2, "review findings are appended as warnings on stop");
+    assert.match(stopped.result.content[1].text, /no_resolved_defect_highlight/);
+    const reviewed = await client.request("tools/call", { name: "replay_review", arguments: {} });
+    assert.match(reviewed.result.content[0].text, /Review fixture/);
+    assert.match(reviewed.result.content[0].text, /no_resolved_defect_highlight/);
+  } finally {
+    server.kill();
+    daemon.close();
+    await once(daemon, "close");
+    await rm(replayHome, { recursive: true, force: true });
   }
 });
 

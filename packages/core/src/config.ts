@@ -35,10 +35,16 @@ export interface ChatConfig {
   api_key?: string;
 }
 
+export interface ReviewConfig {
+  /** When true, capture_stop refuses outcome=reproduced without a resolved defect highlight. */
+  strict: boolean;
+}
+
 export interface ResolvedReplayConfig {
   browser: BrowserConfig;
   replay: ReplayDefaults;
   chat: ChatConfig;
+  review: ReviewConfig;
   sources: string[];
   warnings: string[];
   fingerprint: string;
@@ -54,11 +60,13 @@ type PartialConfig = {
   browser?: Partial<{ headless: boolean; viewport: string; executable: string }>;
   replay?: Partial<{ idle_mode: IdleMode; idle_retained_ms: number; idle_fast_forward_speed: number; default_speed: number }>;
   chat?: Partial<{ enabled: boolean; provider: string; command: string; model: string; api_key: string }>;
+  review?: Partial<{ strict: boolean }>;
 };
 
 const DEFAULT_BROWSER: BrowserConfig = { headless: false, viewport: { width: 1280, height: 720 } };
 const DEFAULT_REPLAY: ReplayDefaults = { idle_mode: "cut", idle_retained_ms: 2_000, idle_fast_forward_speed: 8, default_speed: 1.15 };
 const DEFAULT_CHAT: ChatConfig = { enabled: true, provider: "auto", command: "codex" };
+const DEFAULT_REVIEW: ReviewConfig = { strict: false };
 
 /** Resolve Replay's small TOML configuration surface without tying it to an MCP client. */
 export async function resolveReplayConfig(options: ResolveConfigOptions = {}): Promise<ResolvedReplayConfig> {
@@ -102,8 +110,11 @@ export async function resolveReplayConfig(options: ResolveConfigOptions = {}): P
     ...(merged.chat?.model ? { model: merged.chat.model } : {}),
     ...(merged.chat?.api_key ? { api_key: merged.chat.api_key } : {}),
   };
+  const review: ReviewConfig = {
+    strict: merged.review?.strict ?? DEFAULT_REVIEW.strict,
+  };
   const fingerprint = JSON.stringify({ browser });
-  return { browser, replay, chat, sources, warnings, fingerprint };
+  return { browser, replay, chat, review, sources, warnings, fingerprint };
 }
 
 /** Kept public for unit tests and helpful config diagnostics. */
@@ -121,18 +132,20 @@ function parseToml(text: string, source: string): { value: PartialConfig; warnin
     const table = /^\[([A-Za-z0-9_-]+)\]$/.exec(line);
     if (table) {
       section = table[1]!;
-      if (section !== "browser" && section !== "replay" && section !== "chat") warnings.push(`${source}:${index + 1}: unknown table [${section}] ignored`);
+      if (section !== "browser" && section !== "replay" && section !== "chat" && section !== "review") warnings.push(`${source}:${index + 1}: unknown table [${section}] ignored`);
       continue;
     }
     const assignment = /^([A-Za-z0-9_-]+)\s*=\s*(.+)$/.exec(line);
     if (!assignment) throw new Error(`${source}:${index + 1}: expected key = value`);
-    if (section !== "browser" && section !== "replay" && section !== "chat") { warnings.push(`${source}:${index + 1}: unknown key ${assignment[1]} ignored`); continue; }
+    if (section !== "browser" && section !== "replay" && section !== "chat" && section !== "review") { warnings.push(`${source}:${index + 1}: unknown key ${assignment[1]} ignored`); continue; }
     const key = assignment[1]!;
     const known = section === "browser"
       ? ["headless", "viewport", "executable"]
       : section === "replay"
         ? ["idle_mode", "idle_retained_ms", "idle_fast_forward_speed", "default_speed"]
-        : ["enabled", "provider", "command", "model", "api_key"];
+        : section === "review"
+          ? ["strict"]
+          : ["enabled", "provider", "command", "model", "api_key"];
     if (!known.includes(key)) { warnings.push(`${source}:${index + 1}: unknown key ${section}.${key} ignored`); continue; }
     const parsed = valueOf(assignment[2]!, `${source}:${index + 1}`);
     if (section === "browser") {
@@ -145,6 +158,10 @@ function parseToml(text: string, source: string): { value: PartialConfig; warnin
       if (key === "idle_mode" && typeof parsed !== "string") throw new Error(`${source}:${index + 1}: replay.idle_mode must be a quoted string`);
       if (key !== "idle_mode" && typeof parsed !== "number") throw new Error(`${source}:${index + 1}: replay.${key} must be a number`);
       Object.assign(replay, { [key]: parsed });
+    } else if (section === "review") {
+      const review = value.review ?? (value.review = {});
+      if (key === "strict" && typeof parsed !== "boolean") throw new Error(`${source}:${index + 1}: review.strict must be true or false`);
+      Object.assign(review, { [key]: parsed });
     } else {
       const chat = value.chat ?? (value.chat = {});
       if (key === "enabled" && typeof parsed !== "boolean") throw new Error(`${source}:${index + 1}: chat.enabled must be true or false`);
@@ -159,6 +176,7 @@ function environmentConfig(env: NodeJS.ProcessEnv): PartialConfig {
   const browser: PartialConfig["browser"] = {};
   const replay: PartialConfig["replay"] = {};
   const chat: PartialConfig["chat"] = {};
+  const review: PartialConfig["review"] = {};
   if (env.REPLAY_CHAT_ENABLED !== undefined) chat.enabled = booleanValue(env.REPLAY_CHAT_ENABLED, "REPLAY_CHAT_ENABLED");
   if (env.REPLAY_CHAT_PROVIDER !== undefined) chat.provider = env.REPLAY_CHAT_PROVIDER;
   if (env.REPLAY_CHAT_COMMAND !== undefined) chat.command = env.REPLAY_CHAT_COMMAND;
@@ -171,11 +189,12 @@ function environmentConfig(env: NodeJS.ProcessEnv): PartialConfig {
   if (env.REPLAY_IDLE_RETAINED_MS !== undefined) replay.idle_retained_ms = numericValue(env.REPLAY_IDLE_RETAINED_MS, "REPLAY_IDLE_RETAINED_MS");
   if (env.REPLAY_IDLE_FAST_FORWARD_SPEED !== undefined) replay.idle_fast_forward_speed = numericValue(env.REPLAY_IDLE_FAST_FORWARD_SPEED, "REPLAY_IDLE_FAST_FORWARD_SPEED");
   if (env.REPLAY_DEFAULT_SPEED !== undefined) replay.default_speed = numericValue(env.REPLAY_DEFAULT_SPEED, "REPLAY_DEFAULT_SPEED");
-  return { browser, replay, chat };
+  if (env.REPLAY_REVIEW_STRICT !== undefined) review.strict = booleanValue(env.REPLAY_REVIEW_STRICT, "REPLAY_REVIEW_STRICT");
+  return { browser, replay, chat, review };
 }
 
 function merge(left: PartialConfig, right: PartialConfig): PartialConfig {
-  return { browser: { ...left.browser, ...right.browser }, replay: { ...left.replay, ...right.replay }, chat: { ...left.chat, ...right.chat } };
+  return { browser: { ...left.browser, ...right.browser }, replay: { ...left.replay, ...right.replay }, chat: { ...left.chat, ...right.chat }, review: { ...left.review, ...right.review } };
 }
 function valueOf(value: string, source: string): string | boolean | number {
   if (value === "true") return true;

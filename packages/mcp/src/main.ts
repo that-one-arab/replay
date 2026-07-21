@@ -166,6 +166,15 @@ const tools: JsonObject[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "replay_review",
+    description: "Review a finished local replay's quality and return its distilled step timeline plus deterministic findings (opens_on_auth_page, no_resolved_defect_highlight, discovery_noise_after_last_marker). Use this right after capture_stop to judge whether the replay you just recorded is fit to hand over; clear all findings before sharing. Defaults to the most recently stopped session.",
+    inputSchema: {
+      type: "object",
+      properties: { sessionId: { type: "string", description: "Replay ID returned by capture_stop. Omit to review the most recently stopped session." } },
+      additionalProperties: false,
+    },
+  },
 ];
 
 const captureToolNames = new Set(tools.map((tool) => String(tool.name)));
@@ -247,15 +256,16 @@ async function callTool(name: string, argumentsValue: JsonObject): Promise<JsonO
     switch (name) {
       case "capture_browser_ensure": return toolResult(await ensureBrowser(argumentsValue));
       case "capture_attach_browser": return toolResult(await attachBrowser(argumentsValue));
-      case "capture_start": return toolResult(await startCapture(argumentsValue));
+      case "capture_start": { const started = await startCapture(argumentsValue); return toolResult(started.value, started.notes); }
       case "capture_marker": return toolResult(await addMarker(argumentsValue));
-      case "capture_highlight": return toolResult(await addHighlight(argumentsValue));
+      case "capture_highlight": { const highlighted = await addHighlight(argumentsValue); return toolResult(highlighted.value, highlighted.notes); }
       case "capture_status": return toolResult(await captureStatus());
-      case "capture_stop": return toolResult(await stopCapture(argumentsValue));
+      case "capture_stop": { const stopped = await stopCapture(argumentsValue); return toolResult(stopped.value, stopped.notes); }
       case "replay_share": return toolResult(await shareReplay(argumentsValue));
       case "replay_overview": return textResult(await replayOverview(argumentsValue));
       case "replay_steps": return toolResult(await replaySteps(argumentsValue));
       case "replay_fetch": return toolResult(await fetchSharedReplay(argumentsValue));
+      case "replay_review": return textResult(await reviewReplay(argumentsValue));
       default: return await callBrowserTool(name, argumentsValue);
     }
   } catch (error) {
@@ -371,7 +381,13 @@ async function startCapture(argumentsValue: JsonObject) {
   }));
   const sessionId = requiredString(result.sessionId, "Capture session ID");
   const status = await captureStatus();
-  return { ...result, cdpEndpoint: status.cdpEndpoint, state: status.state, replayUrl: replayUrl(sessionId) };
+  const notes: string[] = [];
+  const startWarning = result.startWarning;
+  if (startWarning && typeof startWarning === "object") {
+    const finding = object(startWarning);
+    notes.push(`review warning [${finding.code}]: ${finding.message} ${finding.hint}`);
+  }
+  return { value: { ...result, cdpEndpoint: status.cdpEndpoint, state: status.state, replayUrl: replayUrl(sessionId) }, notes };
 }
 
 async function ensureBrowser(argumentsValue: JsonObject) {
@@ -420,7 +436,13 @@ async function addHighlight(argumentsValue: JsonObject) {
     ...(defect && typeof defect === "object" && !Array.isArray(defect) ? { defect: defect as JsonObject } : {}),
   }));
   const nodeId = typeof result.node_id === "number" ? result.node_id : null;
-  return { ok: true, node_id: nodeId };
+  const defectProvided = Boolean(defect && typeof defect === "object" && !Array.isArray(defect));
+  // A defect that does not resolve leaves the viewer with no ring. Surface it now
+  // so the agent retries the highlight at a better moment instead of learning at stop.
+  const notes = defectProvided && nodeId == null
+    ? ["review warning: defect highlight did not resolve to an element on the page — the viewer will see no ring. Call browser_snapshot, then retry capture_highlight with the element's current visible text."]
+    : [];
+  return { value: { ok: true, node_id: nodeId, resolved: nodeId != null }, notes };
 }
 
 async function captureStatus() {
@@ -460,14 +482,35 @@ async function stopCapture(argumentsValue: JsonObject) {
   // Older already-running daemons predate portable_bundle. Export in the MCP as
   // a compatibility fallback so an updated MCP can still publish their session.
   const portableArtifactPath = optionalString(result.portable_bundle) ?? (await exportSession(sessionId)).path;
+  const findings = Array.isArray(result.reviewFindings) ? result.reviewFindings : [];
+  const notes = findings.map((finding) => {
+    const f = object(finding);
+    return `review ${f.severity === "error" ? "error" : "warning"} [${f.code}]: ${f.message} ${f.hint}`;
+  });
   // Stopping only saves and previews locally. Sharing is an explicit follow-up
   // through replay_share or the player's Share button.
   return {
-    ...result,
-    ...(portableArtifactPath ? { portableArtifactPath } : {}),
-    replayUrl: replayUrl(sessionId),
-    shareAvailable: Boolean(configuredShareEndpoint()),
+    value: {
+      ...result,
+      ...(portableArtifactPath ? { portableArtifactPath } : {}),
+      replayUrl: replayUrl(sessionId),
+      shareAvailable: Boolean(configuredShareEndpoint()),
+    },
+    notes,
   };
+}
+
+async function reviewReplay(argumentsValue: JsonObject) {
+  await ensureDaemon();
+  const explicit = optionalString(argumentsValue.sessionId);
+  const sessionId = explicit ?? requiredString(object(await api("GET", "/api/sessions/latest")).sessionId, "Latest replay ID");
+  const review = object(await api("GET", `/api/sessions/${encodeURIComponent(sessionId)}/review`));
+  const summaryText = optionalString(review.summary_text) ?? "";
+  const findings = Array.isArray(review.findings) ? review.findings : [];
+  const header = findings.length === 0
+    ? `Replay ${sessionId}: no review findings — it opens on the feature, has a resolved defect highlight, and shows no post-marker discovery noise.`
+    : `Replay ${sessionId}: ${findings.length} review finding(s):\n${findings.map((finding) => `  - [${object(finding).code}] ${object(finding).message} ${object(finding).hint}`).join("\n")}`;
+  return `${header}\n\nDistilled timeline:\n${summaryText}`;
 }
 
 async function shareReplay(argumentsValue: JsonObject) {
@@ -643,8 +686,10 @@ async function api(method: string, path: string, body?: unknown, ensure = true):
   return parsed;
 }
 
-function toolResult(value: JsonObject): JsonObject {
-  return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
+function toolResult(value: JsonObject, notes: string[] = []): JsonObject {
+  const content: Json[] = [{ type: "text", text: JSON.stringify(value, null, 2) }];
+  for (const note of notes) content.push({ type: "text", text: note });
+  return { content };
 }
 
 function textResult(text: string): JsonObject {

@@ -42,6 +42,11 @@ fumbles (a wrong click on a now-known path), stop, re-navigate to the start, and
 redo the whole performance pass — do not try to patch or narrate over the
 mistake.
 
+The performance pass must start on the feature, not on the login or setup flow
+that got you there — capture the bug, not the sign-in. `capture_start` warns
+when it sees an auth/setup page; treat that warning as "navigate to the feature
+first." Login belongs to discovery; the artifact opens on the reproduction.
+
 ## Point at the defect with capture_highlight
 
 At the decisive moment, call `capture_highlight` to pin the viewer's attention to
@@ -72,6 +77,14 @@ milestone, and marking both a failed attempt and its retry creates duplicate
 chapters. If an action fails, re-snapshot, retry it, and mark the successful
 retry. Do not re-perform and re-mark setup steps you have already completed.
 
+A defect highlight must *resolve* — `capture_highlight` warns if the element was
+not found on the page, in which case the viewer sees no ring. Re-snapshot and
+retry it with the element's current visible text until it resolves. For a bug
+reproduction, a resolved defect highlight is mandatory: `capture_stop` with
+`outcome=reproduced` requires one (and in strict mode refuses to stop without
+it). Put the highlight at the observable defect — the wrong toast, the silent
+button, the missing value — not at your own keystroke that set it up.
+
 ## Start, stop, and share
 
 1. Navigate and inspect the target page with the `browser_*` tools. Replay's
@@ -99,6 +112,33 @@ bug, the performance pass must be self-contained: include every step the user
 needs to follow to trigger it, in order, from a known starting point through the
 failure itself — no skipped setup, no assumed prior state. Someone who follows
 the captured steps should hit the same bug every time.
+
+## Review your own replay before handing it over
+
+You are the last check on the artifact you just recorded. Right after
+`capture_stop`, call `replay_review` (it defaults to the session you just
+stopped). It returns the replay's distilled timeline plus deterministic findings.
+Read both and judge whether the replay is fit to hand over.
+
+Clear every finding before sharing. The three findings are the failures that
+make a replay useless to a viewer:
+
+- `opens_on_auth_page` — the replay opens on a login/setup screen. Discovery was
+  captured, not performed. Re-record starting from the feature page.
+- `no_resolved_defect_highlight` — no defect highlight resolved to an element,
+  so the viewer never sees what is wrong. Drop a `capture_highlight` at the
+  observable defect (with `defect: { expected, actual }`) until it resolves,
+  then re-record so the highlight lands in a clean pass.
+- `discovery_noise_after_last_marker` — after your final marker the capture
+  still shows inspection (`browser_find`, screenshots, network reads), meaning
+  you were still hunting for the bug inside the recording. Re-record a
+  performance pass that contains only deliberate steps.
+
+`capture_stop` already returns these same findings as warnings; `replay_review`
+gives you the full timeline to confirm. If any finding is present, **do not hand
+the link to the user** — re-record a clean performance pass rather than narrate
+over the problem. The review is your own judgment; treat the findings as
+mandatory to clear for a bug reproduction.
 
 If `capture_start` reports no page, navigate with the `browser_*` tools and
 retry. If a replay is empty, redo it as a fresh session and confirm the browser

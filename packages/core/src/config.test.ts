@@ -28,3 +28,21 @@ test("reports unknown keys and rejects invalid configuration values", async () =
   assert.match(parsed.warnings[0]!, /unknown key replay\.unknown/);
   assert.throws(() => parseReplayToml("[browser]\nheadless = \"yes\"\n", "fixture.toml"), /headless must be true or false/);
 });
+
+test("review.strict defaults off and parses from TOML, env, and rejects non-booleans", async () => {
+  const root = await mkdtemp(join(tmpdir(), "replay-config-review-"));
+  const home = join(root, "home");
+  try {
+    await mkdir(home, { recursive: true });
+    const defaulted = await resolveReplayConfig({ home, env: {} });
+    assert.equal(defaulted.review.strict, false);
+    await writeFile(join(home, "config.toml"), "[review]\nstrict = true\n");
+    const fromToml = await resolveReplayConfig({ home, env: {} });
+    assert.equal(fromToml.review.strict, true);
+    const fromEnv = await resolveReplayConfig({ home: join(root, "empty"), cwd: join(root, "empty"), env: { REPLAY_REVIEW_STRICT: "true" } });
+    assert.equal(fromEnv.review.strict, true);
+    assert.throws(() => parseReplayToml("[review]\nstrict = \"yes\"\n", "fixture.toml"), /review\.strict must be true or false/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

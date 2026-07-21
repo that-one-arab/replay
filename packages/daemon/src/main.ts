@@ -5,7 +5,7 @@ import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
-import { Capture, exportPath, exportSession, replayHome, resolveReplayConfig, sessionsDir, sessionPath, uploadReplay, type ActionInput, type BrowserConfig, type Defect, type Hold, type Outcome, type ReplayManifest, type StartOptions } from "@replay/core";
+import { Capture, assessReplay, exportPath, exportSession, renderSummaryText, replayHome, resolveReplayConfig, sessionsDir, sessionPath, summarizeReplay, uploadReplay, type ActionInput, type BrowserConfig, type Defect, type Hold, type Outcome, type ReplayManifest, type StartOptions } from "@replay/core";
 import { ChatManager, CHAT_TOOLS } from "./chat.js";
 
 const port = Number(process.env.REPLAY_PORT ?? 7717);
@@ -72,7 +72,8 @@ async function route(request: IncomingMessage, response: ServerResponse) {
     return reply(response, 200, await capture.action(actionInput(body)));
   }
   if (request.method === "POST" && url.pathname === "/api/sessions/stop") {
-    const stopped = await capture.stop(outcomeOf(body?.outcome), optionalString(body?.notes));
+    const { review } = await resolveReplayConfig();
+    const stopped = await capture.stop(outcomeOf(body?.outcome), optionalString(body?.notes), { strict: review.strict });
     const portable = await exportSession(stopped.sessionId);
     return reply(response, 200, { ...stopped, portable_bundle: portable.path, portable_bundle_bytes: portable.bytes });
   }
@@ -92,6 +93,9 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   }
   if (request.method === "GET" && url.pathname === "/api/sessions/status") return reply(response, 200, capture.status());
   if (request.method === "GET" && url.pathname === "/api/sessions") return reply(response, 200, await listSessions());
+  if (request.method === "GET" && url.pathname === "/api/sessions/latest") return reply(response, 200, await latestSession());
+  const reviewMatch = /^\/api\/sessions\/([^/]+)\/review$/.exec(url.pathname);
+  if (request.method === "GET" && reviewMatch) return reply(response, 200, await reviewSession(decodeURIComponent(reviewMatch[1]!)));
   const shareSession = /^\/api\/sessions\/([^/]+)\/share$/.exec(url.pathname);
   if (request.method === "POST" && shareSession) return reply(response, 200, await shareReplay(decodeURIComponent(shareSession[1]!)));
   const replay = /^\/api\/sessions\/([^/]+)\/(manifest|events)$/.exec(url.pathname);
@@ -465,6 +469,32 @@ async function listSessions() {
     try { return JSON.parse(await readFile(join(sessionsDir(), entry.name, "manifest.json"), "utf8")) as ReplayManifest; } catch { return undefined; }
   }));
   return manifests.filter(Boolean).sort((a, b) => Date.parse(b!.created_at) - Date.parse(a!.created_at));
+}
+
+async function latestSession() {
+  const sessions = await listSessions();
+  const latest = [...sessions].sort((a, b) => Date.parse(b!.stopped_at ?? b!.created_at) - Date.parse(a!.stopped_at ?? a!.created_at))[0];
+  if (!latest) throw new Error("No captured replays were found.");
+  return { sessionId: latest.id };
+}
+
+// Headless replay-quality review: distill the on-disk timeline and run the
+// deterministic assessment. No player and no browser required.
+async function reviewSession(id: string) {
+  const root = sessionPath(id);
+  if (!existsSync(root)) throw new Error(`Replay ${id} was not found.`);
+  const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as ReplayManifest;
+  const eventsBySegment = new Map<string, unknown[]>();
+  for (const segment of manifest.segments) {
+    const events: unknown[] = [];
+    for (const chunk of segment.chunks) {
+      const text = gunzipSync(await readFile(join(root, chunk))).toString("utf8");
+      for (const line of text.trim().split("\n")) if (line) events.push((JSON.parse(line) as { event: unknown }).event);
+    }
+    eventsBySegment.set(segment.id, events);
+  }
+  const summary = summarizeReplay(manifest, eventsBySegment);
+  return { summary_text: renderSummaryText(summary), findings: assessReplay(manifest) };
 }
 
 async function serveReplay(response: ServerResponse, id: string, resource: string, selected: string | null) {
