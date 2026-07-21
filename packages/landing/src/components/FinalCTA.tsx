@@ -1,6 +1,11 @@
+import { useState } from "react";
 import { motion } from "framer-motion";
 import { Button, Tag } from "./primitives";
-import { ArrowRight, Bolt, Github } from "./icons";
+import { Bolt, Check, Github, Terminal } from "./icons";
+
+/** Live one-line installer. For a Codex user it prints the `codex mcp add` snippet. */
+const INSTALL_COMMAND =
+  "curl -fsSL https://raw.githubusercontent.com/that-one-arab/replay/main/install.sh | sh";
 
 export function FinalCTA() {
   return (
@@ -34,10 +39,8 @@ export function FinalCTA() {
               shareable replay link — dead air already cut.
             </p>
 
-            <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
-              <Button href="#" icon={<ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />}>
-                Install for Codex
-              </Button>
+            <div className="mt-9 flex flex-col items-center gap-5">
+              <InstallCommand />
               <Button href="https://github.com/that-one-arab/replay" variant="ghost" icon={<Github className="h-4 w-4" />}>
                 Star on GitHub
               </Button>
@@ -50,5 +53,48 @@ export function FinalCTA() {
         </motion.div>
       </div>
     </section>
+  );
+}
+
+function InstallCommand() {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(INSTALL_COMMAND);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard API unavailable (non-secure context / unsupported) — fail silently.
+    }
+  }
+
+  return (
+    <div className="w-full max-w-3xl">
+      <div className="flex items-center justify-center gap-2 text-xs text-white/45">
+        <Terminal className="h-4 w-4" /> Install for Codex
+      </div>
+      <div className="mt-3 flex items-center gap-3 rounded-2xl border border-white/10 bg-ink-950/80 px-4 py-3 text-left shadow-2xl ring-1 ring-inset ring-white/5">
+        <span className="select-none font-mono text-[13px] text-emerald-400">$</span>
+        <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-[13px] text-white/85 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {INSTALL_COMMAND}
+        </code>
+        <button
+          type="button"
+          onClick={handleCopy}
+          aria-label="Copy install command"
+          className="flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs font-medium text-white/70 transition hover:border-white/20 hover:bg-white/10 hover:text-white active:scale-95"
+        >
+          {copied ? (
+            <>
+              <Check className="h-3.5 w-3.5 text-emerald-400" />
+              Copied
+            </>
+          ) : (
+            "Copy"
+          )}
+        </button>
+      </div>
+    </div>
   );
 }
