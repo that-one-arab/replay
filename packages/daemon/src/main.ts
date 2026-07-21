@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createReadStream, existsSync } from "node:fs";
-import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
@@ -100,6 +100,8 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   if (request.method === "POST" && shareSession) return reply(response, 200, await shareReplay(decodeURIComponent(shareSession[1]!)));
   const replay = /^\/api\/sessions\/([^/]+)\/(manifest|events)$/.exec(url.pathname);
   if (request.method === "GET" && replay) return serveReplay(response, decodeURIComponent(replay[1]), replay[2], url.searchParams.get("segment"));
+  const replayBundle = /^\/api\/sessions\/([^/]+)\/bundle$/.exec(url.pathname);
+  if (request.method === "GET" && replayBundle) return serveSessionBundle(response, decodeURIComponent(replayBundle[1]!));
   const capturedAsset = /^\/api\/sessions\/([^/]+)\/assets\/([a-f0-9]{64})$/.exec(url.pathname);
   if (request.method === "GET" && capturedAsset) return serveCapturedAsset(response, decodeURIComponent(capturedAsset[1]), capturedAsset[2]);
   if (request.method === "GET" && url.pathname.startsWith("/assets/")) return serveAsset(response, url.pathname);
@@ -507,6 +509,17 @@ async function serveReplay(response: ServerResponse, id: string, resource: strin
     for (const line of text.trim().split("\n")) if (line) events.push(JSON.parse(line).event);
   }
   reply(response, 200, events);
+}
+
+// Download the portable `.replay` for a local session so a viewer can export
+// it straight from the player. stop already exported the artifact; reuse it
+// (exportSession writes exclusively and would fail on a second export).
+async function serveSessionBundle(response: ServerResponse, id: string) {
+  if (!existsSync(sessionPath(id))) return reply(response, 404, { error: `Replay ${id} was not found.` });
+  const path = existsSync(exportPath(id)) ? exportPath(id) : (await exportSession(id)).path;
+  const { size } = await stat(path);
+  response.writeHead(200, { "content-type": "application/vnd.replay", "content-length": size, "content-disposition": `attachment; filename="replay-${id}.replay"`, "cache-control": "no-store" });
+  createReadStream(path).pipe(response);
 }
 
 async function serveCapturedAsset(response: ServerResponse, sessionId: string, assetId: string) {

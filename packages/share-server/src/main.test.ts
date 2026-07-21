@@ -89,6 +89,14 @@ test("uploads a portable artifact and serves its replay data", async () => {
     assert.equal(bundle.headers.get("content-type"), "application/vnd.replay");
     const bundleBytes = Buffer.from(await bundle.arrayBuffer());
     assert.ok(bundleBytes.byteLength > 2 && bundleBytes[0] === 0x1f && bundleBytes[1] === 0x8b, "bundle should be a gzipped .replay artifact");
+    // The player addresses the same download by (public) session id so a viewer
+    // can re-export the replay straight from the Download control.
+    const sessionBundle = await fetch(`${endpoint}/api/sessions/replay_share_fixture/bundle`);
+    assert.equal(sessionBundle.status, 200);
+    assert.equal(sessionBundle.headers.get("content-type"), "application/vnd.replay");
+    assert.match(sessionBundle.headers.get("content-disposition") ?? "", /attachment; filename="replay-replay_share_fixture\.replay"/);
+    assert.deepEqual(Buffer.from(await sessionBundle.arrayBuffer()), bundleBytes);
+    assert.equal((await fetch(`${endpoint}/api/sessions/never-shared/bundle`)).status, 404);
     // Revoking a share kills the link everywhere — player redirect, summaries,
     // query API, and the session data routes the player depends on — and a
     // later re-upload mints a fresh share instead of resurrecting the dead one.
@@ -100,6 +108,7 @@ test("uploads a portable artifact and serves its replay data", async () => {
     assert.equal((await fetch(handoff.summaryUrl)).status, 404);
     assert.equal((await fetch(`${endpoint}/v1/replays/${handoff.shareId}/summary`)).status, 404);
     assert.equal((await fetch(`${endpoint}/api/sessions/replay_share_fixture/manifest`)).status, 404);
+    assert.equal((await fetch(`${endpoint}/api/sessions/replay_share_fixture/bundle`)).status, 404);
     const reissued = await fetch(`${endpoint}/v1/replays`, { method: "POST", body: await readFile(artifact) });
     assert.equal(reissued.status, 201);
     const fresh = await reissued.json() as { shareId: string };

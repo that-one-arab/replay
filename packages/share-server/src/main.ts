@@ -83,6 +83,8 @@ async function route(request: IncomingMessage, response: ServerResponse, url: UR
   if (request.method === "GET" && shareQuery) return serveShareQuery(response, shareQuery[1]!, shareQuery[2]!, url.searchParams);
   const replay = /^\/api\/sessions\/([^/]+)\/(manifest|events)$/.exec(url.pathname);
   if (request.method === "GET" && replay) return serveReplay(response, decodeURIComponent(replay[1]), replay[2], url.searchParams.get("segment"));
+  const replayBundle = /^\/api\/sessions\/([^/]+)\/bundle$/.exec(url.pathname);
+  if (request.method === "GET" && replayBundle) return serveSessionBundle(response, decodeURIComponent(replayBundle[1]!));
   const asset = /^\/api\/sessions\/([^/]+)\/assets\/([a-f0-9]{64})$/.exec(url.pathname);
   if (request.method === "GET" && asset) return serveCapturedAsset(response, decodeURIComponent(asset[1]), asset[2]);
   if (request.method === "GET" && url.pathname.startsWith("/assets/")) return servePlayerAsset(response, url.pathname);
@@ -200,14 +202,28 @@ async function serveShareQuery(response: ServerResponse, shareId: string, resour
 }
 
 async function serveBundle(response: ServerResponse, share: Share) {
+  await streamBundle(response, share.session_id, `replay-${share.id}.replay`);
+}
+
+// Download the portable `.replay` for a shared session. The hosted player
+// addresses a replay by its (public) session id — the same id already exposed
+// in the /replay?id= link — so this route mirrors the manifest/events routes
+// rather than the share-id-keyed query API, and lets a viewer re-export the
+// artifact to upload elsewhere.
+async function serveSessionBundle(response: ServerResponse, id: string) {
+  if (!(await sessionShared(id))) return reply(response, 404, { error: "Replay not found" });
+  await streamBundle(response, id, `replay-${id}.replay`);
+}
+
+async function streamBundle(response: ServerResponse, sessionId: string, filename: string) {
   // The uploaded artifact is deleted after import, so the bundle is re-exported
   // on demand into the spool's exports directory and reused afterwards
   // (exportSession writes exclusively and would fail on a second export).
-  const path = existsSync(exportPath(share.session_id)) ? exportPath(share.session_id) : (await exportSession(share.session_id)).path;
+  const path = existsSync(exportPath(sessionId)) ? exportPath(sessionId) : (await exportSession(sessionId)).path;
   const { size } = await stat(path);
   // no-store keeps revocation meaningful: a cached copy on a shared proxy
   // would outlive the share row.
-  response.writeHead(200, { "content-type": "application/vnd.replay", "content-length": size, "content-disposition": `attachment; filename="replay-${share.id}.replay"`, "cache-control": "no-store" });
+  response.writeHead(200, { "content-type": "application/vnd.replay", "content-length": size, "content-disposition": `attachment; filename="${filename}"`, "cache-control": "no-store" });
   createReadStream(path).pipe(response);
 }
 
