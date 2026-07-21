@@ -22,7 +22,7 @@
 set -eu
 
 GITHUB="${REPLAY_GITHUB:-that-one-arab/replay}"
-VERSION="${REPLAY_VERSION:-0.2.3}"
+VERSION="${REPLAY_VERSION:-0.3.0}"
 REPLAY_HOME="${REPLAY_HOME:-$HOME/.replay}"
 PLATFORM="darwin-arm64"
 ARCHIVE="replay-$VERSION-$PLATFORM.tar.gz"

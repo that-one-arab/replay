@@ -1,7 +1,7 @@
 {
   "name": "replay",
   "private": true,
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Local, DOM-based browser session replay for agent-driven sessions.",
   "scripts": {
     "build": "tsc -p packages/core/tsconfig.json && tsc -p packages/daemon/tsconfig.json && tsc -p packages/cli/tsconfig.json && tsc -p packages/mcp/tsconfig.json && tsc -p packages/playwright-launcher/tsconfig.json && tsc -p packages/demo/tsconfig.json && tsc -p packages/player/tsconfig.json && tsc -p packages/player/tsconfig.test.json && tsc -p packages/share-server/tsconfig.json && cd packages/player && ./node_modules/.bin/vite build",

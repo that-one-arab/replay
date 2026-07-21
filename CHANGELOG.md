@@ -5,6 +5,8 @@ is immutable and is named `replay-<version>-darwin-arm64.tar.gz`.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-22
+
 - Make share links agent-readable (phase 4B, layer 1): `GET /r/<id>.md`
   returns a prompt-ready markdown summary of the shared replay (timeline,
   markers, agent actions with failures highlighted), `GET /r/<id>.json`
