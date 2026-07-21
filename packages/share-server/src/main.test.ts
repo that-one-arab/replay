@@ -151,6 +151,59 @@ test("uploads a portable artifact and serves its replay data", async () => {
   }
 });
 
+test("seeds a pinned demo on boot and serves it at /demo, re-seeding after a wipe", async () => {
+  const source = await mkdtemp(join(tmpdir(), "replay-share-demo-src-"));
+  const data = await mkdtemp(join(tmpdir(), "replay-share-demo-data-"));
+  const previousHome = process.env.REPLAY_HOME;
+  const port = await unusedPort();
+  const endpoint = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | undefined;
+  try {
+    // Build a demo bundle the same way a captured replay is exported, then point
+    // the server at it explicitly (the default path is relative to cwd).
+    process.env.REPLAY_HOME = source;
+    const store = await SessionStore.create({
+      format_version: 1, id: "replay_demo_fixture", title: "Pinned demo", created_at: new Date().toISOString(),
+      capture: { version: "test", rrweb: "test", capture_canvas: false, capture_cross_origin_iframes: false }, origins: ["http://fixture.test"], masking: { mask_all_inputs: false, passwords: true }, segments: [], tab_events: [], markers: [], assets: [],
+    });
+    store.segment("seg_1", "http://fixture.test", 0);
+    await store.append("seg_1", [{ type: 2, timestamp: 1 }, { type: 3, timestamp: 2 }], Date.now());
+    await store.finalize();
+    const bundle = join(source, "demo.replay");
+    await exportSession("replay_demo_fixture", bundle);
+    const env = { ...process.env, PORT: String(port), REPLAY_SHARE_DATA_DIR: data, REPLAY_SHARE_PUBLIC_URL: endpoint, REPLAY_SHARE_DEMO_BUNDLE: bundle };
+
+    server = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], { env, stdio: "ignore" });
+    await waitForHealth(endpoint);
+    // /demo redirects to the player for the seeded session, and the session's
+    // data routes are served because seeding registered a live share for it.
+    const redirect = await fetch(`${endpoint}/demo`, { redirect: "manual" });
+    assert.equal(redirect.status, 302);
+    assert.equal(redirect.headers.get("location"), "/replay?id=replay_demo_fixture");
+    const manifest = await fetch(`${endpoint}/api/sessions/replay_demo_fixture/manifest`);
+    assert.equal(manifest.status, 200);
+    assert.equal((await manifest.json() as { title: string }).title, "Pinned demo");
+    await stop(server);
+
+    // A wiped disk (fresh deploy, no volume) must not lose the demo: re-seeding on
+    // the next boot restores both the session and its share.
+    await rm(join(data, "spool"), { recursive: true, force: true });
+    await rm(join(data, "shares.json"), { force: true });
+    server = spawn(process.execPath, [new URL("./main.js", import.meta.url).pathname], { env, stdio: "ignore" });
+    await waitForHealth(endpoint);
+    const healed = await fetch(`${endpoint}/demo`, { redirect: "manual" });
+    assert.equal(healed.status, 302);
+    assert.equal(healed.headers.get("location"), "/replay?id=replay_demo_fixture");
+    assert.equal((await fetch(`${endpoint}/api/sessions/replay_demo_fixture/manifest`)).status, 200);
+  } finally {
+    if (server) await stop(server);
+    if (previousHome === undefined) delete process.env.REPLAY_HOME;
+    else process.env.REPLAY_HOME = previousHome;
+    await rm(source, { recursive: true, force: true });
+    await rm(data, { recursive: true, force: true });
+  }
+});
+
 test("maps client faults to their own status instead of a blanket 500", async () => {
   const data = await mkdtemp(join(tmpdir(), "replay-share-faults-"));
   const previousHome = process.env.REPLAY_HOME;

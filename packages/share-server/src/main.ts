@@ -15,6 +15,11 @@ const dataDir = resolve(process.env.REPLAY_SHARE_DATA_DIR ?? "./.replay-share");
 process.env.REPLAY_HOME = join(dataDir, "spool");
 const uploadsDir = join(dataDir, "uploads");
 const sharesPath = join(dataDir, "shares.json");
+// A demo replay that must always be reachable at /demo. The bundle is committed
+// to the repo and re-seeded into the spool on every boot, so a fresh deploy (or
+// a wiped disk) never loses it. Defaults to the committed path relative to the
+// server's working directory (the repo root, same convention servePlayer uses).
+const demoBundlePath = resolve(process.env.REPLAY_SHARE_DEMO_BUNDLE ?? "packages/share-server/demo/save20-coupon.replay");
 const maxUploadBytes = Number(process.env.REPLAY_SHARE_MAX_UPLOAD_BYTES ?? 50 * 1024 * 1024);
 const releasesDir = resolve(process.env.REPLAY_RELEASE_DIR ?? join(dataDir, "releases"));
 const releasesPath = join(releasesDir, "index.json");
@@ -62,7 +67,47 @@ const server = createServer((request, response) => {
     if (!response.headersSent) reply(response, status, { error: messageOf(error) });
   });
 });
-server.listen(port, "0.0.0.0", () => logger.info({ port, data_dir: dataDir }, "replay share server listening"));
+// The pinned demo's session id, resolved once the bundle is imported. The /demo
+// route redirects to it; it stays undefined when no demo bundle is configured.
+let demoSessionId: string | undefined;
+
+// Seed the pinned demo before accepting traffic so /demo resolves on the first
+// request. Seeding is best-effort: a missing or unreadable bundle logs and is
+// skipped rather than blocking startup.
+async function start() {
+  await seedDemo().catch((error: unknown) => logger.error({ err: messageOf(error) }, "demo seed failed"));
+  server.listen(port, "0.0.0.0", () => logger.info({ port, data_dir: dataDir, demo: demoSessionId ?? null }, "replay share server listening"));
+}
+void start();
+
+// Import the committed demo bundle into the spool (idempotent) and guarantee a
+// live share row points at it, so every session data route the player relies on
+// treats the demo as shared. Re-creates the share row if it was deleted and
+// un-revokes it if it was revoked — the demo is always live.
+async function seedDemo() {
+  if (!existsSync(demoBundlePath)) return;
+  const imported = await importSession(demoBundlePath, { reuseExisting: true });
+  demoSessionId = imported.sessionId;
+  const shares = await readShares();
+  const existing = shares.find((entry) => entry.session_id === imported.sessionId);
+  if (!existing) {
+    const manifest = await readManifest(imported.sessionId);
+    shares.push({ id: randomBytes(12).toString("hex"), session_id: imported.sessionId, title: manifest.title, created_at: new Date().toISOString(), bytes: (await stat(demoBundlePath)).size });
+    await writeShares(shares);
+  } else if (existing.revoked) {
+    delete existing.revoked;
+    await writeShares(shares);
+  }
+}
+
+// The pinned demo: a stable, human-friendly link that always serves the seeded
+// replay. Mirrors the browser branch of serveShare (302 to the player), but is
+// keyed by a fixed path instead of a minted share id.
+async function serveDemo(response: ServerResponse) {
+  if (!demoSessionId || !(await sessionShared(demoSessionId))) return reply(response, 404, { error: "Demo replay is not available." });
+  response.writeHead(302, { location: `/replay?id=${encodeURIComponent(demoSessionId)}`, "cache-control": "no-store" });
+  response.end();
+}
 
 // Gate every request behind the per-IP rate limiter before routing. Health is
 // exempt so uptime probes never consume a client's budget.
@@ -91,6 +136,7 @@ async function route(request: IncomingMessage, response: ServerResponse, url: UR
   if (request.method === "GET" && releaseMetadata) return releaseByVersion(response, origin, releaseMetadata[1]!, url.searchParams.get("platform"));
   const releaseArchive = /^\/v1\/releases\/(replay-[0-9]+\.[0-9]+\.[0-9]+-darwin-arm64\.tar\.gz)$/.exec(url.pathname);
   if (request.method === "GET" && releaseArchive) return serveRelease(response, releaseArchive[1]);
+  if (request.method === "GET" && url.pathname === "/demo") return serveDemo(response);
   const shared = /^\/r\/([a-f0-9]{24})(?:\.(md|json))?$/.exec(url.pathname);
   if (request.method === "GET" && shared) return serveShare(request, response, shared[1]!, shared[2], origin);
   const shareQuery = /^\/v1\/replays\/([a-f0-9]{24})\/(summary|steps|actions|markers|bundle)$/.exec(url.pathname);
