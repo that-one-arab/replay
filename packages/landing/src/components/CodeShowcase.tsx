@@ -91,7 +91,7 @@ export function CodeShowcase() {
                 >
                   <Link className="h-4 w-4 shrink-0 text-emerald-300" />
                   <span className="truncate text-emerald-100">
-                    https://replay.sh/r/8f3a-coupon-repro
+                    https://share.replaythis.io/r/8f3a1b2c3d4e5f6a7b8c9d0e
                   </span>
                   <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-emerald-300" />
                 </motion.div>
