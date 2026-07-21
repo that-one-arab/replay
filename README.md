@@ -12,17 +12,22 @@ Replay server — you never touch Chrome, ports, or capture config.
 
 ## Install
 
-**Codex** — install **Replay browser replays** from the marketplace. Done.
-
-**Claude Code & other MCP agents** (bundles its own Node — no Node.js needed):
+Install the runtime (bundles its own Node — no Node.js needed):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/that-one-arab/replay/main/install.sh | sh
 ```
 
-For Claude Code the installer also wires up the MCP server and a
-`/replay-browser-capture` skill. Pin a version with `REPLAY_VERSION=0.2.3`;
-install elsewhere with `REPLAY_HOME`.
+**Claude Code & other MCP agents** — the installer also wires up the MCP server
+and a `/replay-browser-capture` skill automatically.
+
+**Codex** — after installing, register the MCP server:
+
+```sh
+codex mcp add replay --env REPLAY_SHARE_URL=https://share.replaythis.io -- ~/.replay/runtimes/current/bin/replay-mcp
+```
+
+Pin a version with `REPLAY_VERSION=0.3.0`; install elsewhere with `REPLAY_HOME`.
 
 ## Quickstart
 
@@ -47,6 +52,9 @@ but the total never changes.
 > tools, drop a `replay_marker` when you apply the coupon, and return the
 > replay link.
 
+Just want to see the player? Inspect a finished replay of this bug at
+<https://share.replaythis.io/demo>.
+
 ## What you get back
 
 - One browser-session timeline — tabs, focus changes, navigations, DOM events,
@@ -68,7 +76,7 @@ Passwords are masked. Replays exclude scripts, API responses, and assets over
 
 ## Uninstall
 
-- **Codex:** `codex plugin remove replay-mcp@replay`
+- **Codex:** `codex mcp remove replay`
 - **Claude Code:** `claude mcp remove replay` and
   `rm -rf "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/replay-browser-capture"`
 - Reclaim disk: `rm -rf ~/.replay`
