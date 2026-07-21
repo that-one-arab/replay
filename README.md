@@ -1,3 +1,6 @@
+<img width="1480" height="915" alt="SCR-20260722-ceqq" src="https://github.com/user-attachments/assets/1e21bf56-b7ea-40fc-8bfe-b0fae379d5a8" />
+
+
 # Replay
 
 A coding agent captures the browser session it uses to reproduce or verify a
