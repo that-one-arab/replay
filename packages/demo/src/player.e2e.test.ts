@@ -119,6 +119,32 @@ test("replay controls show progress, accept keyboard input, restart, and skip in
   }
 });
 
+test("the address bar shows the current page URL and is selectable for copying", { skip: !chrome }, async () => {
+  const server = createFixtureServer();
+  await new Promise<void>((resolveListen, reject) => server.listen(0, "127.0.0.1", () => resolveListen()).on("error", reject));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Fixture server did not expose a TCP port.");
+  const origin = `http://127.0.0.1:${address.port}`;
+  let browser: Browser | undefined;
+  try {
+    browser = await chromium.launch({ headless: true, executablePath: chrome });
+    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    await page.addInitScript(() => { try { localStorage.setItem("replay-onboarding-seen", "1"); } catch { /* storage blocked */ } });
+    await page.goto(`${origin}/replay?id=fixture`, { waitUntil: "networkidle" });
+    const bar = page.locator("#address-bar");
+    await bar.waitFor();
+    // The fixture's single tab lives at http://fixture/, which the address bar mirrors.
+    assert.equal(await bar.textContent(), "http://fixture/");
+    assert.equal(await bar.evaluate((node) => getComputedStyle(node).userSelect), "all", "the address bar is selectable, not pointer-disabled");
+    // A double-click (the copy gesture the viewer uses) selects the whole URL.
+    await bar.click({ clickCount: 2 });
+    assert.equal(await page.evaluate(() => window.getSelection()?.toString() ?? ""), "http://fixture/");
+  } finally {
+    await browser?.close();
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+  }
+});
+
 test("the first-run spotlight tour orients a new viewer, then dismisses for good", { skip: !chrome }, async () => {
   const server = createFixtureServer();
   await new Promise<void>((resolveListen, reject) => server.listen(0, "127.0.0.1", () => resolveListen()).on("error", reject));
