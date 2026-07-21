@@ -161,7 +161,9 @@ body.chat-open #app { width: calc(100% - 404px); }
 .segment-picker .segment-tab span { color: #b5aaff; }
 .segment-picker .segment-tab.selected { color: #171720; background: #f5f4fa; }
 
-/* Live page address — a read-only chip tracking the playhead's current URL */
+/* Live page address — tracks the playhead's current URL. Selectable so a click
+   (or double-click) highlights the whole link for copying; the idle wake on
+   pointer movement keeps it visible while the viewer selects it. */
 .address-bar {
   position: absolute;
   z-index: 4;
@@ -180,7 +182,8 @@ body.chat-open #app { width: calc(100% - 404px); }
   text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
-  pointer-events: none;
+  cursor: text;
+  user-select: all;
 }
 .replay-screen.is-idle .address-bar { opacity: 0; }
 
@@ -300,13 +303,29 @@ body.chat-open #app { width: calc(100% - 404px); }
 }
 .session-hint { margin: 26px 0 0; color: rgba(255, 255, 255, .5); font-size: 12px; }
 .session-saved {
-  margin: 14px auto 0;
-  max-width: 480px;
-  color: rgba(255, 255, 255, .66);
-  font: 12px "DM Mono";
-  letter-spacing: .02em;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0 0;
+  padding: 8px 14px 8px 12px;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, .82);
+  background: rgba(126, 227, 180, .12);
+  border: 1px solid rgba(126, 227, 180, .3);
+  box-shadow: 0 0 22px rgba(126, 227, 180, .14);
+  font: 600 13px/1 "Manrope";
 }
-.session-saved b { color: #7ee3b4; font-weight: 700; }
+.session-saved svg { width: 14px; height: 14px; fill: #7ee3b4; }
+.session-saved b { color: #9affc4; font-weight: 800; font-variant-numeric: tabular-nums; }
+/* Celebratory pop-in: the badge springs in a beat after the end-card fades up,
+   so the reward lands as a small "ta-da" rather than appearing flat. Gated on
+   is-visible so it plays when the end-card is shown, not when the shell mounts. */
+.session-overlay.is-visible .session-saved { animation: session-saved-in .5s cubic-bezier(.2, .7, .35, 1) both; animation-delay: .14s; }
+@keyframes session-saved-in {
+  0% { opacity: 0; transform: translateY(6px) scale(.94); }
+  55% { opacity: 1; transform: translateY(0) scale(1.04); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
 .session-notes {
   display: -webkit-box;
   margin: 16px auto 0;
@@ -464,6 +483,9 @@ body.chat-open #app { width: calc(100% - 404px); }
    so the primary share action still leads. */
 .share-button-secondary { color: rgba(255, 255, 255, .82); background: rgba(255, 255, 255, .08); text-decoration: none; }
 .share-button-secondary:hover { background: rgba(255, 255, 255, .16); }
+/* Icon-only variant: square the pill so the glyph sits centred, no text width. */
+.share-button-icon { width: 28px; padding: 0; justify-content: center; }
+.share-button-icon svg { display: block; }
 .share-spinner {
   display: inline-block;
   width: 10px;

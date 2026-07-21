@@ -44,6 +44,13 @@ const CAMERA_SYNC_WINDOW_MS = 800;
 const REQUEST_TIMEOUT_MS = 30_000;
 const SHARE_TIMEOUT_MS = 120_000;
 
+// Control-bar icons. Share/Copy/Download are icon-only buttons, so the glyph is
+// the whole label — the accessible name lives on aria-label/title instead.
+const ICON_SHARE = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"></line><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"></line></svg>`;
+const ICON_COPY = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
+const ICON_DOWNLOAD = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`;
+const ICON_CHECK = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+
 const app = document.querySelector<HTMLDivElement>("#app")!;
 const id = new URLSearchParams(location.search).get("id");
 let activePlayback: AbortController | undefined;
@@ -232,15 +239,15 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
   // Local daemon → Share (uploads and copies the new link). Hosted share server
   // → Copy (this page's URL is already the share link). Otherwise nothing.
   const shareControl = shareAvailable
-    ? `<div class="share-control" id="share-control"><button class="share-button" id="share" type="button">Share</button></div>`
+    ? `<div class="share-control" id="share-control"><button class="share-button share-button-icon" id="share" type="button" aria-label="Share replay" title="Share this replay">${ICON_SHARE}</button></div>`
     : hosted
-      ? `<div class="share-control" id="copy-control"><button class="share-button" id="copy-link" type="button" title="Copy replay link">Copy</button></div>`
+      ? `<div class="share-control" id="copy-control"><button class="share-button share-button-icon" id="copy-link" type="button" aria-label="Copy replay link" title="Copy replay link">${ICON_COPY}</button></div>`
       : "";
   // Both the local daemon and the hosted share server can hand back the portable
   // `.replay` for this session, so a plain download link works everywhere the
   // player is served — no upload, no round-trip. It is a bare anchor so the
   // browser handles the streamed attachment natively.
-  const downloadControl = `<a class="share-button share-button-secondary" id="download" href="${escape(`/api/sessions/${encodeURIComponent(manifest.id)}/bundle`)}" download="${escape(`${manifest.title || "replay"}.replay`)}" title="Download this replay as a portable .replay file">Download</a>`;
+  const downloadControl = `<a class="share-button share-button-secondary share-button-icon" id="download" href="${escape(`/api/sessions/${encodeURIComponent(manifest.id)}/bundle`)}" download="${escape(`${manifest.title || "replay"}.replay`)}" aria-label="Download replay" title="Download this replay as a portable .replay file">${ICON_DOWNLOAD}</a>`;
   const chatToggle = `<button class="chat-toggle" id="chat-toggle" type="button" hidden aria-expanded="false" title="Ask the replay assistant"><svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="M12 2l2.1 6.2a2 2 0 0 0 1.3 1.3L21.5 12l-6.1 2.5a2 2 0 0 0-1.3 1.3L12 22l-2.1-6.2a2 2 0 0 0-1.3-1.3L2.5 12l6.1-2.5a2 2 0 0 0 1.3-1.3z"/></svg>Ask AI</button>`;
   const chaptersToggle = manifest.markers.length
     ? `<button class="chapters-toggle" id="chapters-toggle" type="button" aria-controls="chapters-panel" aria-expanded="false">Chapters<b>${manifest.markers.length}</b></button>`
@@ -250,7 +257,7 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
   // every dead second in full, so the line would be false there. The number is
   // the recording's idle sum, so it never depends on the pacing mode.
   const savedLine = idleMode !== "preserve" && idleSavedMs >= 1_000
-    ? `<p class="session-saved"><b>${formatSaved(idleSavedMs)}</b> of waiting, skipped</p>`
+    ? `<div class="session-saved"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l2.4 7.6L22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"></path></svg><span><b>${formatSaved(idleSavedMs)}</b> of waiting, skipped</span></div>`
     : "";
   const introCard = introDismissed
     ? ""
@@ -304,8 +311,8 @@ function copyCurrentUrl(button: HTMLButtonElement) {
   if (!clipboard) { setActionCaption("Copy the link", "Copy this page's URL from your browser's address bar."); return; }
   void clipboard.writeText(window.location.href)
     .then(() => {
-      button.textContent = "Copied";
-      window.setTimeout(() => { button.textContent = "Copy"; }, 1600);
+      button.innerHTML = ICON_CHECK;
+      window.setTimeout(() => { button.innerHTML = ICON_COPY; }, 1600);
       setActionCaption("Link copied", "This replay's URL is on your clipboard.");
     })
     .catch(() => setActionCaption("Copy the link", "Copy this page's URL from your browser's address bar."));
@@ -322,7 +329,7 @@ async function shareReplay(replayId: string, button: HTMLButtonElement) {
     shareUrl = result.shareUrl;
     try {
       await navigator.clipboard.writeText(shareUrl);
-      button.textContent = "Share";
+      button.innerHTML = ICON_SHARE;
       button.disabled = false;
       setActionCaption("Link copied", "The share link is on your clipboard.");
     } catch {
@@ -335,7 +342,7 @@ async function shareReplay(replayId: string, button: HTMLButtonElement) {
     }
   } catch (error) {
     button.disabled = false;
-    button.textContent = "Share";
+    button.innerHTML = ICON_SHARE;
     setActionCaption("Share failed", error instanceof Error ? error.message : String(error));
   }
 }
