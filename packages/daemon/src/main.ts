@@ -211,6 +211,7 @@ async function health() {
   const configWarnings = [...baseWarnings, ...(viewport?.warning ? [viewport.warning] : [])];
   return {
     ok: true,
+    hosted: false,
     share_available: Boolean(shareEndpoint()),
     chat_available: (await chatManager.availability()).available,
     cdp_endpoint: cdpEndpoint,

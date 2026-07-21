@@ -72,6 +72,9 @@ function resolveCameraPreference() {
   } catch { return requested === "on" || requested === "1"; }
 }
 let shareAvailable = false;
+// On the hosted share server the viewer is already on the public link, so the
+// control bar offers Copy (of this page's URL) instead of Share (which uploads).
+let hosted = false;
 let shareUrl: string | undefined;
 // The chat panel and its tools speak raw replay time; the active playback
 // projection translates it. Refreshed by every present().
@@ -137,7 +140,9 @@ async function load(replayId: string) {
     // share server that can be a real wait. Show a loading state so a shared
     // link never opens to a blank screen while the data streams in.
     renderLoading();
-    shareAvailable = await detectShareAvailability();
+    const environment = await detectEnvironment();
+    shareAvailable = environment.shareAvailable;
+    hosted = environment.hosted;
     void initChat(replayId, () => {
       // The assistant and the chapters list share the right edge; opening one
       // yields it to the other.
@@ -206,9 +211,13 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
   ] as const).map(([mode, label]) => `<button data-idle-mode="${mode}"${mode === idleMode ? " class=\"selected\"" : ""}>${label}</button>`).join("");
   const cameraSection = `<span class="menu-label">Camera</span><div class="menu-options">${([["on", "On"], ["off", "Off"]] as const).map(([mode, label]) => `<button data-camera-mode="${mode}"${(mode === "on") === cameraZoomEnabled ? " class=\"selected\"" : ""}>${label}</button>`).join("")}</div>`;
   const settingsMenu = `<div class="deck-menu" id="settings-menu"><button class="menu-button menu-button-icon" id="settings-button" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Replay settings"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button><div class="menu-pop" hidden><span class="menu-label">Idle time</span><div class="menu-options">${idleControls}</div><span class="menu-note" id="idle-summary"></span>${cameraSection}</div></div>`;
+  // Local daemon → Share (uploads and copies the new link). Hosted share server
+  // → Copy (this page's URL is already the share link). Otherwise nothing.
   const shareControl = shareAvailable
     ? `<div class="share-control" id="share-control"><button class="share-button" id="share" type="button">Share</button></div>`
-    : "";
+    : hosted
+      ? `<div class="share-control" id="copy-control"><button class="share-button" id="copy-link" type="button" title="Copy replay link">Copy</button></div>`
+      : "";
   const chatToggle = `<button class="chat-toggle" id="chat-toggle" type="button" hidden aria-expanded="false" title="Ask the replay assistant"><svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="M12 2l2.1 6.2a2 2 0 0 0 1.3 1.3L21.5 12l-6.1 2.5a2 2 0 0 0-1.3 1.3L12 22l-2.1-6.2a2 2 0 0 0-1.3-1.3L2.5 12l6.1-2.5a2 2 0 0 0 1.3-1.3z"/></svg>Ask AI</button>`;
   const chaptersToggle = manifest.markers.length
     ? `<button class="chapters-toggle" id="chapters-toggle" type="button" aria-controls="chapters-panel" aria-expanded="false">Chapters<b>${manifest.markers.length}</b></button>`
@@ -225,14 +234,17 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
       return `<li><button type="button" data-chapter="${marker.t_ms}"${marker.color ? ` data-chapter-color="${marker.color}"` : ""}${marker.node_id != null ? ` data-chapter-highlight` : ""} aria-current="false"><b>${format(marker.t_ms)}</b><span><strong>${escape(marker.label)}</strong>${marker.note ? `<p>${escape(marker.note)}</p>` : ""}${defect}${action ? `<code>${escape(describeAction(action))}</code>` : ""}</span></button></li>`;
     }).join("")}</ol></aside>`
     : "";
-  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="state-flash" id="state-flash" aria-hidden="true"><span></span></div><b id="stage-status" class="sr-only" role="status">Paused</b>${segmentPicker}<div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div><button class="hold-continue" id="hold-continue" type="button" aria-label="Continue replay">Continue ▸</button>${introCard}${endCard}<section class="control-deck" aria-label="Browser replay controls"><div class="deck-island"><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div>${speedMenu}${settingsMenu}${shareControl}${chatToggle}${chaptersToggle}</div></div></section>${chaptersPanel}<div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
+  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="state-flash" id="state-flash" aria-hidden="true"><span></span></div><b id="stage-status" class="sr-only" role="status">Paused</b>${segmentPicker}<div class="address-bar" id="address-bar" role="text" aria-label="Current page address" title="">${escape(manifest.segments[0]?.page_url ?? "")}</div><div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div><button class="hold-continue" id="hold-continue" type="button" aria-label="Continue replay">Continue ▸</button>${introCard}${endCard}<section class="control-deck" aria-label="Browser replay controls"><div class="deck-island"><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div>${speedMenu}${settingsMenu}${shareControl}${chatToggle}${chaptersToggle}</div></div></section>${chaptersPanel}<div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
 }
 
-async function detectShareAvailability() {
+// One health probe tells the player both whether it can upload a share (local
+// daemon with REPLAY_SHARE_URL) and whether it is itself running on the hosted
+// share server (where the current URL is already the share link).
+async function detectEnvironment() {
   try {
-    const health = await request<{ share_available?: boolean }>("/health");
-    return health.share_available === true;
-  } catch { return false; }
+    const health = await request<{ share_available?: boolean; hosted?: boolean }>("/health");
+    return { shareAvailable: health.share_available === true, hosted: health.hosted === true };
+  } catch { return { shareAvailable: false, hosted: false }; }
 }
 
 function wireShareControl(replayId: string) {
@@ -240,6 +252,8 @@ function wireShareControl(replayId: string) {
   if (button) button.onclick = () => void shareReplay(replayId, button);
   const copy = document.querySelector<HTMLButtonElement>("#share-copy");
   if (copy) copy.onclick = () => copyShareLink(copy);
+  const copyLink = document.querySelector<HTMLButtonElement>("#copy-link");
+  if (copyLink) copyLink.onclick = () => copyCurrentUrl(copyLink);
 }
 
 function copyShareLink(button: HTMLButtonElement) {
@@ -252,6 +266,20 @@ function copyShareLink(button: HTMLButtonElement) {
       setActionCaption("Link copied", "The share link is on your clipboard.");
     })
     .catch(() => setActionCaption("Copy the link", "Select the share link and copy it manually."));
+}
+
+// On the hosted share server this page's URL is the share link, so Copy just
+// puts the address bar's URL on the clipboard — no upload, no round-trip.
+function copyCurrentUrl(button: HTMLButtonElement) {
+  const clipboard = navigator.clipboard;
+  if (!clipboard) { setActionCaption("Copy the link", "Copy this page's URL from your browser's address bar."); return; }
+  void clipboard.writeText(window.location.href)
+    .then(() => {
+      button.textContent = "Copied";
+      window.setTimeout(() => { button.textContent = "Copy"; }, 1600);
+      setActionCaption("Link copied", "This replay's URL is on your clipboard.");
+    })
+    .catch(() => setActionCaption("Copy the link", "Copy this page's URL from your browser's address bar."));
 }
 
 async function shareReplay(replayId: string, button: HTMLButtonElement) {
@@ -362,6 +390,20 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
   let visibleNavigation: NavigationEvent | undefined;
   let refreshPinned = false;
   const navigationEvents = (manifest.navigation_events ?? []).filter((event) => event.segment_id === segment.id).sort((left, right) => left.started_at_ms - right.started_at_ms);
+  // The page URL at a given moment: the destination of the latest navigation at
+  // or before it, falling back to the segment's initial URL. Shared by the
+  // address bar and the chat assistant's readScreen().
+  const urlAtTime = (time: number) => {
+    const navigated = [...navigationEvents].reverse().find((event) => event.started_at_ms <= time);
+    return navigated?.to_url ?? segment.page_url;
+  };
+  let lastAddressUrl: string | undefined;
+  const setAddressBar = (url: string) => {
+    if (url === lastAddressUrl) return;
+    lastAddressUrl = url;
+    const bar = document.querySelector<HTMLElement>("#address-bar");
+    if (bar) { bar.textContent = url; bar.title = url; }
+  };
   let lastNavigationCheck = requestedSessionTime;
   const scrubber = document.querySelector<HTMLInputElement>("#scrubber")!;
   const nextFocus = nextFocusForSegment(manifest, segment.id, requestedSessionTime);
@@ -378,8 +420,11 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
     document.querySelector<HTMLElement>("#timeline-progress")!.style.width = `${position}%`;
     document.querySelector<HTMLElement>("#timeline-playhead")!.style.left = `${position}%`;
     document.querySelector<HTMLElement>("#current-time")!.textContent = format(time);
+    setAddressBar(urlAtTime(time));
     updateActiveMarker(time);
   };
+  // Seed the address bar at the seek point before the first frame paints.
+  setAddressBar(urlAtTime(requestedSessionTime));
   const playFrom = (time: number) => {
     // Real playback is starting — the session cards yield to the replay.
     // rrweb's seek-while-paused also emits start/pause internally, so the
@@ -830,10 +875,6 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
   };
   // The chat assistant drives playback through this handle. Raw replay
   // times arrive from the model; the projection maps them onto the timeline.
-  const urlAtTime = (time: number) => {
-    const navigated = [...navigationEvents].reverse().find((event) => event.started_at_ms <= time);
-    return navigated?.to_url ?? segment.page_url;
-  };
   registerReplayControl({
     seek: async (rawMs, play) => {
       dismissIntro();

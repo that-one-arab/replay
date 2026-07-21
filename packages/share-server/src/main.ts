@@ -68,7 +68,7 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
 }
 
 async function route(request: IncomingMessage, response: ServerResponse, url: URL, origin: string) {
-  if (request.method === "GET" && url.pathname === "/health") return reply(response, 200, { ok: true });
+  if (request.method === "GET" && url.pathname === "/health") return reply(response, 200, { ok: true, hosted: true });
   if (request.method === "GET" && url.pathname === "/stats") return serveStats(request, response);
   if (request.method === "POST" && url.pathname === "/v1/replays") return upload(request, response, origin);
   if (request.method === "PUT" && url.pathname === "/v1/releases") return publishRelease(request, response);

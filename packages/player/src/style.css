@@ -161,6 +161,29 @@ body.chat-open #app { width: calc(100% - 404px); }
 .segment-picker .segment-tab span { color: #b5aaff; }
 .segment-picker .segment-tab.selected { color: #171720; background: #f5f4fa; }
 
+/* Live page address — a read-only chip tracking the playhead's current URL */
+.address-bar {
+  position: absolute;
+  z-index: 4;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(480px, 40vw);
+  padding: 6px 14px;
+  overflow: hidden;
+  color: rgba(255, 255, 255, .82);
+  background: rgba(13, 14, 20, .76);
+  border: 1px solid rgba(196, 189, 255, .25);
+  border-radius: 999px;
+  backdrop-filter: blur(12px);
+  font: 11px "DM Mono";
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.replay-screen.is-idle .address-bar { opacity: 0; }
+
 /* Navigation overlay */
 .refresh-indicator {
   position: absolute;
