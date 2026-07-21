@@ -9,6 +9,8 @@
  * replay() instance through registerReplayControl().
  */
 
+import { format } from "./format.js";
+
 type ChatAvailability = { available: boolean; provider?: string; model?: string; reason?: string };
 
 export type ReplayControl = {
@@ -17,6 +19,11 @@ export type ReplayControl = {
   setPlayback(action: "play" | "pause"): string;
   readScreen(): Promise<string>;
   highlight(args: { text?: string; selector?: string }): string;
+  /**
+   * Map a raw replay time onto the player's displayed idle-cropped clock.
+   * Identity in "preserve" mode; the current projection otherwise.
+   */
+  projectTime(rawMs: number): number;
 };
 
 type TranscriptEntry =
@@ -66,6 +73,13 @@ export function wireChatToggle(button: HTMLButtonElement | null) {
   button.onclick = () => togglePanel();
   syncToggles();
 }
+
+/**
+ * Re-render the transcript so its time labels track the live idle-cropped
+ * clock. Called after an idle-mode change swaps the projection; without it the
+ * already-rendered chat times would stay on the previous mode's clock.
+ */
+export function syncChatTimes() { if (panel) renderTranscript(); }
 
 export function isChatOpen() { return panel?.classList.contains("is-open") === true; }
 
@@ -484,8 +498,14 @@ function inlineMarkdown(text: string): string {
     .replace(/(^|\W)\*([^*\n]+)\*(?=\W|$)/g, "$1<em>$2</em>")
     .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, `<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>`)
     .replace(/\b(\d{1,2}):([0-5]\d)\b/g, (match, minutes: string, seconds: string) => {
-      const ms = (Number(minutes) * 60 + Number(seconds)) * 1000;
-      return `<button type="button" class="chat-time" data-seek-ms="${ms}" title="Jump to ${match}">${match}</button>`;
+      // The model reasons in raw (uncropped) replay time, but the player shows
+      // the idle-cropped clock. Seek by the raw ms the model meant, yet label
+      // the button with the projected time so the number matches the scrubber.
+      // projectTime is the identity in "preserve" mode, so there the label stays
+      // the raw time — exactly what the viewer sees either way.
+      const rawMs = (Number(minutes) * 60 + Number(seconds)) * 1000;
+      const label = control ? format(control.projectTime(rawMs)) : match;
+      return `<button type="button" class="chat-time" data-seek-ms="${rawMs}" title="Jump to ${label}">${label}</button>`;
     });
 }
 

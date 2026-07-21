@@ -1,7 +1,7 @@
 import { Replayer } from "@rrweb/replay";
 import "rrweb/dist/style.css";
 import "./style.css";
-import { closeChat, initChat, registerReplayControl, wireChatToggle } from "./chat.js";
+import { closeChat, initChat, registerReplayControl, syncChatTimes, wireChatToggle } from "./chat.js";
 import { dismissOnboarding, startOnboardingIfDue } from "./onboarding.js";
 import { EventType, IncrementalSource, MouseInteraction, type AgentAction, type Defect, type IdleMode, type Manifest, type Marker, type NavigationEvent, type ReplayDefaults, type ReplayEvent, type Segment, type TabEvent, type TimelineIdleRange } from "./types.js";
 import { clamp, escape, format, formatDuration, formatSaved, nearlyEqual } from "./format.js";
@@ -199,7 +199,9 @@ async function load(replayId: string) {
         duration: projection.duration,
         onIdleModeChange: (nextMode, requestedTime, shouldAutoplay) => {
           idleMode = nextMode;
-          void present(projection.toRaw(requestedTime), shouldAutoplay).catch(renderError);
+          // Re-project after the rebuild registers the new-mode control, so any
+          // times already in the chat re-label onto the mode the viewer just picked.
+          void present(projection.toRaw(requestedTime), shouldAutoplay).then(syncChatTimes).catch(renderError);
         },
         onPlaybackSpeedChange: (nextSpeed) => { playbackSpeed = nextSpeed; },
       };
@@ -928,6 +930,9 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
       syncNarration(manifest.markers, projected, true);
       return `Playhead moved to replay time ${format(rawMs)} (${play ? "playing" : "paused"}). The viewer is now looking at this moment.`;
     },
+    // The chat model speaks raw time; the viewer reads the idle-cropped clock.
+    // Project the model's raw ms so chat time labels line up with the scrubber.
+    projectTime: (rawMs) => clamp(rawToPlayback(rawMs), 0, duration),
     setPlayback: (action) => {
       if (action === "play" && !playing) togglePlayback();
       else if (action === "pause" && playing) pausePlayback();
