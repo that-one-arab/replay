@@ -96,6 +96,17 @@ export function resolvedReplayDefaults(value: ReplayDefaults | undefined): Repla
   return value;
 }
 
+/**
+ * Total idle time captured in the recording: the sum of every idle gap's raw
+ * duration. Prefers `originalDuration` (carried by projected ranges) so the sum
+ * is identical no matter which idle mode paces playback, and falls back to the
+ * span for raw idle ranges. This is the "dead time you didn't have to watch"
+ * surfaced on the end-card.
+ */
+export function totalIdleMs(ranges: ReadonlyArray<{ originalDuration?: number; start: number; end: number }>): number {
+  return ranges.reduce((total, range) => total + (range.originalDuration ?? (range.end - range.start)), 0);
+}
+
 export function idleRanges(activities: number[], playbackEnd: number): IdleRange[] {
   const times = [...new Set(activities.filter((time) => time >= 0 && time <= playbackEnd).sort((left, right) => left - right))];
   const ranges: IdleRange[] = [];

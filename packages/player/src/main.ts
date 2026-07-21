@@ -4,13 +4,14 @@ import "./style.css";
 import { closeChat, initChat, registerReplayControl, wireChatToggle } from "./chat.js";
 import { dismissOnboarding, startOnboardingIfDue } from "./onboarding.js";
 import { EventType, IncrementalSource, MouseInteraction, type AgentAction, type Defect, type IdleMode, type Manifest, type Marker, type NavigationEvent, type ReplayDefaults, type ReplayEvent, type Segment, type TabEvent, type TimelineIdleRange } from "./types.js";
-import { clamp, escape, format, formatDuration, nearlyEqual } from "./format.js";
+import { clamp, escape, format, formatDuration, formatSaved, nearlyEqual } from "./format.js";
 import { CURSOR_APPROACH_MS, humanizeEvents, isRealPoint, withCursorLeadIns } from "./humanize.js";
 import { RELOAD_CONTEXT_MS, closedAt, describeAction, nextFocusForSegment, replayViewport, resolveMarkerTimes, segmentAtTime, segmentLabel, sessionEventTime, tabEvents } from "./manifest.js";
-import { DEFAULT_PLAYBACK_SPEED, projectPlayback, resolvedReplayDefaults } from "./projection.js";
+import { DEFAULT_PLAYBACK_SPEED, projectPlayback, resolvedReplayDefaults, totalIdleMs } from "./projection.js";
 import { createCamera } from "./camera.js";
 import { elementCenter, isElementLike, makeCursorPlacer, revealCursorOnFirstMove, spawnClickRipple, type ElementLike } from "./cursor.js";
 import { sanitizeReplayEvents } from "./sanitize.js";
+import { renderUploadDialog } from "./upload.js";
 
 const TAB_FOCUS_DELAY_MS = 700;
 const REFRESH_INDICATOR_MS = 1_100;
@@ -80,10 +81,21 @@ let shareUrl: string | undefined;
 // projection translates it. Refreshed by every present().
 let rawToPlayback: (time: number) => number = (time) => time;
 let playbackToRaw: (time: number) => number = (time) => time;
-if (!id) renderError("Choose a replay with `replay open <id>`.");
+if (!id) void bootstrapWithoutReplay();
 else {
   maintainReplayLease();
   void load(id);
+}
+
+// Opening the player with no replay selected. On the hosted share server the
+// bare origin (share.replaythis.io) is a destination people paste a `.replay`
+// into, so offer an upload dialog there; locally it just means the CLI was not
+// given an id, so keep the existing hint.
+async function bootstrapWithoutReplay() {
+  const environment = await detectEnvironment();
+  hosted = environment.hosted;
+  if (hosted) renderUploadDialog();
+  else renderError("Choose a replay with `replay open <id>`.");
 }
 app.addEventListener("pointermove", wakeInterface);
 app.addEventListener("pointerdown", wakeInterface);
@@ -160,10 +172,13 @@ async function load(replayId: string) {
     let playbackSpeed = replayDefaults.default_speed;
     const present = async (rawTime = 0, autoplay = false) => {
       const projection = projectPlayback(resolvedManifest, eventSets, idleMode, replayDefaults);
+      // originalDuration is mode-independent, so this stays constant across idle
+      // re-renders — it's the dead time captured, not how the player paces it.
+      const idleSavedMs = totalIdleMs(projection.idleRanges);
       rawToPlayback = projection.toPlayback;
       playbackToRaw = projection.toRaw;
       activePlayback?.abort();
-      renderShell(projection.manifest, idleMode, replayDefaults, playbackSpeed);
+      renderShell(projection.manifest, idleMode, replayDefaults, playbackSpeed, idleSavedMs);
       prepareTimeline(projection.manifest.markers, actionsById(projection.manifest), projection.manifest.navigation_events ?? [], projection.duration, projection.activities, projection.playbackEnd, projection.idleRanges);
       installTimelineTooltips();
       wireShareControl(resolvedManifest.id);
@@ -193,7 +208,7 @@ async function load(replayId: string) {
   } catch (error) { renderError(error instanceof Error ? error.message : String(error)); }
 }
 
-function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDefaults, playbackSpeed: number) {
+function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDefaults, playbackSpeed: number, idleSavedMs: number) {
   // Reflect the loaded replay's real title in the browser tab instead of the
   // static placeholder shipped in index.html.
   document.title = manifest.title;
@@ -221,15 +236,26 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
     : hosted
       ? `<div class="share-control" id="copy-control"><button class="share-button" id="copy-link" type="button" title="Copy replay link">Copy</button></div>`
       : "";
+  // Both the local daemon and the hosted share server can hand back the portable
+  // `.replay` for this session, so a plain download link works everywhere the
+  // player is served — no upload, no round-trip. It is a bare anchor so the
+  // browser handles the streamed attachment natively.
+  const downloadControl = `<a class="share-button share-button-secondary" id="download" href="${escape(`/api/sessions/${encodeURIComponent(manifest.id)}/bundle`)}" download="${escape(`${manifest.title || "replay"}.replay`)}" title="Download this replay as a portable .replay file">Download</a>`;
   const chatToggle = `<button class="chat-toggle" id="chat-toggle" type="button" hidden aria-expanded="false" title="Ask the replay assistant"><svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="M12 2l2.1 6.2a2 2 0 0 0 1.3 1.3L21.5 12l-6.1 2.5a2 2 0 0 0-1.3 1.3L12 22l-2.1-6.2a2 2 0 0 0-1.3-1.3L2.5 12l6.1-2.5a2 2 0 0 0 1.3-1.3z"/></svg>Ask AI</button>`;
   const chaptersToggle = manifest.markers.length
     ? `<button class="chapters-toggle" id="chapters-toggle" type="button" aria-controls="chapters-panel" aria-expanded="false">Chapters<b>${manifest.markers.length}</b></button>`
     : "";
   const sessionMeta = sessionMetaMarkup(manifest);
+  // Only claim a saving when idle is actually elided: "Keep" (preserve) plays
+  // every dead second in full, so the line would be false there. The number is
+  // the recording's idle sum, so it never depends on the pacing mode.
+  const savedLine = idleMode !== "preserve" && idleSavedMs >= 1_000
+    ? `<p class="session-saved"><b>${formatSaved(idleSavedMs)}</b> of waiting, skipped</p>`
+    : "";
   const introCard = introDismissed
     ? ""
     : `<div class="session-overlay is-visible" id="intro-card"><div class="session-card"><span class="session-kicker"><i></i>Replay</span><h1>${escape(manifest.title)}</h1>${sessionMeta}<p class="session-hint">Press play — or space — to watch the captured journey</p></div></div>`;
-  const endCard = `<div class="session-overlay" id="end-card"><div class="session-card"><span class="session-kicker"><i></i>Replay complete</span><h1>${escape(manifest.title)}</h1>${sessionMeta}${manifest.notes ? `<p class="session-notes">${escape(manifest.notes)}</p>` : ""}<div class="session-actions"><button class="watch-again" id="watch-again" type="button">Watch again</button><button class="ask-ai" id="ask-ai" type="button" hidden>Ask AI about this replay</button></div></div></div>`;
+  const endCard = `<div class="session-overlay" id="end-card"><div class="session-card"><span class="session-kicker"><i></i>Replay complete</span><h1>${escape(manifest.title)}</h1>${sessionMeta}${savedLine}${manifest.notes ? `<p class="session-notes">${escape(manifest.notes)}</p>` : ""}<div class="session-actions"><button class="watch-again" id="watch-again" type="button">Watch again</button><button class="ask-ai" id="ask-ai" type="button" hidden>Ask AI about this replay</button></div></div></div>`;
   const chaptersPanel = manifest.markers.length
     ? `<aside class="chapters-panel" id="chapters-panel" aria-label="Replay chapters"><header>Chapters<span>${manifest.markers.length}</span><button class="chapters-collapse" id="chapters-collapse" type="button" aria-label="Collapse chapters" title="Collapse chapters"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></header><ol>${manifest.markers.map((marker) => {
       const action = marker.action_id ? actionsById(manifest).get(marker.action_id) : undefined;
@@ -237,7 +263,7 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
       return `<li><button type="button" data-chapter="${marker.t_ms}"${marker.color ? ` data-chapter-color="${marker.color}"` : ""}${marker.node_id != null ? ` data-chapter-highlight` : ""} aria-current="false"><b>${format(marker.t_ms)}</b><span><strong>${escape(marker.label)}</strong>${marker.note ? `<p>${escape(marker.note)}</p>` : ""}${defect}${action ? `<code>${escape(describeAction(action))}</code>` : ""}</span></button></li>`;
     }).join("")}</ol></aside>`
     : "";
-  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="state-flash" id="state-flash" aria-hidden="true"><span></span></div><b id="stage-status" class="sr-only" role="status">Paused</b>${segmentPicker}<div class="address-bar" id="address-bar" role="text" aria-label="Current page address" title="">${escape(manifest.segments[0]?.page_url ?? "")}</div><div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div><button class="hold-continue" id="hold-continue" type="button" aria-label="Continue replay">Continue ▸</button>${introCard}${endCard}<section class="control-deck" aria-label="Browser replay controls"><div class="deck-island"><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div>${speedMenu}${settingsMenu}${shareControl}${chatToggle}${chaptersToggle}</div></div></section>${chaptersPanel}<div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
+  app.innerHTML = `<main class="replay-screen" aria-label="${escape(manifest.title)}"><div id="replay" aria-label="Browser session replay"></div><div class="video-shade"></div><div class="state-flash" id="state-flash" aria-hidden="true"><span></span></div><b id="stage-status" class="sr-only" role="status">Paused</b>${segmentPicker}<div class="address-bar" id="address-bar" role="text" aria-label="Current page address" title="">${escape(manifest.segments[0]?.page_url ?? "")}</div><div class="refresh-indicator" id="refresh-indicator" role="status" aria-live="polite"><span class="refresh-spinner" aria-hidden="true"></span><strong id="refresh-label">Page is refreshing</strong></div><div class="caption-card" id="caption" aria-live="polite"><strong></strong><p hidden></p></div><button class="hold-continue" id="hold-continue" type="button" aria-label="Continue replay">Continue ▸</button>${introCard}${endCard}<section class="control-deck" aria-label="Browser replay controls"><div class="deck-island"><div class="timeline-wrap"><div class="timeline-chapters" id="chapter-track" aria-hidden="true"></div><div class="timeline-idle" id="idle-ranges" aria-label="Idle periods"></div><div class="timeline-navigations" id="navigation-events" aria-label="Page navigations"></div><div class="timeline-density" id="density"></div><div class="timeline-progress" id="timeline-progress"></div><div class="timeline-playhead" id="timeline-playhead" aria-hidden="true"></div><div class="timeline-markers" id="timeline-markers"></div><input id="scrubber" class="scrubber" type="range" min="0" value="0" step="10" aria-label="Browser session timeline" /></div><div class="control-main"><button class="play-button" id="play" aria-label="Play replay"><span></span></button><div class="time-readout"><strong id="current-time">0:00</strong><span>/ <span id="total-time">0:00</span></span></div>${speedMenu}${settingsMenu}${downloadControl}${shareControl}${chatToggle}${chaptersToggle}</div></div></section>${chaptersPanel}<div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div></main>`;
 }
 
 // One health probe tells the player both whether it can upload a share (local

@@ -2,6 +2,13 @@
 
 export function format(ms?: number) { if (!ms) return "0:00"; const seconds = Math.round(ms / 1000); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`; }
 export function formatDuration(ms: number) { return `${(ms / 1_000).toFixed(ms >= 10_000 ? 0 : 1)}s`; }
+// A duration styled for a "time saved" payoff on the end-card: "12s", "59s",
+// "1m 04s", "2m 15s". Coarser than formatDuration once minutes matter.
+export function formatSaved(ms: number) {
+  const seconds = Math.round(ms / 1_000);
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
 export function clamp(value: number, min: number, max: number) { return Math.min(max, Math.max(min, value)); }
 export function nearlyEqual(left: number, right: number) { return Math.abs(left - right) < 2; }
 // The player builds markup with template literals that interpolate into

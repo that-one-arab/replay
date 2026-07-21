@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Manifest, ReplayEvent } from "./types.js";
-import { DEFAULT_REPLAY_DEFAULTS, idleRanges, projectPlayback, resolvedReplayDefaults } from "./projection.js";
+import { DEFAULT_REPLAY_DEFAULTS, idleRanges, projectPlayback, resolvedReplayDefaults, totalIdleMs } from "./projection.js";
 
 const click = (timestamp: number): ReplayEvent => ({ type: 3, timestamp, data: { source: 2, type: 2, x: 10, y: 10 } });
 
@@ -102,6 +102,18 @@ test("projectPlayback remaps a highlight marker's time but preserves its element
   assert.equal(marker.node_id, 42);
   assert.deepEqual(marker.defect, { expected: "Step 2 of 3", actual: "1 of 3 completed" });
   assert.equal(marker.hold, "until_ack");
+});
+
+test("totalIdleMs sums the recording's idle and is independent of idle mode", () => {
+  const { manifest, eventSets } = fixture(); // one 60s idle gap between 1s and 61s
+  // Uses originalDuration on the projected ranges, so the sum is the raw gap
+  // length no matter how playback paces it.
+  assert.equal(totalIdleMs(projectPlayback(manifest, eventSets, "cut", DEFAULT_REPLAY_DEFAULTS).idleRanges), 60_000);
+  assert.equal(totalIdleMs(projectPlayback(manifest, eventSets, "fast_forward", DEFAULT_REPLAY_DEFAULTS).idleRanges), 60_000);
+  assert.equal(totalIdleMs(projectPlayback(manifest, eventSets, "preserve", DEFAULT_REPLAY_DEFAULTS).idleRanges), 60_000);
+  // Falls back to the span for raw idle ranges (no originalDuration).
+  assert.equal(totalIdleMs(idleRanges([0, 1_000, 5_000], 20_000)), 4_000 + 15_000);
+  assert.equal(totalIdleMs([]), 0);
 });
 
 test("idleRanges detects interior and trailing gaps past the threshold", () => {

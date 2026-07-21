@@ -299,6 +299,14 @@ body.chat-open #app { width: calc(100% - 404px); }
   font: 11px "DM Mono";
 }
 .session-hint { margin: 26px 0 0; color: rgba(255, 255, 255, .5); font-size: 12px; }
+.session-saved {
+  margin: 14px auto 0;
+  max-width: 480px;
+  color: rgba(255, 255, 255, .66);
+  font: 12px "DM Mono";
+  letter-spacing: .02em;
+}
+.session-saved b { color: #7ee3b4; font-weight: 700; }
 .session-notes {
   display: -webkit-box;
   margin: 16px auto 0;
@@ -452,6 +460,10 @@ body.chat-open #app { width: calc(100% - 404px); }
 }
 .share-button:hover { background: #c8bdff; }
 .share-button:disabled { opacity: .6; cursor: default; }
+/* Download is a quieter, secondary action next to Share/Copy: same pill, ghosted
+   so the primary share action still leads. */
+.share-button-secondary { color: rgba(255, 255, 255, .82); background: rgba(255, 255, 255, .08); text-decoration: none; }
+.share-button-secondary:hover { background: rgba(255, 255, 255, .16); }
 .share-spinner {
   display: inline-block;
   width: 10px;
@@ -725,6 +737,68 @@ body.chat-open #app { width: calc(100% - 404px); }
   animation: replay-spin .82s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) { .loading-spinner { animation-duration: 1.8s; } }
+
+/* Upload landing — shown at the bare origin of the hosted share server, where
+   a person arrives to turn a .replay file into a shareable link. */
+.upload-screen { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.upload-card { width: min(520px, 100%); text-align: center; }
+.upload-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: rgba(255, 255, 255, .66);
+  font: 10px "DM Mono";
+  text-transform: uppercase;
+  letter-spacing: .14em;
+}
+.upload-kicker i { width: 8px; height: 8px; background: #ff5257; border-radius: 50%; box-shadow: 0 0 10px rgba(255, 82, 87, .8); }
+.upload-card h1 { margin: 14px 0 0; font-size: clamp(22px, 3.4vw, 32px); font-weight: 800; letter-spacing: -.02em; color: #fff; }
+.upload-lead { margin: 12px 0 0; color: rgba(255, 255, 255, .62); font-size: 14px; line-height: 1.5; }
+.upload-lead code, .upload-hint code { font: 12px "DM Mono"; color: #b7abff; }
+.upload-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 24px;
+  padding: 34px 20px;
+  color: rgba(255, 255, 255, .82);
+  background: rgba(255, 255, 255, .03);
+  border: 1.5px dashed rgba(183, 171, 255, .4);
+  border-radius: 16px;
+  cursor: pointer;
+  transition: background .16s ease, border-color .16s ease, transform .16s ease;
+}
+.upload-drop:hover { background: rgba(183, 171, 255, .07); border-color: rgba(183, 171, 255, .7); }
+.upload-drop.is-dragging { background: rgba(183, 171, 255, .12); border-color: #b7abff; transform: scale(1.01); }
+.upload-drop.is-busy { cursor: default; opacity: .7; }
+.upload-drop svg { color: #b7abff; }
+.upload-drop strong { font-size: 15px; font-weight: 700; }
+.upload-drop strong code { font: 13px "DM Mono"; color: #b7abff; }
+.upload-drop span { color: rgba(255, 255, 255, .5); font-size: 12px; }
+.upload-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 18px 0 0;
+  min-height: 18px;
+  font: 12px "DM Mono";
+}
+.upload-status.is-busy { color: rgba(255, 255, 255, .72); }
+.upload-status.is-error { color: #ff9ba0; }
+.upload-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(183, 171, 255, .3);
+  border-top-color: #b7abff;
+  border-radius: 50%;
+  animation: replay-spin .82s linear infinite;
+}
+.upload-hint { margin: 22px 0 0; color: rgba(255, 255, 255, .42); font-size: 12px; }
+@media (prefers-reduced-motion: reduce) { .upload-spinner { animation-duration: 1.8s; } }
 
 /* Replay assistant: a chat island docked on the right, same glass as the deck */
 .chat-toggle {
