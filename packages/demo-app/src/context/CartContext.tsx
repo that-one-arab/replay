@@ -1,6 +1,19 @@
-import { createContext, useContext, useMemo, useReducer, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useReducer,
+  type ReactNode,
+} from "react";
 import type { Product } from "../lib/products";
-import { type CartItem, type Coupon, lookupCoupon } from "../lib/cart";
+import {
+  type CartItem,
+  type Coupon,
+  loadSavedCart,
+  lookupCoupon,
+  saveCartState,
+} from "../lib/cart";
 
 type CartState = {
   items: CartItem[];
@@ -16,6 +29,11 @@ type CartAction =
   | { type: "clear" };
 
 const initialState: CartState = { items: [], coupon: null };
+
+// Lazy reducer initializer: hydrate from localStorage exactly once on mount.
+function init(): CartState {
+  return loadSavedCart();
+}
 
 function reducer(state: CartState, action: CartAction): CartState {
   switch (action.type) {
@@ -71,7 +89,13 @@ type CartContextValue = {
 const CartContext = createContext<CartContextValue | null>(null);
 
 export function CartProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, initialState);
+  const [state, dispatch] = useReducer(reducer, undefined, init);
+
+  // Persist on every change so the cart survives reloads. Writing is idempotent,
+  // so StrictMode's double effect in dev is harmless.
+  useEffect(() => {
+    saveCartState(state);
+  }, [state]);
 
   const value = useMemo<CartContextValue>(
     () => ({
