@@ -1153,6 +1153,18 @@ body.onboarding-active #chapters-panel { display: none; }
 .highlight-callout .hl-expected .hl-value { color: #9affc4; }
 .highlight-callout .hl-actual .hl-value { color: #ff8a8a; }
 
+/* Beat dwell: playback has slowed onto a defect so the callout can land. A
+   deeper vignette focuses the frame and the callout lifts a touch larger,
+   signalling "read this" without freezing the player. */
+.replay-screen.is-dwelling .video-shade {
+  background: linear-gradient(180deg, rgba(0, 0, 0, .32), transparent 20%, transparent 52%, rgba(0, 0, 0, .84));
+  transition: background .35s ease;
+}
+.replay-screen.is-dwelling .highlight-callout {
+  transform: translate(-50%, calc(-100% - 16px)) scale(1.03);
+  transition: transform .25s ease;
+}
+
 /* Hold-continue affordance shown when a highlight holds for viewer ack. */
 .hold-continue {
   position: absolute;

@@ -18,8 +18,13 @@ const MIN_REFRESH_INDICATOR_MS = 160;
 const MAX_REFRESH_INDICATOR_MS = 1_500;
 const TIMELINE_TOOLTIP_DELAY_MS = 550;
 const CAPTION_LINGER_MS = 4_500;
-// How long a `beat` hold lingers on a defect before playback auto-continues.
-const HOLD_BEAT_MS = 2_000;
+// A `beat` defect eases playback into a slow dwell (see HOLD_DWELL_SPEED)
+// rather than freezing the frame, so the viewer keeps agency while the
+// Expected/Actual callout has time to land. The dwell lasts this much wall-clock.
+const HOLD_BEAT_MS = 3_200;
+// Crawl speed during a beat dwell: slow enough to read the defect, fast enough
+// that the player never reads as frozen. `until_ack` is the mode for a true stop.
+const HOLD_DWELL_SPEED = 0.35;
 const UI_IDLE_MS = 3_200;
 const SEEK_STEP_MS = 5_000;
 // Arrow-key marker navigation buffers. Going back, treat any marker within this
@@ -597,18 +602,27 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
     }
   };
   lifetime.signal.addEventListener("abort", clearHighlight, { once: true });
-  // Hold: pause at a defect marker so it lands before playback continues.
+  // A `beat` defect eases playback into a slow dwell instead of freezing the
+  // frame, so the viewer keeps agency while the Expected/Actual callout lands.
+  // `until_ack` still hard-pauses and waits for Continue — that's the mode for
+  // when a genuine stop is wanted.
+  const restoreDwellSpeed = () => {
+    document.querySelector(".replay-screen")?.classList.remove("is-dwelling");
+    if (Math.abs(Number(replayer.config.speed) - selectedPlaybackSpeed) > 1e-6) replayer.setConfig({ speed: selectedPlaybackSpeed });
+  };
   const clearHold = () => {
-    if (holdTimer) { window.clearTimeout(holdTimer); holdTimer = undefined; }
+    if (holdTimer) { window.clearTimeout(holdTimer); holdTimer = undefined; restoreDwellSpeed(); }
     if (holdGate) { holdGate = undefined; document.querySelector("#hold-continue")?.classList.remove("is-visible"); }
   };
   const triggerHold = (marker: Marker) => {
     clearHold();
-    replayer.pause();
     if (marker.hold === "beat") {
-      holdTimer = window.setTimeout(() => { holdTimer = undefined; replayer.play(replayer.getCurrentTime()); }, HOLD_BEAT_MS);
+      replayer.setConfig({ speed: HOLD_DWELL_SPEED });
+      document.querySelector(".replay-screen")?.classList.add("is-dwelling");
+      holdTimer = window.setTimeout(() => { holdTimer = undefined; restoreDwellSpeed(); }, HOLD_BEAT_MS);
     } else {
       holdGate = marker;
+      replayer.pause();
       document.querySelector("#hold-continue")?.classList.add("is-visible");
     }
   };
@@ -638,6 +652,7 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
     const speed = Number(button.dataset.speed);
     selectedPlaybackSpeed = speed;
     replayer.setConfig({ speed });
+    clearHold(); // a manual speed change overrides any in-flight beat dwell
     onPlaybackSpeedChange?.(speed);
     if (visibleNavigation) showRefresh(visibleNavigation, refreshPinned);
   });
@@ -758,6 +773,7 @@ async function replay(session: ReplaySession, segment: Segment | undefined, requ
   lifetime.signal.addEventListener("abort", () => {
     if (tabFocusTimer) window.clearTimeout(tabFocusTimer);
     if (refreshTimer) window.clearTimeout(refreshTimer);
+    clearHold();
     // The refresh overlay belongs to the replay instance that emitted the
     // navigation. Seeking replaces that instance, so it must not leak into the
     // newly requested point on the timeline.
