@@ -194,6 +194,9 @@ async function load(replayId: string) {
 }
 
 function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDefaults, playbackSpeed: number) {
+  // Reflect the loaded replay's real title in the browser tab instead of the
+  // static placeholder shipped in index.html.
+  document.title = manifest.title;
   chaptersOpen ??= manifest.markers.length > 1 && window.matchMedia("(min-width: 1100px)").matches;
   const segmentPicker = manifest.segments.length > 1
     ? `<nav class="segment-picker" aria-label="Captured browser tabs">${manifest.segments.map((segment, index) => `<div class="segment-tab" data-segment="${escape(segment.id)}" title="Opened at ${format(segment.clock_offset_ms)} — ${escape(segment.page_url)}"${index === 0 ? "" : " hidden"}><span>Tab ${index + 1}</span>${escape(segmentLabel(segment.page_url))}</div>`).join("")}</nav>`
