@@ -326,10 +326,9 @@ body.chat-open #app { width: calc(100% - 404px); }
   55% { opacity: 1; transform: translateY(0) scale(1.04); }
   100% { opacity: 1; transform: translateY(0) scale(1); }
 }
+.session-notes-wrap { margin: 16px auto 0; max-width: 480px; }
 .session-notes {
   display: -webkit-box;
-  margin: 16px auto 0;
-  max-width: 480px;
   color: #c7cad5;
   font-size: 12px;
   line-height: 1.55;
@@ -337,6 +336,30 @@ body.chat-open #app { width: calc(100% - 404px); }
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+/* Expanded: drop the clamp so the whole note reads, but cap the height and let
+   it scroll so a very long repro can't push the actions off the card. The fade
+   hints there's more to scroll to. */
+.session-notes.is-expanded {
+  display: block;
+  max-height: min(38vh, 320px);
+  overflow-y: auto;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent);
+}
+.notes-toggle {
+  margin-top: 8px;
+  padding: 0;
+  color: rgba(255, 255, 255, .72);
+  background: none;
+  border: 0;
+  font: 600 11px "DM Mono";
+  letter-spacing: .02em;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: color .18s ease;
+}
+.notes-toggle:hover { color: #fff; }
 .watch-again {
   padding: 9px 22px;
   color: #171720;

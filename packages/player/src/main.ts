@@ -262,7 +262,14 @@ function renderShell(manifest: Manifest, idleMode: IdleMode, defaults: ReplayDef
   const introCard = introDismissed
     ? ""
     : `<div class="session-overlay is-visible" id="intro-card"><div class="session-card"><span class="session-kicker"><i></i>Replay</span><h1>${escape(manifest.title)}</h1>${sessionMeta}<p class="session-hint">Press play — or space — to watch the captured journey</p></div></div>`;
-  const endCard = `<div class="session-overlay" id="end-card"><div class="session-card"><span class="session-kicker"><i></i>Replay complete</span><h1>${escape(manifest.title)}</h1>${sessionMeta}${savedLine}${manifest.notes ? `<p class="session-notes">${escape(manifest.notes)}</p>` : ""}<div class="session-actions"><button class="watch-again" id="watch-again" type="button">Watch again</button><button class="ask-ai" id="ask-ai" type="button" hidden>Ask AI about this replay</button></div></div></div>`;
+  // The note is clamped to a few lines so the end-card stays calm, but a full
+  // repro can run much longer. The toggle is emitted hidden and only revealed
+  // after mount if the text actually overflows the clamp (measured in
+  // wireSessionCards), so short notes never grow a dangling "Show more".
+  const notesBlock = manifest.notes
+    ? `<div class="session-notes-wrap"><p class="session-notes" id="session-notes">${escape(manifest.notes)}</p><button class="notes-toggle" id="notes-toggle" type="button" hidden aria-expanded="false" aria-controls="session-notes">Show more</button></div>`
+    : "";
+  const endCard = `<div class="session-overlay" id="end-card"><div class="session-card"><span class="session-kicker"><i></i>Replay complete</span><h1>${escape(manifest.title)}</h1>${sessionMeta}${savedLine}${notesBlock}<div class="session-actions"><button class="watch-again" id="watch-again" type="button">Watch again</button><button class="ask-ai" id="ask-ai" type="button" hidden>Ask AI about this replay</button></div></div></div>`;
   const chaptersPanel = manifest.markers.length
     ? `<aside class="chapters-panel" id="chapters-panel" aria-label="Replay chapters"><header>Chapters<span>${manifest.markers.length}</span><button class="chapters-collapse" id="chapters-collapse" type="button" aria-label="Collapse chapters" title="Collapse chapters"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></header><ol>${manifest.markers.map((marker) => {
       const action = marker.action_id ? actionsById(manifest).get(marker.action_id) : undefined;
@@ -1043,6 +1050,19 @@ function wireSessionCards() {
   if (intro) intro.onclick = play;
   const again = document.querySelector<HTMLButtonElement>("#watch-again");
   if (again) again.onclick = play;
+  // Reveal "Show more" only when the note is genuinely truncated by the clamp.
+  // The overlay hides via opacity (not display:none), so the note has layout
+  // and scrollHeight is measurable even while the end-card is off-screen.
+  const notes = document.querySelector<HTMLElement>("#session-notes");
+  const notesToggle = document.querySelector<HTMLButtonElement>("#notes-toggle");
+  if (notes && notesToggle) {
+    if (notes.scrollHeight - notes.clientHeight > 1) notesToggle.hidden = false;
+    notesToggle.onclick = () => {
+      const expanded = notes.classList.toggle("is-expanded");
+      notesToggle.setAttribute("aria-expanded", String(expanded));
+      notesToggle.textContent = expanded ? "Show less" : "Show more";
+    };
+  }
   // The end-card Ask AI button mirrors the deck chat toggle: it shows only when
   // the assistant is available, and opens the same panel.
   const askAi = document.querySelector<HTMLButtonElement>("#ask-ai");
