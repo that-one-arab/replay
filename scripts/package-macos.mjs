@@ -20,7 +20,7 @@ await mkdir(artifactsDir, { recursive: true });
 const stagingRoot = await mkdtemp(join(artifactsDir, ".staging-"));
 const releaseRoot = join(stagingRoot, artifactName);
 const runtimeDir = join(releaseRoot, "runtime");
-const pluginDir = join(releaseRoot, "plugin", "replay-mcp");
+const skillDir = join(releaseRoot, "skills", "replay-browser-capture");
 
 try {
   await mkdir(releaseRoot, { recursive: true });
@@ -32,10 +32,11 @@ try {
   await writeFile(join(runtimeDir, "bin", "replay-mcp"), wrapper("replay-mcp.mjs"), { mode: 0o755 });
   await writeFile(join(runtimeDir, "bin", "replay-playwright-launcher"), wrapper("replay-playwright-launcher.mjs"), { mode: 0o755 });
   await pruneRuntimePayload(runtimeDir);
-  await cp(join(root, "plugins", "replay-mcp"), pluginDir, { recursive: true });
+  // Ship the skill alongside the runtime so the installer can drop it into the
+  // agent's skills directory. The rest of the plugin lives in the Codex
+  // marketplace repo (docs/distribution.md); this tarball needs only the skill.
+  await cp(join(root, "plugins", "replay-mcp", "skills", "replay-browser-capture"), skillDir, { recursive: true });
   await writeFile(join(releaseRoot, "VERSION"), `${version}\n`);
-  await writeFile(join(releaseRoot, "marketplace.json"), JSON.stringify(marketplace(), null, 2) + "\n");
-  await writeFile(join(releaseRoot, "install.sh"), installer(), { mode: 0o755 });
   const output = join(artifactsDir, `${artifactName}.tar.gz`);
   if (existsSync(output)) await rm(output);
   await execFile("tar", ["-C", stagingRoot, "-czf", output, artifactName]);
@@ -56,61 +57,4 @@ async function pruneRuntimePayload(directory) {
     if (entry.isDirectory()) await pruneRuntimePayload(path);
     else if (entry.name.endsWith(".map") || entry.name.endsWith(".d.ts") || entry.name.endsWith(".test.js")) await rm(path);
   }
-}
-
-function marketplace() {
-  return {
-    name: "replay",
-    interface: { displayName: "Replay" },
-    plugins: [{
-      name: "replay-mcp",
-      source: { source: "local", path: "./plugins/replay-mcp" },
-      policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" },
-      category: "Productivity",
-    }],
-  };
-}
-
-function installer() {
-  return `#!/bin/sh
-set -eu
-
-SOURCE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-VERSION=$(tr -d '\\r\\n' < "$SOURCE/VERSION")
-REPLAY_INSTALL_ROOT=\${REPLAY_INSTALL_ROOT:-"$HOME/.replay"}
-RUNTIME_DIR="$REPLAY_INSTALL_ROOT/runtimes/$VERSION"
-PLUGIN_DIR="$REPLAY_INSTALL_ROOT/plugins/replay-mcp"
-
-if [ -e "$RUNTIME_DIR" ]; then
-  echo "Replay $VERSION is already installed at $RUNTIME_DIR" >&2
-  exit 1
-fi
-
-mkdir -p "$REPLAY_INSTALL_ROOT/runtimes" "$REPLAY_INSTALL_ROOT/plugins"
-cp -R "$SOURCE/runtime" "$RUNTIME_DIR"
-
-if [ -e "$PLUGIN_DIR" ]; then
-  BACKUP="$REPLAY_INSTALL_ROOT/plugins/replay-mcp.backup.$(date +%Y%m%d%H%M%S)"
-  mv "$PLUGIN_DIR" "$BACKUP"
-  echo "Previous Codex plugin moved to $BACKUP"
-fi
-cp -R "$SOURCE/plugin/replay-mcp" "$PLUGIN_DIR"
-ESCAPED_RUNTIME_DIR=$(printf '%s' "$RUNTIME_DIR" | sed 's/[\\\\&|]/\\\\&/g')
-sed "s|__REPLAY_RUNTIME_DIR__|$ESCAPED_RUNTIME_DIR|g" "$PLUGIN_DIR/.mcp.json" > "$PLUGIN_DIR/.mcp.json.installing"
-mv "$PLUGIN_DIR/.mcp.json.installing" "$PLUGIN_DIR/.mcp.json"
-cp "$SOURCE/marketplace.json" "$REPLAY_INSTALL_ROOT/marketplace.json"
-
-echo "Replay $VERSION installed."
-if [ "\${REPLAY_SKIP_CODEX_PLUGIN_INSTALL:-}" = "1" ]; then
-  echo "Skipped Codex plugin installation (REPLAY_SKIP_CODEX_PLUGIN_INSTALL=1)."
-elif command -v codex >/dev/null 2>&1; then
-  codex plugin marketplace add "$REPLAY_INSTALL_ROOT/marketplace.json" || true
-  codex plugin add replay-mcp@replay
-  echo "Open a new Codex task to use Replay."
-else
-  echo "Install Codex CLI, then run:"
-  echo "  codex plugin marketplace add $REPLAY_INSTALL_ROOT/marketplace.json"
-  echo "  codex plugin add replay-mcp@replay"
-fi
-`;
 }

@@ -28,10 +28,18 @@ need Node.js installed. One command fetches the pinned runtime into `~/.replay`
 curl -fsSL https://raw.githubusercontent.com/that-one-arab/replay/main/install.sh | sh
 ```
 
-The installer then prints the snippet to add Replay to your agent — **Codex**
-first, or **Claude Code** — for you to copy and run. It never modifies your
-agent config itself. The `current` symlink tracks the latest installed version,
-so the config survives upgrades.
+For **Claude Code**, the installer installs the replay skill into your skills
+directory (`$CLAUDE_CONFIG_DIR/skills/replay-browser-capture`, defaulting to
+`~/.claude` — set `CLAUDE_CONFIG_DIR` if you use a custom home such as
+`~/.claude-signit`) and registers the Replay MCP server at user scope,
+automatically, when the `claude` CLI is on your `PATH`. If it isn't, the
+installer prints the exact commands to run instead. Open a new Claude Code
+session and invoke the skill with `/replay-browser-capture`. The `current`
+symlink tracks the latest installed version, so the registration survives
+upgrades.
+
+For **Codex** or other agents, the installer prints the snippet to add Replay to
+your agent for you to copy and run.
 
 To pin a version, set `REPLAY_VERSION` (e.g. `REPLAY_VERSION=0.2.3`) before
 running the installer; set `REPLAY_HOME` to install elsewhere.
@@ -103,8 +111,13 @@ for a replay — none are connected to Replay's capture.
 Stop Replay's tools from loading by removing it from your agent:
 
 - **Codex:** `codex plugin remove replay-mcp@replay`
-- **Claude Code / other MCP agents:** delete the Replay entry the installer
-  added from your agent config.
+- **Claude Code:** remove the MCP server and the skill the installer added:
+  ```sh
+  claude mcp remove replay
+  rm -rf "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/replay-browser-capture"
+  ```
+- **Other MCP agents:** delete the Replay entry the installer added from your
+  agent config.
 
 Either way, your saved replays, the managed Chrome profile, and downloaded
 runtimes stay in `~/.replay`. To reclaim that disk space too, stop any in-flight

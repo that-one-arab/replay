@@ -80,7 +80,38 @@ ln -snf "$VERSION" "$runtimes_dir/current"
 
 bin="$runtimes_dir/current/bin/replay-mcp"
 
-log "Replay $VERSION installed. Add it to your agent:"
+log "Replay $VERSION installed."
 log ""
-printf '  codex mcp add replay --env REPLAY_SHARE_URL=https://share.replaythis.io -- %s\n' "$bin"
-printf '  claude mcp add -s user -e REPLAY_SHARE_URL=https://share.replaythis.io replay -- %s\n' "$bin"
+
+# --- Claude Code: install the skill and register the MCP server ---
+# Respect CLAUDE_CONFIG_DIR so a custom home (e.g. ~/.claude-signit) is handled;
+# hardcoding ~/.claude would silently drop the skill in the wrong place.
+CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+CLAUDE_MCP_CMD="claude mcp add -s user -e REPLAY_SHARE_URL=https://share.replaythis.io replay -- $bin"
+if command -v claude >/dev/null 2>&1 || [ -d "$CLAUDE_HOME" ]; then
+  mkdir -p "$CLAUDE_HOME/skills"
+  rm -rf "$CLAUDE_HOME/skills/replay-browser-capture"
+  if cp -R "$src_root/skills/replay-browser-capture" "$CLAUDE_HOME/skills/" 2>/dev/null; then
+    log "Installed Replay skill → $CLAUDE_HOME/skills/replay-browser-capture"
+  else
+    log "Warning: skill was not in the archive; Claude Code gets the tools but not the skill."
+  fi
+  if command -v claude >/dev/null 2>&1; then
+    if claude mcp add -s user -e REPLAY_SHARE_URL=https://share.replaythis.io replay -- "$bin" >/dev/null 2>&1; then
+      log "Registered Replay MCP server with Claude Code (user scope)."
+    else
+      log "Could not auto-register the MCP server (already registered, or the CLI declined). Run:"
+      log "  $CLAUDE_MCP_CMD"
+    fi
+  else
+    log "Claude CLI not on PATH. Register the MCP server with:"
+    log "  $CLAUDE_MCP_CMD"
+  fi
+  log "Open a new Claude Code session and invoke the skill with /replay-browser-capture."
+else
+  log "Claude Code not detected. To use Replay with it later, install the CLI and run:"
+  log "  $CLAUDE_MCP_CMD"
+fi
+log ""
+log "For Codex, run:"
+log "  codex mcp add replay --env REPLAY_SHARE_URL=https://share.replaythis.io -- $bin"
