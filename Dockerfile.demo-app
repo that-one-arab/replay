@@ -1,0 +1,15 @@
+# Builds the @replay/demo-app storefront (Northstar Goods) and serves the
+# static Vite bundle with nginx. Kept separate from the root Dockerfile (which
+# runs the share-server) and Dockerfile.landing so each Railway service owns its
+# own image. Point the demo-app service's railwayConfigFile at railway.demo-app.toml.
+FROM node:24-alpine AS build
+WORKDIR /app
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY packages ./packages
+RUN corepack enable && pnpm install --frozen-lockfile && pnpm --filter @replay/demo-app build
+
+FROM nginx:1.27-alpine AS serve
+COPY packages/demo-app/deploy/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/packages/demo-app/dist /usr/share/nginx/html
+EXPOSE 3000
+CMD ["nginx", "-g", "daemon off;"]

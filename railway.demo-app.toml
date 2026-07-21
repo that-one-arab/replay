@@ -1,0 +1,13 @@
+# Railway config for the @replay/demo-app storefront service (Northstar Goods).
+# Separate from the root railway.toml (which runs the share-server) so each
+# service owns its own builder + healthcheck. Point the demo-app service's
+# railwayConfigFile at this file.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile.demo-app"
+
+[deploy]
+healthcheckPath = "/"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
